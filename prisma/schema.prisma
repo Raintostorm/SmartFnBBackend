@@ -1,0 +1,138 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum BranchStatus {
+  ACTIVE
+  INACTIVE
+  MAINTENANCE
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  ON_LEAVE
+  SUSPENDED
+  TERMINATED
+}
+
+enum CustomerTier {
+  STANDARD
+  SILVER
+  GOLD
+  PLATINUM
+}
+
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  code        String   @unique @db.VarChar(50)
+  name        String   @db.VarChar(100)
+  description String?  @db.VarChar(500)
+  isSystem    Boolean  @default(false) @map("is_system")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  users User[]
+
+  @@map("roles")
+}
+
+model User {
+  id              String     @id @default(uuid()) @db.Uuid
+  email           String     @unique @db.VarChar(255)
+  phone           String?    @unique @db.VarChar(20)
+  passwordHash    String     @map("password_hash") @db.VarChar(255)
+  status          UserStatus @default(ACTIVE)
+  emailVerifiedAt DateTime?  @map("email_verified_at") @db.Timestamptz(6)
+  lastLoginAt     DateTime?  @map("last_login_at") @db.Timestamptz(6)
+  roleId          String     @map("role_id") @db.Uuid
+  createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt       DateTime?  @map("deleted_at") @db.Timestamptz(6)
+
+  role     Role      @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  employee Employee?
+  customer Customer?
+
+  @@index([roleId])
+  @@index([status])
+  @@map("users")
+}
+
+model Branch {
+  id           String       @id @default(uuid()) @db.Uuid
+  code         String       @unique @db.VarChar(50)
+  name         String       @db.VarChar(150)
+  phone        String?      @db.VarChar(20)
+  email        String?      @db.VarChar(255)
+  addressLine1 String       @map("address_line_1") @db.VarChar(255)
+  addressLine2 String?      @map("address_line_2") @db.VarChar(255)
+  ward         String?      @db.VarChar(100)
+  district     String?      @db.VarChar(100)
+  city         String       @db.VarChar(100)
+  country      String       @default("Vietnam") @db.VarChar(100)
+  timezone     String       @default("Asia/Ho_Chi_Minh") @db.VarChar(50)
+  status       BranchStatus @default(ACTIVE)
+  createdAt    DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt    DateTime?    @map("deleted_at") @db.Timestamptz(6)
+
+  employees Employee[]
+
+  @@index([status])
+  @@index([city])
+  @@map("branches")
+}
+
+model Employee {
+  id           String         @id @default(uuid()) @db.Uuid
+  employeeCode String         @unique @map("employee_code") @db.VarChar(50)
+  userId       String         @unique @map("user_id") @db.Uuid
+  branchId     String         @map("branch_id") @db.Uuid
+  firstName    String         @map("first_name") @db.VarChar(100)
+  lastName     String         @map("last_name") @db.VarChar(100)
+  dateOfBirth  DateTime?      @map("date_of_birth") @db.Date
+  jobTitle     String?        @map("job_title") @db.VarChar(100)
+  hireDate     DateTime       @default(now()) @map("hire_date") @db.Date
+  status       EmployeeStatus @default(ACTIVE)
+  createdAt    DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt    DateTime?      @map("deleted_at") @db.Timestamptz(6)
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Restrict)
+
+  @@index([branchId])
+  @@index([status])
+  @@map("employees")
+}
+
+model Customer {
+  id            String       @id @default(uuid()) @db.Uuid
+  customerCode  String       @unique @map("customer_code") @db.VarChar(50)
+  userId        String       @unique @map("user_id") @db.Uuid
+  firstName     String       @map("first_name") @db.VarChar(100)
+  lastName      String       @map("last_name") @db.VarChar(100)
+  dateOfBirth   DateTime?    @map("date_of_birth") @db.Date
+  loyaltyPoints Int          @default(0) @map("loyalty_points")
+  tier          CustomerTier @default(STANDARD)
+  totalSpent    Decimal      @default(0) @map("total_spent") @db.Decimal(14, 2)
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt     DateTime?    @map("deleted_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tier])
+  @@map("customers")
+}

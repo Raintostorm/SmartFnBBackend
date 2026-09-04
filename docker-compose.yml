@@ -1,0 +1,24 @@
+name: smart-fnb
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: smart-fnb-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-smartfnb}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-smartfnb_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-smart_fnb}
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - smart_fnb_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-smartfnb} -d ${POSTGRES_DB:-smart_fnb}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  smart_fnb_postgres_data:
