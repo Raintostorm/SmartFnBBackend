@@ -1,5 +1,5 @@
-import { Injectable } from '@nestjs/common';
-import type { Prisma } from '../../generated/prisma/client.js';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { UserStatus, type Prisma } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import type { AppRole } from '../auth/app-role.enum.js';
 
@@ -57,6 +57,15 @@ export interface CreateStaffInput {
   jobTitle?: string;
   dateOfBirth?: Date;
   hireDate?: Date;
+}
+
+export interface AccountStatusView {
+  id: string;
+  email: string;
+  phone: string | null;
+  status: UserStatus;
+  role: string;
+  updatedAt: Date;
 }
 
 @Injectable()
@@ -167,6 +176,62 @@ export class UsersService {
       where: { id },
       data: { lastLoginAt: new Date() },
       select: { id: true },
+    });
+  }
+
+  async updateAccountStatus(
+    actorId: string,
+    userId: string,
+    status: UserStatus,
+  ): Promise<AccountStatusView> {
+    if (actorId === userId) {
+      throw new BadRequestException('Administrators cannot change their own account status');
+    }
+
+    return this.prisma.$transaction(async (transaction) => {
+      const target = await transaction.user.findFirst({
+        where: {
+          id: userId,
+          deletedAt: null,
+        },
+        select: { id: true },
+      });
+
+      if (!target) {
+        throw new NotFoundException('User not found');
+      }
+
+      const updatedUser = await transaction.user.update({
+        where: { id: target.id },
+        data: { status },
+        select: {
+          id: true,
+          email: true,
+          phone: true,
+          status: true,
+          updatedAt: true,
+          role: { select: { code: true } },
+        },
+      });
+
+      if (status !== UserStatus.ACTIVE) {
+        await transaction.authSession.updateMany({
+          where: {
+            userId: target.id,
+            revokedAt: null,
+          },
+          data: { revokedAt: new Date() },
+        });
+      }
+
+      return {
+        id: updatedUser.id,
+        email: updatedUser.email,
+        phone: updatedUser.phone,
+        status: updatedUser.status,
+        role: updatedUser.role.code,
+        updatedAt: updatedUser.updatedAt,
+      };
     });
   }
 }

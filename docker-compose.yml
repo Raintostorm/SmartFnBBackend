@@ -1,6 +1,25 @@
 name: smart-fnb
 
 services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: smart-fnb-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 3100
+      DATABASE_URL: postgresql://${POSTGRES_USER:-smartfnb}:${POSTGRES_PASSWORD:-smartfnb_dev_password}@postgres:5432/${POSTGRES_DB:-smart_fnb}?schema=public
+      SWAGGER_ENABLED: 'true'
+    ports:
+      - '${PORT:-3100}:3100'
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   postgres:
     image: postgres:17-alpine
     container_name: smart-fnb-postgres

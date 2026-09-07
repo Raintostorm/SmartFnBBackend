@@ -8,6 +8,9 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
   const jwtRefreshSecret = String(config.JWT_REFRESH_SECRET ?? '');
   const jwtAccessTtlSeconds = Number(config.JWT_ACCESS_TTL_SECONDS ?? 900);
   const jwtRefreshTtlSeconds = Number(config.JWT_REFRESH_TTL_SECONDS ?? 604_800);
+  const swaggerEnabledValue = String(
+    config.SWAGGER_ENABLED ?? (nodeEnv === 'production' ? 'false' : 'true'),
+  ).toLowerCase();
 
   if (!validEnvironments.has(nodeEnv)) {
     throw new Error('NODE_ENV must be development, test, or production.');
@@ -37,6 +40,16 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
     throw new Error('JWT_REFRESH_TTL_SECONDS must be longer than the access token TTL.');
   }
 
+  if (swaggerEnabledValue !== 'true' && swaggerEnabledValue !== 'false') {
+    throw new Error('SWAGGER_ENABLED must be true or false.');
+  }
+
+  const swaggerPath = String(config.SWAGGER_PATH ?? 'api/docs').replace(/^\/+|\/+$/g, '');
+
+  if (!swaggerPath) {
+    throw new Error('SWAGGER_PATH must not be empty.');
+  }
+
   return {
     ...config,
     NODE_ENV: nodeEnv,
@@ -49,5 +62,7 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
     JWT_REFRESH_TTL_SECONDS: jwtRefreshTtlSeconds,
     JWT_ISSUER: String(config.JWT_ISSUER ?? 'smart-fnb-backend'),
     JWT_AUDIENCE: String(config.JWT_AUDIENCE ?? 'smart-fnb-client'),
+    SWAGGER_ENABLED: swaggerEnabledValue === 'true',
+    SWAGGER_PATH: swaggerPath,
   };
 }

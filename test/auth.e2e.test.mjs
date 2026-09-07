@@ -6,6 +6,7 @@ import { argon2id, hash } from 'argon2';
 import { AppModule } from '../dist/app.module.js';
 import { configureApplication } from '../dist/app.setup.js';
 import { PrismaService } from '../dist/database/prisma.service.js';
+import { configureSwagger } from '../dist/swagger.setup.js';
 
 describe('Authentication and authorization', () => {
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -17,6 +18,7 @@ describe('Authentication and authorization', () => {
   let prisma;
   let baseUrl;
   let branchId;
+  let customerId;
   let customerAuth;
   let adminAuth;
 
@@ -35,6 +37,7 @@ describe('Authentication and authorization', () => {
   before(async () => {
     app = await NestFactory.create(AppModule, { logger: false });
     configureApplication(app);
+    configureSwagger(app);
     await app.listen(0, '127.0.0.1');
 
     const address = app.getHttpServer().address();
@@ -82,6 +85,22 @@ describe('Authentication and authorization', () => {
     await app?.close();
   });
 
+  it('serves Swagger UI metadata and the OpenAPI document', async () => {
+    const uiResponse = await fetch(`${baseUrl}/api/docs`);
+    const response = await fetch(`${baseUrl}/api/docs-json`);
+    const document = await response.json();
+
+    assert.equal(uiResponse.status, 200);
+    assert.match(await uiResponse.text(), /id="swagger-ui"/i);
+    assert.equal(response.status, 200);
+    assert.equal(document.info.title, 'Smart F&B Chain Platform API');
+    assert.ok(document.components.securitySchemes['access-token']);
+    assert.ok(document.components.schemas.LoginDto.properties.email);
+    assert.ok(document.components.schemas.AuthResponseDto.properties.accessToken);
+    assert.ok(document.paths['/api/v1/auth/login'].post);
+    assert.ok(document.paths['/api/v1/users/{userId}/status'].patch);
+  });
+
   it('registers a customer and exposes the authenticated profile', async () => {
     const registration = await request('/auth/register', {
       method: 'POST',
@@ -97,6 +116,7 @@ describe('Authentication and authorization', () => {
     assert.equal(registration.body.user.role, 'CUSTOMER');
     assert.ok(registration.body.accessToken);
     assert.ok(registration.body.refreshToken);
+    customerId = registration.body.user.id;
     customerAuth = registration.body;
 
     const profile = await request('/auth/me', {
@@ -124,6 +144,13 @@ describe('Authentication and authorization', () => {
     });
 
     assert.equal(result.response.status, 403);
+
+    const statusChange = await request(`/users/${customerId}/status`, {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${customerAuth.accessToken}` },
+      body: JSON.stringify({ status: 'SUSPENDED' }),
+    });
+    assert.equal(statusChange.response.status, 403);
   });
 
   it('allows ADMIN to create a WAITER account', async () => {
@@ -186,5 +213,62 @@ describe('Authentication and authorization', () => {
       headers: { authorization: `Bearer ${refreshed.body.accessToken}` },
     });
     assert.equal(profile.response.status, 401);
+  });
+
+  it('allows ADMIN to suspend and reactivate another account', async () => {
+    const selfChange = await request(`/users/${adminAuth.user.id}/status`, {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${adminAuth.accessToken}` },
+      body: JSON.stringify({ status: 'SUSPENDED' }),
+    });
+    assert.equal(selfChange.response.status, 400);
+
+    const invalidStatus = await request(`/users/${customerId}/status`, {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${adminAuth.accessToken}` },
+      body: JSON.stringify({ status: 'DELETED' }),
+    });
+    assert.equal(invalidStatus.response.status, 400);
+
+    const customerLogin = await request('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email: customerEmail, password }),
+    });
+    assert.equal(customerLogin.response.status, 200);
+
+    const suspended = await request(`/users/${customerId}/status`, {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${adminAuth.accessToken}` },
+      body: JSON.stringify({ status: 'SUSPENDED' }),
+    });
+
+    assert.equal(suspended.response.status, 200);
+    assert.equal(suspended.body.status, 'SUSPENDED');
+
+    const revokedProfile = await request('/auth/me', {
+      headers: { authorization: `Bearer ${customerLogin.body.accessToken}` },
+    });
+    assert.equal(revokedProfile.response.status, 401);
+
+    const suspendedLogin = await request('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email: customerEmail, password }),
+    });
+    assert.equal(suspendedLogin.response.status, 401);
+
+    const reactivated = await request(`/users/${customerId}/status`, {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${adminAuth.accessToken}` },
+      body: JSON.stringify({ status: 'ACTIVE' }),
+    });
+
+    assert.equal(reactivated.response.status, 200);
+    assert.equal(reactivated.body.status, 'ACTIVE');
+
+    const activeLogin = await request('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email: customerEmail, password }),
+    });
+    assert.equal(activeLogin.response.status, 200);
   });
 });

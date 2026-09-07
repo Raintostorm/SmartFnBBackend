@@ -28,6 +28,8 @@
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down",
     "db:logs": "docker compose logs -f postgres",
+    "docker:up": "docker compose up -d --build",
+    "docker:logs": "docker compose logs -f api",
     "postinstall": "prisma generate"
   },
   "dependencies": {
@@ -36,14 +38,18 @@
     "@nestjs/core": "12.0.1",
     "@nestjs/jwt": "12.0.1",
     "@nestjs/platform-express": "12.0.1",
+    "@nestjs/swagger": "12.0.1",
     "@prisma/adapter-pg": "7.10.0",
     "@prisma/client": "7.10.0",
     "argon2": "0.45.1",
     "class-transformer": "0.5.1",
     "class-validator": "0.15.1",
+    "dotenv": "17.4.2",
     "pg": "8.23.0",
+    "prisma": "7.10.0",
     "reflect-metadata": "0.2.2",
-    "rxjs": "7.8.2"
+    "rxjs": "7.8.2",
+    "tsx": "4.23.13"
   },
   "devDependencies": {
     "@nestjs/cli": "12.0.0",
@@ -51,10 +57,7 @@
     "@types/express": "5.0.6",
     "@types/node": "26.4.1",
     "@types/pg": "8.23.1",
-    "dotenv": "17.4.2",
     "prettier": "3.9.6",
-    "prisma": "7.10.0",
-    "tsx": "4.23.13",
     "typescript": "5.9.3"
   }
 }
