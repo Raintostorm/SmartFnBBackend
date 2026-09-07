@@ -9,3 +9,18 @@ src/generated/prisma/
 .DS_Store
 .idea/
 .vscode/
+
+# GitNexus — cache, chỉ mục và tệp sinh ra tự động
+.gitnexus/
+
+# Agent-local instructions
+AGENTS.md
+agents.md
+CLAUDE.md
+claude.md
+SKILL.md
+skill.md
+.vercel
+.env
+.env.local
+.env.*.local
