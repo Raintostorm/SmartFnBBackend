@@ -33,6 +33,90 @@ enum CustomerTier {
   PLATINUM
 }
 
+enum TableStatus {
+  AVAILABLE
+  OCCUPIED
+  RESERVED
+  OUT_OF_SERVICE
+}
+
+enum ReservationStatus {
+  PENDING
+  CONFIRMED
+  SEATED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum OrderType {
+  DINE_IN
+  TAKEAWAY
+  DELIVERY
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PREPARING
+  READY
+  SERVED
+  COMPLETED
+  CANCELLED
+}
+
+enum OrderPaymentStatus {
+  UNPAID
+  PARTIALLY_PAID
+  PAID
+  REFUNDED
+}
+
+enum OrderItemStatus {
+  PENDING
+  CONFIRMED
+  PREPARING
+  READY
+  SERVED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  BANK_TRANSFER
+  E_WALLET
+  OTHER
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum VoucherType {
+  FIXED_AMOUNT
+  PERCENTAGE
+}
+
+enum LoyaltyPointType {
+  EARN
+  REDEEM
+  ADJUST
+  EXPIRE
+  REFUND
+}
+
+enum AttendanceStatus {
+  PRESENT
+  LATE
+  ABSENT
+  ON_LEAVE
+}
+
 model Role {
   id          String   @id @default(uuid()) @db.Uuid
   code        String   @unique @db.VarChar(50)
@@ -87,7 +171,13 @@ model Branch {
   updatedAt    DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt    DateTime?    @map("deleted_at") @db.Timestamptz(6)
 
-  employees Employee[]
+  employees      Employee[]
+  tables         RestaurantTable[]
+  reservations   Reservation[]
+  menuCategories MenuCategory[]
+  orders         Order[]
+  vouchers       Voucher[]
+  attendances    Attendance[]
 
   @@index([status])
   @@index([city])
@@ -109,8 +199,12 @@ model Employee {
   updatedAt    DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt    DateTime?      @map("deleted_at") @db.Timestamptz(6)
 
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  branch Branch @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  user                  User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branch                Branch        @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  confirmedReservations Reservation[] @relation("ReservationConfirmedBy")
+  servedOrders          Order[]       @relation("OrderWaiter")
+  processedPayments     Payment[]     @relation("PaymentProcessedBy")
+  attendances           Attendance[]
 
   @@index([branchId])
   @@index([status])
@@ -131,8 +225,271 @@ model Customer {
   updatedAt     DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt     DateTime?    @map("deleted_at") @db.Timestamptz(6)
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user                User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reservations        Reservation[]
+  orders              Order[]
+  loyaltyTransactions LoyaltyPoint[]
 
   @@index([tier])
   @@map("customers")
+}
+
+model RestaurantTable {
+  id        String      @id @default(uuid()) @db.Uuid
+  branchId  String      @map("branch_id") @db.Uuid
+  code      String      @db.VarChar(50)
+  name      String?     @db.VarChar(100)
+  area      String?     @db.VarChar(100)
+  floor     Int         @default(1)
+  capacity  Int
+  status    TableStatus @default(AVAILABLE)
+  isActive  Boolean     @default(true) @map("is_active")
+  createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime?   @map("deleted_at") @db.Timestamptz(6)
+
+  branch       Branch        @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  reservations Reservation[]
+  orders       Order[]
+
+  @@unique([branchId, code])
+  @@index([branchId, status])
+  @@map("restaurant_tables")
+}
+
+model Reservation {
+  id              String            @id @default(uuid()) @db.Uuid
+  reservationCode String            @unique @map("reservation_code") @db.VarChar(50)
+  branchId        String            @map("branch_id") @db.Uuid
+  customerId      String?           @map("customer_id") @db.Uuid
+  tableId         String?           @map("table_id") @db.Uuid
+  confirmedById   String?           @map("confirmed_by_id") @db.Uuid
+  guestName       String            @map("guest_name") @db.VarChar(150)
+  guestPhone      String            @map("guest_phone") @db.VarChar(20)
+  guestEmail      String?           @map("guest_email") @db.VarChar(255)
+  partySize       Int               @map("party_size")
+  reservationAt   DateTime          @map("reservation_at") @db.Timestamptz(6)
+  durationMinutes Int               @default(120) @map("duration_minutes")
+  status          ReservationStatus @default(PENDING)
+  note            String?           @db.Text
+  confirmedAt     DateTime?         @map("confirmed_at") @db.Timestamptz(6)
+  cancelledAt     DateTime?         @map("cancelled_at") @db.Timestamptz(6)
+  createdAt       DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  branch      Branch           @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  customer    Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  table       RestaurantTable? @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  confirmedBy Employee?        @relation("ReservationConfirmedBy", fields: [confirmedById], references: [id], onDelete: SetNull)
+  order       Order?
+
+  @@index([branchId, reservationAt])
+  @@index([customerId])
+  @@index([tableId, reservationAt])
+  @@index([status])
+  @@map("reservations")
+}
+
+model MenuCategory {
+  id           String    @id @default(uuid()) @db.Uuid
+  branchId     String    @map("branch_id") @db.Uuid
+  name         String    @db.VarChar(150)
+  description  String?   @db.VarChar(500)
+  displayOrder Int       @default(0) @map("display_order")
+  isActive     Boolean   @default(true) @map("is_active")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  branch Branch     @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  items  MenuItem[]
+
+  @@unique([branchId, name])
+  @@index([branchId, isActive, displayOrder])
+  @@map("menu_categories")
+}
+
+model MenuItem {
+  id                 String    @id @default(uuid()) @db.Uuid
+  categoryId         String    @map("category_id") @db.Uuid
+  sku                String    @unique @db.VarChar(50)
+  name               String    @db.VarChar(150)
+  description        String?   @db.Text
+  price              Decimal   @db.Decimal(14, 2)
+  costPrice          Decimal?  @map("cost_price") @db.Decimal(14, 2)
+  imageUrl           String?   @map("image_url") @db.VarChar(500)
+  preparationMinutes Int?      @map("preparation_minutes")
+  isAvailable        Boolean   @default(true) @map("is_available")
+  isActive           Boolean   @default(true) @map("is_active")
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt          DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  category   MenuCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  orderItems OrderItem[]
+
+  @@index([categoryId, isActive, isAvailable])
+  @@index([name])
+  @@map("menu_items")
+}
+
+model Order {
+  id             String             @id @default(uuid()) @db.Uuid
+  orderCode      String             @unique @map("order_code") @db.VarChar(50)
+  branchId       String             @map("branch_id") @db.Uuid
+  customerId     String?            @map("customer_id") @db.Uuid
+  tableId        String?            @map("table_id") @db.Uuid
+  reservationId  String?            @unique @map("reservation_id") @db.Uuid
+  waiterId       String?            @map("waiter_id") @db.Uuid
+  voucherId      String?            @map("voucher_id") @db.Uuid
+  type           OrderType          @default(DINE_IN)
+  status         OrderStatus        @default(PENDING)
+  paymentStatus  OrderPaymentStatus @default(UNPAID) @map("payment_status")
+  subtotal       Decimal            @default(0) @db.Decimal(14, 2)
+  discountAmount Decimal            @default(0) @map("discount_amount") @db.Decimal(14, 2)
+  taxAmount      Decimal            @default(0) @map("tax_amount") @db.Decimal(14, 2)
+  serviceCharge  Decimal            @default(0) @map("service_charge") @db.Decimal(14, 2)
+  totalAmount    Decimal            @default(0) @map("total_amount") @db.Decimal(14, 2)
+  note           String?            @db.Text
+  placedAt       DateTime           @default(now()) @map("placed_at") @db.Timestamptz(6)
+  completedAt    DateTime?          @map("completed_at") @db.Timestamptz(6)
+  cancelledAt    DateTime?          @map("cancelled_at") @db.Timestamptz(6)
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  branch        Branch           @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  customer      Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  table         RestaurantTable? @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  reservation   Reservation?     @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+  waiter        Employee?        @relation("OrderWaiter", fields: [waiterId], references: [id], onDelete: SetNull)
+  voucher       Voucher?         @relation(fields: [voucherId], references: [id], onDelete: SetNull)
+  items         OrderItem[]
+  payments      Payment[]
+  loyaltyPoints LoyaltyPoint[]
+
+  @@index([branchId, placedAt])
+  @@index([customerId])
+  @@index([tableId])
+  @@index([waiterId])
+  @@index([status, paymentStatus])
+  @@map("orders")
+}
+
+model OrderItem {
+  id                  String          @id @default(uuid()) @db.Uuid
+  orderId             String          @map("order_id") @db.Uuid
+  menuItemId          String          @map("menu_item_id") @db.Uuid
+  itemName            String          @map("item_name") @db.VarChar(150)
+  unitPrice           Decimal         @map("unit_price") @db.Decimal(14, 2)
+  quantity            Int
+  discountAmount      Decimal         @default(0) @map("discount_amount") @db.Decimal(14, 2)
+  totalPrice          Decimal         @map("total_price") @db.Decimal(14, 2)
+  specialInstructions String?         @map("special_instructions") @db.VarChar(500)
+  status              OrderItemStatus @default(PENDING)
+  startedAt           DateTime?       @map("started_at") @db.Timestamptz(6)
+  completedAt         DateTime?       @map("completed_at") @db.Timestamptz(6)
+  createdAt           DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  order    Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Restrict)
+
+  @@index([orderId, status])
+  @@index([menuItemId])
+  @@map("order_items")
+}
+
+model Payment {
+  id             String        @id @default(uuid()) @db.Uuid
+  paymentCode    String        @unique @map("payment_code") @db.VarChar(50)
+  orderId        String        @map("order_id") @db.Uuid
+  processedById  String?       @map("processed_by_id") @db.Uuid
+  method         PaymentMethod
+  status         PaymentStatus @default(PENDING)
+  amount         Decimal       @db.Decimal(14, 2)
+  transactionRef String?       @map("transaction_ref") @db.VarChar(255)
+  paidAt         DateTime?     @map("paid_at") @db.Timestamptz(6)
+  failureReason  String?       @map("failure_reason") @db.VarChar(500)
+  note           String?       @db.VarChar(500)
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  order       Order     @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  processedBy Employee? @relation("PaymentProcessedBy", fields: [processedById], references: [id], onDelete: SetNull)
+
+  @@index([orderId, status])
+  @@index([processedById])
+  @@index([transactionRef])
+  @@map("payments")
+}
+
+model Voucher {
+  id                String      @id @default(uuid()) @db.Uuid
+  branchId          String?     @map("branch_id") @db.Uuid
+  code              String      @unique @db.VarChar(50)
+  name              String      @db.VarChar(150)
+  description       String?     @db.VarChar(500)
+  type              VoucherType
+  value             Decimal     @db.Decimal(14, 2)
+  minOrderAmount    Decimal     @default(0) @map("min_order_amount") @db.Decimal(14, 2)
+  maxDiscountAmount Decimal?    @map("max_discount_amount") @db.Decimal(14, 2)
+  startsAt          DateTime    @map("starts_at") @db.Timestamptz(6)
+  endsAt            DateTime    @map("ends_at") @db.Timestamptz(6)
+  usageLimit        Int?        @map("usage_limit")
+  usageCount        Int         @default(0) @map("usage_count")
+  perCustomerLimit  Int?        @map("per_customer_limit")
+  isActive          Boolean     @default(true) @map("is_active")
+  createdAt         DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt         DateTime?   @map("deleted_at") @db.Timestamptz(6)
+
+  branch Branch? @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  orders Order[]
+
+  @@index([branchId, isActive])
+  @@index([startsAt, endsAt])
+  @@map("vouchers")
+}
+
+model LoyaltyPoint {
+  id           String           @id @default(uuid()) @db.Uuid
+  customerId   String           @map("customer_id") @db.Uuid
+  orderId      String?          @map("order_id") @db.Uuid
+  type         LoyaltyPointType
+  points       Int
+  balanceAfter Int              @map("balance_after")
+  description  String?          @db.VarChar(500)
+  expiresAt    DateTime?        @map("expires_at") @db.Timestamptz(6)
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  order    Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([customerId, createdAt])
+  @@index([orderId])
+  @@index([expiresAt])
+  @@map("loyalty_points")
+}
+
+model Attendance {
+  id           String           @id @default(uuid()) @db.Uuid
+  employeeId   String           @map("employee_id") @db.Uuid
+  branchId     String           @map("branch_id") @db.Uuid
+  workDate     DateTime         @map("work_date") @db.Date
+  checkInAt    DateTime?        @map("check_in_at") @db.Timestamptz(6)
+  checkOutAt   DateTime?        @map("check_out_at") @db.Timestamptz(6)
+  status       AttendanceStatus @default(PRESENT)
+  minutesLate  Int              @default(0) @map("minutes_late")
+  totalMinutes Int?             @map("total_minutes")
+  note         String?          @db.VarChar(500)
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  branch   Branch   @relation(fields: [branchId], references: [id], onDelete: Restrict)
+
+  @@unique([employeeId, workDate])
+  @@index([branchId, workDate])
+  @@index([status])
+  @@map("attendances")
 }

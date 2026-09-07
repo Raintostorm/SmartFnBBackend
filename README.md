@@ -41,6 +41,14 @@ src/
 - `branches`: thông tin chi nhánh nhà hàng.
 - `employees`: hồ sơ nhân viên; liên kết 1–1 với User và thuộc một Branch.
 - `customers`: hồ sơ khách hàng; liên kết 1–1 với User và lưu điểm/tier loyalty.
+- `restaurant_tables`: bàn ăn theo từng chi nhánh.
+- `reservations`: lịch đặt bàn của thành viên hoặc khách vãng lai.
+- `menu_categories`, `menu_items`: danh mục và món ăn theo chi nhánh.
+- `orders`, `order_items`: đơn hàng và snapshot món tại thời điểm đặt.
+- `payments`: các lần thanh toán hoặc hoàn tiền của đơn hàng.
+- `vouchers`: voucher toàn chuỗi hoặc giới hạn theo chi nhánh.
+- `loyalty_points`: sổ giao dịch điểm của khách hàng.
+- `attendances`: chấm công theo nhân viên, chi nhánh và ngày làm việc.
 
 ## Lệnh hữu ích
 
