@@ -4,6 +4,7 @@ import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { validateEnvironment } from './config/environment.validation.js';
 import { PrismaModule } from './database/prisma.module.js';
+import { AuthModule } from './modules/auth/auth.module.js';
 import { BranchesModule } from './modules/branches/branches.module.js';
 import { CustomersModule } from './modules/customers/customers.module.js';
 import { EmployeesModule } from './modules/employees/employees.module.js';
@@ -26,6 +27,7 @@ import { VouchersModule } from './modules/vouchers/vouchers.module.js';
       validate: validateEnvironment,
     }),
     PrismaModule,
+    AuthModule,
     UsersModule,
     RolesModule,
     BranchesModule,

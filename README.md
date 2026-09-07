@@ -21,6 +21,32 @@ pnpm start:dev
 
 API kiểm tra trạng thái: `GET http://localhost:3100/api/v1/health`
 
+## Authentication và phân quyền
+
+Hệ thống dùng access token JWT ngắn hạn và refresh token luân phiên. Mật khẩu được
+băm bằng Argon2id; refresh token chỉ được lưu trong database dưới dạng SHA-256.
+Mọi API mặc định đều yêu cầu `Authorization: Bearer <accessToken>`, trừ các route
+được khai báo public.
+
+| Method | Endpoint                  | Quyền                                           |
+| ------ | ------------------------- | ----------------------------------------------- |
+| `POST` | `/api/v1/auth/register`   | Public, luôn tạo `CUSTOMER`                     |
+| `POST` | `/api/v1/auth/login`      | Public                                          |
+| `POST` | `/api/v1/auth/refresh`    | Public, đổi refresh token một lần               |
+| `POST` | `/api/v1/auth/logout`     | Public, thu hồi session bằng refresh token      |
+| `POST` | `/api/v1/auth/logout-all` | Đã đăng nhập                                    |
+| `GET`  | `/api/v1/auth/me`         | Đã đăng nhập                                    |
+| `POST` | `/api/v1/auth/staff`      | Chỉ `ADMIN`; tạo `WAITER`, `KITCHEN`, `CASHIER` |
+
+Các role ứng dụng: `ADMIN`, `WAITER`, `KITCHEN`, `CASHIER`, `CUSTOMER`. Gắn
+`@Roles(AppRole.ADMIN, ...)` vào controller/handler để giới hạn route theo role;
+route public phải được gắn `@Public()` một cách tường minh.
+
+Không có API đăng ký `ADMIN`. Để tạo tài khoản quản trị đầu tiên, điền tạm
+`SEED_ADMIN_EMAIL` và `SEED_ADMIN_PASSWORD` trong `.env`, chạy `pnpm prisma:seed`,
+sau đó xóa mật khẩu bootstrap khỏi môi trường. Seed không thay đổi mật khẩu nếu
+email đó đã tồn tại.
+
 ## Cấu trúc chính
 
 ```text
@@ -60,6 +86,7 @@ pnpm prisma:migrate        # Tạo/chạy migration trong môi trường dev
 pnpm prisma:migrate:deploy # Chạy migration đã có trong production
 pnpm prisma:studio         # Mở Prisma Studio
 pnpm test                  # Chạy unit test
+pnpm test:e2e              # Chạy kiểm thử luồng auth với PostgreSQL local
 pnpm build                 # Build production
 ```
 
