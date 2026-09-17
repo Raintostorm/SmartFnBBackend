@@ -20,10 +20,10 @@ export const authUserInclude = {
       lastName: true,
     },
   },
-  customer: {
+  owner: {
     select: {
       id: true,
-      customerCode: true,
+      ownerCode: true,
       firstName: true,
       lastName: true,
     },
@@ -34,14 +34,14 @@ export type AuthUserRecord = Prisma.UserGetPayload<{
   include: typeof authUserInclude;
 }>;
 
-export interface CreateCustomerInput {
+export interface CreateOwnerInput {
   email: string;
   phone?: string;
   passwordHash: string;
   firstName: string;
   lastName: string;
   dateOfBirth?: Date;
-  customerCode: string;
+  ownerCode: string;
   roleId: string;
 }
 
@@ -110,7 +110,21 @@ export class UsersService {
       .then((count) => count > 0);
   }
 
-  createCustomer(input: CreateCustomerInput): Promise<AuthUserRecord> {
+  ownerCanManageBranch(ownerId: string, branchId: string): Promise<boolean> {
+    return this.prisma.ownerChainAssignment
+      .count({
+        where: {
+          ownerId,
+          chain: {
+            deletedAt: null,
+            branches: { some: { id: branchId, deletedAt: null } },
+          },
+        },
+      })
+      .then((count) => count > 0);
+  }
+
+  createOwner(input: CreateOwnerInput): Promise<AuthUserRecord> {
     return this.prisma.$transaction(async (transaction) => {
       const user = await transaction.user.create({
         data: {
@@ -122,10 +136,10 @@ export class UsersService {
         select: { id: true },
       });
 
-      await transaction.customer.create({
+      await transaction.owner.create({
         data: {
           userId: user.id,
-          customerCode: input.customerCode,
+          ownerCode: input.ownerCode,
           firstName: input.firstName,
           lastName: input.lastName,
           dateOfBirth: input.dateOfBirth,

@@ -15,13 +15,20 @@ const prisma = new PrismaClient({
 
 const roles = [
   ['ADMIN', 'Admin', 'Quản trị hệ thống và tài khoản nhân viên'],
+  ['OWNER', 'Owner', 'Chủ sở hữu quản lý các chuỗi nhà hàng được phân công'],
+  ['MANAGER', 'Manager', 'Quản lý một chi nhánh được phân công'],
   ['WAITER', 'Waiter', 'Nhân viên phục vụ'],
   ['KITCHEN', 'Kitchen', 'Nhân viên bếp'],
   ['CASHIER', 'Cashier', 'Nhân viên thu ngân'],
-  ['CUSTOMER', 'Customer', 'Khách hàng'],
 ] as const;
 
-const legacyRoleCodes = ['SUPER_ADMIN', 'CHAIN_ADMIN', 'BRANCH_MANAGER', 'BAR'] as const;
+const legacyRoleCodes = [
+  'SUPER_ADMIN',
+  'CHAIN_ADMIN',
+  'BRANCH_MANAGER',
+  'BAR',
+  'CUSTOMER',
+] as const;
 
 async function main(): Promise<void> {
   for (const [code, name, description] of roles) {

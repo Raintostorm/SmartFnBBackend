@@ -18,7 +18,7 @@ export interface AuthenticatedUser {
   role: AppRole;
   sessionId: string;
   employeeId: string | null;
-  customerId: string | null;
+  ownerId: string | null;
   branchId: string | null;
 }
 
@@ -44,9 +44,9 @@ export interface AuthUserView {
     firstName: string;
     lastName: string;
   } | null;
-  customer: {
+  owner: {
     id: string;
-    customerCode: string;
+    ownerCode: string;
     firstName: string;
     lastName: string;
   } | null;

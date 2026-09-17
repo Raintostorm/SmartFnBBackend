@@ -10,7 +10,7 @@ import { configureSwagger } from '../dist/swagger.setup.js';
 
 describe('Authentication and authorization', () => {
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const customerEmail = `customer-${suffix}@example.com`;
+  const ownerEmail = `owner-${suffix}@example.com`;
   const adminEmail = `admin-${suffix}@example.com`;
   const waiterEmail = `waiter-${suffix}@example.com`;
   const password = 'StrongPass123';
@@ -18,8 +18,8 @@ describe('Authentication and authorization', () => {
   let prisma;
   let baseUrl;
   let branchId;
-  let customerId;
-  let customerAuth;
+  let ownerUserId;
+  let ownerAuth;
   let adminAuth;
 
   async function request(path, options = {}) {
@@ -74,7 +74,7 @@ describe('Authentication and authorization', () => {
   after(async () => {
     if (prisma) {
       await prisma.user.deleteMany({
-        where: { email: { in: [customerEmail, adminEmail, waiterEmail] } },
+        where: { email: { in: [ownerEmail, adminEmail, waiterEmail] } },
       });
 
       if (branchId) {
@@ -98,40 +98,67 @@ describe('Authentication and authorization', () => {
     assert.ok(document.components.schemas.LoginDto.properties.email);
     assert.ok(document.components.schemas.AuthResponseDto.properties.accessToken);
     assert.ok(document.paths['/api/v1/auth/login'].post);
+    assert.ok(document.paths['/api/v1/auth/owners'].post);
+    assert.ok(document.paths['/api/v1/auth/managers'].post);
+    assert.equal(document.paths['/api/v1/auth/register'], undefined);
     assert.ok(document.paths['/api/v1/users/{userId}/status'].patch);
   });
 
-  it('registers a customer and exposes the authenticated profile', async () => {
-    const registration = await request('/auth/register', {
+  it('allows ADMIN to create an OWNER and exposes the OWNER profile', async () => {
+    const login = await request('/auth/login', {
       method: 'POST',
+      body: JSON.stringify({ email: adminEmail, password }),
+    });
+
+    assert.equal(login.response.status, 200);
+    assert.equal(login.body.user.role, 'ADMIN');
+    adminAuth = login.body;
+
+    const registration = await request('/auth/owners', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${adminAuth.accessToken}` },
       body: JSON.stringify({
-        email: customerEmail,
+        email: ownerEmail,
         password,
         firstName: 'Test',
-        lastName: 'Customer',
+        lastName: 'Owner',
       }),
     });
 
     assert.equal(registration.response.status, 201);
-    assert.equal(registration.body.user.role, 'CUSTOMER');
+    assert.equal(registration.body.user.role, 'OWNER');
+    assert.ok(registration.body.user.owner.id);
     assert.ok(registration.body.accessToken);
     assert.ok(registration.body.refreshToken);
-    customerId = registration.body.user.id;
-    customerAuth = registration.body;
+    ownerUserId = registration.body.user.id;
+    ownerAuth = registration.body;
 
     const profile = await request('/auth/me', {
-      headers: { authorization: `Bearer ${customerAuth.accessToken}` },
+      headers: { authorization: `Bearer ${ownerAuth.accessToken}` },
     });
 
     assert.equal(profile.response.status, 200);
-    assert.equal(profile.body.email, customerEmail);
-    assert.equal(profile.body.role, 'CUSTOMER');
+    assert.equal(profile.body.email, ownerEmail);
+    assert.equal(profile.body.role, 'OWNER');
+    assert.equal(profile.body.ownerId, registration.body.user.owner.id);
   });
 
-  it('forbids CUSTOMER from creating a staff account', async () => {
+  it('forbids OWNER from creating OWNER or generic staff accounts', async () => {
+    const ownerResult = await request('/auth/owners', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ownerAuth.accessToken}` },
+      body: JSON.stringify({
+        email: `another-owner-${suffix}@example.com`,
+        password,
+        firstName: 'Another',
+        lastName: 'Owner',
+      }),
+    });
+    assert.equal(ownerResult.response.status, 403);
+
     const result = await request('/auth/staff', {
       method: 'POST',
-      headers: { authorization: `Bearer ${customerAuth.accessToken}` },
+      headers: { authorization: `Bearer ${ownerAuth.accessToken}` },
       body: JSON.stringify({
         email: waiterEmail,
         password,
@@ -145,24 +172,15 @@ describe('Authentication and authorization', () => {
 
     assert.equal(result.response.status, 403);
 
-    const statusChange = await request(`/users/${customerId}/status`, {
+    const statusChange = await request(`/users/${ownerUserId}/status`, {
       method: 'PATCH',
-      headers: { authorization: `Bearer ${customerAuth.accessToken}` },
+      headers: { authorization: `Bearer ${ownerAuth.accessToken}` },
       body: JSON.stringify({ status: 'SUSPENDED' }),
     });
     assert.equal(statusChange.response.status, 403);
   });
 
   it('allows ADMIN to create a WAITER account', async () => {
-    const login = await request('/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ email: adminEmail, password }),
-    });
-
-    assert.equal(login.response.status, 200);
-    assert.equal(login.body.user.role, 'ADMIN');
-    adminAuth = login.body;
-
     const result = await request('/auth/staff', {
       method: 'POST',
       headers: { authorization: `Bearer ${adminAuth.accessToken}` },
@@ -185,15 +203,15 @@ describe('Authentication and authorization', () => {
   it('rotates refresh tokens and revokes the session on logout', async () => {
     const refreshed = await request('/auth/refresh', {
       method: 'POST',
-      body: JSON.stringify({ refreshToken: customerAuth.refreshToken }),
+      body: JSON.stringify({ refreshToken: ownerAuth.refreshToken }),
     });
 
     assert.equal(refreshed.response.status, 200);
-    assert.notEqual(refreshed.body.refreshToken, customerAuth.refreshToken);
+    assert.notEqual(refreshed.body.refreshToken, ownerAuth.refreshToken);
 
     const replay = await request('/auth/refresh', {
       method: 'POST',
-      body: JSON.stringify({ refreshToken: customerAuth.refreshToken }),
+      body: JSON.stringify({ refreshToken: ownerAuth.refreshToken }),
     });
     assert.equal(replay.response.status, 401);
 
@@ -223,20 +241,20 @@ describe('Authentication and authorization', () => {
     });
     assert.equal(selfChange.response.status, 400);
 
-    const invalidStatus = await request(`/users/${customerId}/status`, {
+    const invalidStatus = await request(`/users/${ownerUserId}/status`, {
       method: 'PATCH',
       headers: { authorization: `Bearer ${adminAuth.accessToken}` },
       body: JSON.stringify({ status: 'DELETED' }),
     });
     assert.equal(invalidStatus.response.status, 400);
 
-    const customerLogin = await request('/auth/login', {
+    const ownerLogin = await request('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email: customerEmail, password }),
+      body: JSON.stringify({ email: ownerEmail, password }),
     });
-    assert.equal(customerLogin.response.status, 200);
+    assert.equal(ownerLogin.response.status, 200);
 
-    const suspended = await request(`/users/${customerId}/status`, {
+    const suspended = await request(`/users/${ownerUserId}/status`, {
       method: 'PATCH',
       headers: { authorization: `Bearer ${adminAuth.accessToken}` },
       body: JSON.stringify({ status: 'SUSPENDED' }),
@@ -246,17 +264,17 @@ describe('Authentication and authorization', () => {
     assert.equal(suspended.body.status, 'SUSPENDED');
 
     const revokedProfile = await request('/auth/me', {
-      headers: { authorization: `Bearer ${customerLogin.body.accessToken}` },
+      headers: { authorization: `Bearer ${ownerLogin.body.accessToken}` },
     });
     assert.equal(revokedProfile.response.status, 401);
 
     const suspendedLogin = await request('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email: customerEmail, password }),
+      body: JSON.stringify({ email: ownerEmail, password }),
     });
     assert.equal(suspendedLogin.response.status, 401);
 
-    const reactivated = await request(`/users/${customerId}/status`, {
+    const reactivated = await request(`/users/${ownerUserId}/status`, {
       method: 'PATCH',
       headers: { authorization: `Bearer ${adminAuth.accessToken}` },
       body: JSON.stringify({ status: 'ACTIVE' }),
@@ -267,7 +285,7 @@ describe('Authentication and authorization', () => {
 
     const activeLogin = await request('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email: customerEmail, password }),
+      body: JSON.stringify({ email: ownerEmail, password }),
     });
     assert.equal(activeLogin.response.status, 200);
   });
