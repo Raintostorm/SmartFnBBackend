@@ -98,10 +98,33 @@ src/
 - `reservations`: lịch đặt bàn của thành viên hoặc khách vãng lai.
 - `menu_categories`, `menu_items`: danh mục và món ăn theo chi nhánh.
 - `orders`, `order_items`: đơn hàng và snapshot món tại thời điểm đặt.
+- `table_sessions`, `table_session_tables`: phiên phục vụ tại bàn; một phiên có thể
+  ghép nhiều bàn và chứa nhiều lần gọi món.
+- `table_adjacencies`: quan hệ bàn liền kề dùng khi Waiter cần ghép bàn.
+- `branch_menu_items`: trạng thái bán và số phần còn lại của món tại từng chi nhánh.
+- `serving_tasks`: hàng đợi món đã sẵn sàng, hỗ trợ Waiter nhận việc và xác nhận đã phục vụ.
+- `work_sessions`: phiên làm việc thực tế; dùng để giới hạn thông báo thời gian thực cho
+  Waiter/Kitchen Staff đang trong ca.
 - `payments`: các lần thanh toán hoặc hoàn tiền của đơn hàng.
 - `vouchers`: voucher toàn chuỗi hoặc giới hạn theo chi nhánh.
 - `loyalty_points`: sổ giao dịch điểm của khách hàng.
 - `attendances`: chấm công theo nhân viên, chi nhánh và ngày làm việc.
+
+### Luồng dữ liệu Waiter và Kitchen Staff
+
+```text
+restaurant_tables
+  -> table_session_tables
+  -> table_sessions
+  -> orders
+  -> order_items
+  -> serving_tasks
+```
+
+Kitchen Staff xử lý từng `order_item` từ `QUEUED` sang `PREPARING`, rồi `READY`.
+Khi món sẵn sàng, hệ thống tạo đúng một `serving_task`; Waiter nhận task theo cơ chế
+first-claim-wins và xác nhận `SERVED`. Trạng thái sẵn bán và số phần còn lại được quản
+lý riêng theo chi nhánh trong `branch_menu_items`, không sửa trực tiếp menu gốc.
 
 ## Lệnh hữu ích
 

@@ -16,7 +16,7 @@ const prisma = new PrismaClient({
 const roles = [
   ['ADMIN', 'Admin', 'Quản trị hệ thống và tài khoản nhân viên'],
   ['WAITER', 'Waiter', 'Nhân viên phục vụ'],
-  ['KITCHEN', 'Kitchen', 'Nhân viên bếp'],
+  ['KITCHEN', 'Kitchen Staff', 'Nhân viên bếp'],
   ['CASHIER', 'Cashier', 'Nhân viên thu ngân'],
   ['CUSTOMER', 'Customer', 'Khách hàng'],
 ] as const;
