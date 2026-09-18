@@ -190,7 +190,7 @@ describe('Owner branch management and role scopes', () => {
     diningAreaId = area.body.id;
   });
 
-  it('lets OWNER create staff while denying Platform ADMIN', async () => {
+  it('lets OWNER create only MANAGER accounts, denying Platform ADMIN and waiter roles', async () => {
     const manager = await request('/auth/managers', {
       method: 'POST',
       headers: { authorization: `Bearer ${ownerAuth.accessToken}` },
@@ -221,12 +221,38 @@ describe('Owner branch management and role scopes', () => {
     });
     assert.equal(adminDenied.response.status, 403);
 
-    const waiter = await request('/auth/staff', {
+    // An OWNER no longer staffs a branch with waiters; the DTO only accepts MANAGER.
+    const ownerDenied = await request('/auth/staff', {
       method: 'POST',
       headers: { authorization: `Bearer ${ownerAuth.accessToken}` },
       body: JSON.stringify(waiterPayload),
     });
-    assert.equal(waiter.response.status, 201);
+    assert.equal(ownerDenied.response.status, 400);
+
+    // The branch-scope assertions below still need a waiter, so seed one directly.
+    const waiterRole = await prisma.role.findUniqueOrThrow({ where: { code: 'WAITER' } });
+    const waiterPasswordHash = await hash(password, {
+      type: argon2id,
+      memoryCost: 19_456,
+      timeCost: 2,
+      parallelism: 1,
+    });
+    await prisma.user.create({
+      data: {
+        email: emails.waiter,
+        passwordHash: waiterPasswordHash,
+        roleId: waiterRole.id,
+        employee: {
+          create: {
+            branchId: firstBranchId,
+            employeeCode: `W-${suffix}`.slice(0, 50),
+            firstName: 'Role',
+            lastName: 'Waiter',
+          },
+        },
+      },
+    });
+
     managerAuth = await login(emails.manager);
     waiterAuth = await login(emails.waiter);
   });

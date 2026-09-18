@@ -27,6 +27,9 @@ import type { LoginDto } from './dto/login.dto.js';
 import type { SetupPasswordDto } from './dto/setup-password.dto.js';
 import { PasswordService } from './password.service.js';
 
+// Roles onboarded or recovered through a one-time setup link rather than a password reset form.
+const PASSWORD_SETUP_ROLES: readonly AppRole[] = [AppRole.OWNER, AppRole.MANAGER];
+
 interface TokenPair {
   accessToken: string;
   refreshToken: string;
@@ -79,6 +82,12 @@ export class AuthService {
     if (actor.role !== AppRole.OWNER || !actor.ownerId) {
       throw new ForbiddenException('Only an OWNER can create staff accounts');
     }
+    // An OWNER staffs a branch with its MANAGER; the MANAGER hires the rest.
+    if (dto.role !== AppRole.MANAGER) {
+      throw new ForbiddenException(
+        'OWNER can only create MANAGER accounts. WAITER, KITCHEN, and CASHIER accounts are created by the branch manager.',
+      );
+    }
     const role = await this.usersService.findRoleByCode(dto.role);
 
     if (!role) {
@@ -120,7 +129,11 @@ export class AuthService {
         user: { select: { status: true, deletedAt: true, role: { select: { code: true } } } },
       },
     });
-    if (!setupToken || setupToken.user.deletedAt || setupToken.user.role.code !== AppRole.OWNER) {
+    if (
+      !setupToken ||
+      setupToken.user.deletedAt ||
+      !PASSWORD_SETUP_ROLES.includes(setupToken.user.role.code as AppRole)
+    ) {
       throw new UnauthorizedException('Password setup token is invalid or expired');
     }
 

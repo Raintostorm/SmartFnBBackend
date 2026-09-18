@@ -11,7 +11,7 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
-import { AppRole, STAFF_ROLES } from '../app-role.enum.js';
+import { AppRole } from '../app-role.enum.js';
 
 export class CreateStaffDto {
   @ApiProperty({ example: 'waiter@example.com', maxLength: 255 })
@@ -37,9 +37,14 @@ export class CreateStaffDto {
   @Matches(/^\+?[0-9]{8,15}$/, { message: 'phone must contain 8 to 15 digits' })
   phone?: string;
 
-  @ApiProperty({ enum: STAFF_ROLES, enumName: 'StaffRole', example: AppRole.WAITER })
-  @IsIn(STAFF_ROLES)
-  role!: AppRole.MANAGER | AppRole.WAITER | AppRole.KITCHEN | AppRole.CASHIER;
+  @ApiProperty({
+    enum: [AppRole.MANAGER],
+    enumName: 'OwnerCreatableRole',
+    example: AppRole.MANAGER,
+    description: 'An OWNER may only create MANAGER accounts.',
+  })
+  @IsIn([AppRole.MANAGER])
+  role!: AppRole.MANAGER;
 
   @ApiProperty({ format: 'uuid', description: 'Branch assigned to the employee' })
   @IsUUID()

@@ -27,7 +27,7 @@
 - [`table_sessions`](#table-sessions) — Một lượt khách ngồi bàn; gom nhiều bàn, order và thanh toán.
 - [`table_session_tables`](#table-session-tables) — Bảng nối nhiều-nhiều giữa phiên phục vụ và bàn.
 - [`reservations`](#reservations) — Thông tin đặt bàn của khách vãng lai.
-- [`menu_categories`](#menu-categories) — Nhóm món của một chi nhánh.
+- [`menu_categories`](#menu-categories) — Nhóm món của toàn chuỗi.
 - [`menu_items`](#menu-items) — Thông tin món và giá niêm yết.
 - [`branch_menu_items`](#branch-menu-items) — Khả năng bán và số phần còn lại của món tại chi nhánh.
 - [`orders`](#orders) — Một lần gọi món trong table session; một phiên có thể có nhiều order.
@@ -402,13 +402,13 @@ Thông tin đặt bàn của khách vãng lai.
 
 ## `menu_categories`
 
-Nhóm món của một chi nhánh.
+Nhóm món của toàn chuỗi. Menu là tài sản cấp chuỗi: một danh mục, một bảng giá cho mọi chi nhánh. Việc chi nhánh nào thực sự bán món nào nằm ở [`branch_menu_items`](#branch-menu-items).
 
 | Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
 | --- | --- | --- | --- | --- | --- |
 | `id` | `id` | `String` | Không | PK; default: uuid() | Khóa chính UUID. |
-| `branch_id` | `branchId` | `String` | Không | — | Chi nhánh sở hữu hoặc xử lý bản ghi. |
-| `name` | `name` | `String` | Không | — | Tên hiển thị. |
+| `chain_id` | `chainId` | `String` | Không | unique cùng `name` | Chuỗi nhà hàng sở hữu danh mục. |
+| `name` | `name` | `String` | Không | unique cùng `chain_id` | Tên hiển thị. |
 | `description` | `description` | `String` | Có | — | Mô tả bổ sung. |
 | `display_order` | `displayOrder` | `Int` | Không | default: 0 | Thứ tự hiển thị trong menu. |
 | `is_active` | `isActive` | `Boolean` | Không | default: true | Cờ bật/tắt nghiệp vụ mà không xóa dữ liệu. |
@@ -418,7 +418,7 @@ Nhóm món của một chi nhánh.
 
 **Quan hệ**
 
-- `branchId` → `branches.id` (xóa: `Restrict`).
+- `chainId` → `restaurant_chains.id` (xóa: `Restrict`).
 
 ## `menu_items`
 

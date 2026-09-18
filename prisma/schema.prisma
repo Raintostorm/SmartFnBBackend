@@ -278,6 +278,7 @@ model RestaurantChain {
   deletedAt           DateTime?             @map("deleted_at") @db.Timestamptz(6)
 
   branches                Branch[]
+  menuCategories          MenuCategory[]
   ownerAssignments        OwnerChainAssignment[]
   registrationApplication RegistrationApplication?
   subscription            BusinessSubscription?
@@ -314,7 +315,6 @@ model Branch {
   employees           Employee[]
   tables              RestaurantTable[]
   reservations        Reservation[]
-  menuCategories      MenuCategory[]
   orders              Order[]
   vouchers            Voucher[]
   attendances         Attendance[]
@@ -806,7 +806,7 @@ model Reservation {
 
 model MenuCategory {
   id           String    @id @default(uuid()) @db.Uuid
-  branchId     String    @map("branch_id") @db.Uuid
+  chainId      String    @map("chain_id") @db.Uuid
   name         String    @db.VarChar(150)
   description  String?   @db.VarChar(500)
   displayOrder Int       @default(0) @map("display_order")
@@ -815,11 +815,11 @@ model MenuCategory {
   updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(6)
 
-  branch Branch     @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  items  MenuItem[]
+  chain RestaurantChain @relation(fields: [chainId], references: [id], onDelete: Restrict)
+  items MenuItem[]
 
-  @@unique([branchId, name])
-  @@index([branchId, isActive, displayOrder])
+  @@unique([chainId, name])
+  @@index([chainId, isActive, displayOrder])
   @@map("menu_categories")
 }
 

@@ -385,7 +385,7 @@ async function createDemoOperationsData(): Promise<void> {
   await prisma.menuCategory.upsert({
     where: { id: ids.category },
     update: { name: 'Món chính', isActive: true },
-    create: { id: ids.category, branchId: ids.branch, name: 'Món chính' },
+    create: { id: ids.category, chainId: ids.chain, name: 'Món chính' },
   });
   const menuItems = [
     [ids.itemRice, 'DEMO-RICE', 'Cơm gà nướng', 65000, 15, true],
@@ -508,6 +508,14 @@ async function createDemoOperationsData(): Promise<void> {
     },
   });
 
+  await seedSalesHistory({
+    chainId: ids.chain,
+    firstBranchId: ids.branch,
+    firstWaiterId: ids.waiter,
+    menuItemIds: [ids.itemRice, ids.itemSoup, ids.itemDrink],
+    passwordHash,
+  });
+
   console.info('Demo operations data seeded.');
   console.info('Waiter: waiter.demo@smartfnb.local');
   console.info('Kitchen Staff: kitchen.demo@smartfnb.local');
@@ -554,6 +562,203 @@ async function upsertDemoEmployee(input: {
       jobTitle: input.jobTitle,
     },
   });
+}
+
+/**
+ * Two weeks of finished sales at two branches, so the Owner comparison reports
+ * have something to compare. Everything here is deterministic and re-runnable.
+ */
+async function seedSalesHistory(input: {
+  chainId: string;
+  firstBranchId: string;
+  firstWaiterId: string;
+  menuItemIds: readonly [string, string, string];
+  passwordHash: string;
+}): Promise<void> {
+  const salesId = (offset: number): string =>
+    `20000000-0000-4000-8000-${offset.toString().padStart(12, '0')}`;
+
+  const secondBranchId = salesId(1);
+  const secondWaiterUserId = salesId(2);
+  const secondWaiterId = salesId(3);
+
+  await prisma.branch.upsert({
+    where: { id: secondBranchId },
+    update: { name: 'Smart F&B Demo - Thảo Điền', status: 'ACTIVE' },
+    create: {
+      id: secondBranchId,
+      chainId: input.chainId,
+      code: 'DEMO-THAO-DIEN',
+      name: 'Smart F&B Demo - Thảo Điền',
+      addressLine1: '12 Nguyễn Văn Hưởng',
+      district: 'Thủ Đức',
+      city: 'Hồ Chí Minh',
+      phone: '+84901234568',
+    },
+  });
+  for (let dayOfWeek = 0; dayOfWeek < 7; dayOfWeek += 1) {
+    await prisma.branchOperatingHour.upsert({
+      where: { branchId_dayOfWeek: { branchId: secondBranchId, dayOfWeek } },
+      update: { openTime: '09:00', closeTime: '22:00', isClosed: false },
+      create: { branchId: secondBranchId, dayOfWeek, openTime: '09:00', closeTime: '22:00' },
+    });
+  }
+
+  const waiterRole = await prisma.role.findUniqueOrThrow({ where: { code: 'WAITER' } });
+  await upsertDemoEmployee({
+    userId: secondWaiterUserId,
+    employeeId: secondWaiterId,
+    email: 'waiter.thaodien@smartfnb.local',
+    employeeCode: 'DEMO-WTR-002',
+    firstName: 'Bình',
+    lastName: 'Trần',
+    jobTitle: 'Nhân viên phục vụ',
+    roleId: waiterRole.id,
+    branchId: secondBranchId,
+    passwordHash: input.passwordHash,
+  });
+
+  const [riceId, soupId, drinkId] = input.menuItemIds;
+  for (const menuItemId of input.menuItemIds) {
+    await prisma.branchMenuItem.upsert({
+      where: { branchId_menuItemId: { branchId: secondBranchId, menuItemId } },
+      update: { isEnabled: true, isAvailable: true },
+      create: { branchId: secondBranchId, menuItemId, isEnabled: true, isAvailable: true },
+    });
+  }
+
+  const lines = [
+    { menuItemId: riceId, itemName: 'Cơm gà nướng', unitPrice: 65_000 },
+    { menuItemId: soupId, itemName: 'Canh chua cá', unitPrice: 75_000 },
+    { menuItemId: drinkId, itemName: 'Trà đào', unitPrice: 35_000 },
+  ];
+  const branches = [
+    { branchId: input.firstBranchId, waiterId: input.firstWaiterId, ordersPerDay: 3, prefix: 'H1' },
+    { branchId: secondBranchId, waiterId: secondWaiterId, ordersPerDay: 2, prefix: 'H2' },
+  ];
+
+  // Anchored to midnight UTC today so the default 30-day report window covers it.
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  let sequence = 100;
+
+  for (let daysAgo = 13; daysAgo >= 0; daysAgo -= 1) {
+    const day = new Date(today.getTime() - daysAgo * 24 * 60 * 60 * 1000);
+
+    for (const branch of branches) {
+      for (let index = 0; index < branch.ordersPerDay; index += 1) {
+        // 04:00/07:00/10:00 UTC is 11:00/14:00/17:00 in Asia/Ho_Chi_Minh, so every
+        // order sits inside local trading hours and inside its own local day.
+        const placedAt = new Date(day.getTime() + (4 + index * 3) * 60 * 60 * 1000);
+        const sessionId = salesId((sequence += 1));
+        const orderId = salesId((sequence += 1));
+        const guestCount = 2 + ((daysAgo + index) % 3);
+        // A rotating line-up keeps the top-item ranking non-trivial.
+        const orderLines = lines.slice(0, 1 + ((daysAgo + index) % lines.length));
+        const totalAmount = orderLines.reduce(
+          (total, line, lineIndex) => total + line.unitPrice * (1 + (lineIndex % 2)),
+          0,
+        );
+
+        await prisma.tableSession.upsert({
+          where: { id: sessionId },
+          update: {
+            status: 'CLOSED',
+            guestCount,
+            openedAt: placedAt,
+            paidAt: new Date(placedAt.getTime() + 75 * 60 * 1000),
+            closedAt: new Date(placedAt.getTime() + 80 * 60 * 1000),
+          },
+          create: {
+            id: sessionId,
+            sessionCode: `DEMO-${branch.prefix}-SESSION-${sequence}`,
+            branchId: branch.branchId,
+            openedByWaiterId: branch.waiterId,
+            closedByWaiterId: branch.waiterId,
+            guestCount,
+            status: 'CLOSED',
+            paymentStatus: 'PAID',
+            openedAt: placedAt,
+            paidAt: new Date(placedAt.getTime() + 75 * 60 * 1000),
+            closedAt: new Date(placedAt.getTime() + 80 * 60 * 1000),
+          },
+        });
+
+        await prisma.order.upsert({
+          where: { id: orderId },
+          update: {
+            status: 'COMPLETED',
+            totalAmount,
+            subtotal: totalAmount,
+            placedAt,
+            submittedAt: placedAt,
+            completedAt: new Date(placedAt.getTime() + 70 * 60 * 1000),
+          },
+          create: {
+            id: orderId,
+            orderCode: `DEMO-${branch.prefix}-ORDER-${sequence}`,
+            branchId: branch.branchId,
+            tableSessionId: sessionId,
+            waiterId: branch.waiterId,
+            createdByWaiterId: branch.waiterId,
+            status: 'COMPLETED',
+            paymentStatus: 'PAID',
+            subtotal: totalAmount,
+            totalAmount,
+            placedAt,
+            submittedAt: placedAt,
+            completedAt: new Date(placedAt.getTime() + 70 * 60 * 1000),
+          },
+        });
+
+        for (const [lineIndex, line] of orderLines.entries()) {
+          const quantity = 1 + (lineIndex % 2);
+          await prisma.orderItem.upsert({
+            where: { id: salesId((sequence += 1)) },
+            update: {
+              status: 'SERVED',
+              quantity,
+              totalPrice: line.unitPrice * quantity,
+              servedAt: new Date(placedAt.getTime() + 30 * 60 * 1000),
+            },
+            create: {
+              id: salesId(sequence),
+              orderId,
+              menuItemId: line.menuItemId,
+              itemName: line.itemName,
+              unitPrice: line.unitPrice,
+              quantity,
+              totalPrice: line.unitPrice * quantity,
+              status: 'SERVED',
+              servedByWaiterId: branch.waiterId,
+              servedAt: new Date(placedAt.getTime() + 30 * 60 * 1000),
+            },
+          });
+        }
+
+        await prisma.payment.upsert({
+          where: { id: salesId((sequence += 1)) },
+          update: {
+            status: 'SUCCESS',
+            amount: totalAmount,
+            paidAt: new Date(placedAt.getTime() + 75 * 60 * 1000),
+          },
+          create: {
+            id: salesId(sequence),
+            paymentCode: `DEMO-${branch.prefix}-PAY-${sequence}`,
+            // payments_exactly_one_payable_check: an order OR a session, never both.
+            orderId,
+            method: index % 2 === 0 ? 'CASH' : 'BANK_TRANSFER',
+            status: 'SUCCESS',
+            amount: totalAmount,
+            paidAt: new Date(placedAt.getTime() + 75 * 60 * 1000),
+          },
+        });
+      }
+    }
+  }
+
+  console.info('Sales history seeded for two demo branches over the last 14 days.');
 }
 
 function validateSeedPassword(password: string, variableName: string): void {

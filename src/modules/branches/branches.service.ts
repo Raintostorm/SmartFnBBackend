@@ -9,7 +9,6 @@ import {
   BranchAreaStatus,
   BranchAreaType,
   BranchStatus,
-  BusinessSubscriptionStatus,
   Prisma,
   RestaurantChainStatus,
 } from '../../generated/prisma/client.js';
@@ -29,6 +28,7 @@ import type {
   UpdateRestaurantChainDto,
 } from './dto/restaurant-chain.dto.js';
 import { BranchAccessService } from './branch-access.service.js';
+import { PlanQuotaService } from '../subscription/plan-quota.service.js';
 
 const chainSummarySelect = {
   id: true,
@@ -74,11 +74,22 @@ const branchSummarySelect = {
   },
 } satisfies Prisma.BranchSelect;
 
+const WEEKDAY_INDEX: Record<string, number> = {
+  Sun: 0,
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6,
+};
+
 @Injectable()
 export class BranchesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly branchAccess: BranchAccessService,
+    private readonly planQuota: PlanQuotaService,
   ) {}
 
   async createChain(dto: CreateRestaurantChainDto) {
@@ -148,27 +159,100 @@ export class BranchesService {
   async createBranch(chainId: string, dto: CreateBranchDto, user: AuthenticatedUser) {
     await this.branchAccess.assertCanManageChain(user, chainId);
     await this.ensureChainExists(chainId);
-    const subscription = await this.prisma.businessSubscription.findFirst({
-      where: {
-        chainId,
-        status: BusinessSubscriptionStatus.ACTIVE,
-        expiresAt: { gt: new Date() },
-      },
-      select: { plan: { select: { maxBranches: true } } },
-    });
-    if (!subscription) {
-      throw new ForbiddenException('The business subscription is not active');
-    }
-    const branchCount = await this.prisma.branch.count({ where: { chainId, deletedAt: null } });
-    if (branchCount >= subscription.plan.maxBranches) {
-      throw new ConflictException('Service plan branch limit has been reached');
-    }
+    await this.planQuota.assertWithinQuota(chainId, 'branches');
+
+    const { openTime, closeTime, ...branchData } = dto;
+    const weeklyHours = this.buildWeeklyHours(openTime, closeTime);
+
     return this.withUniqueConflict('Branch code already exists', () =>
       this.prisma.branch.create({
-        data: { ...dto, chainId },
-        select: branchSummarySelect,
+        data: {
+          ...branchData,
+          chainId,
+          ...(weeklyHours ? { operatingHours: { create: weeklyHours } } : {}),
+        },
+        select: {
+          ...branchSummarySelect,
+          operatingHours: { orderBy: { dayOfWeek: 'asc' } },
+        },
       }),
     );
+  }
+
+  /** Chains the current OWNER is assigned to, with the live plan usage for each. */
+  async listOwnerChains(user: AuthenticatedUser) {
+    const chainIds = await this.getOwnedChainIds(user);
+    const chains = await this.prisma.restaurantChain.findMany({
+      where: { id: { in: chainIds }, deletedAt: null },
+      select: {
+        ...chainSummarySelect,
+        _count: { select: { branches: { where: { deletedAt: null } } } },
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    return Promise.all(
+      chains.map(async (chain) => ({
+        ...chain,
+        subscription: await this.planQuota.getQuotaSnapshot(chain.id).catch(() => null),
+      })),
+    );
+  }
+
+  /**
+   * Every branch of one chain on a single screen: status, today's schedule,
+   * whether it is open right now, and how much of the plan is left.
+   */
+  async getChainOverview(chainId: string, user: AuthenticatedUser) {
+    await this.branchAccess.assertCanManageChain(user, chainId);
+    await this.ensureChainExists(chainId);
+
+    const now = new Date();
+    // Branches may sit in different timezones, so pull a +/- 1 day window of
+    // special hours and let each branch pick its own local date out of it.
+    const windowStart = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const windowEnd = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+
+    const [chain, branches, quota] = await Promise.all([
+      this.prisma.restaurantChain.findFirst({
+        where: { id: chainId, deletedAt: null },
+        select: chainSummarySelect,
+      }),
+      this.prisma.branch.findMany({
+        where: { chainId, deletedAt: null },
+        select: {
+          ...branchSummarySelect,
+          operatingHours: { orderBy: { dayOfWeek: 'asc' } },
+          specialHours: { where: { date: { gte: windowStart, lte: windowEnd } } },
+          _count: {
+            select: {
+              areas: { where: { deletedAt: null } },
+              tables: { where: { deletedAt: null } },
+              employees: { where: { deletedAt: null, user: { deletedAt: null } } },
+            },
+          },
+        },
+        orderBy: [{ city: 'asc' }, { name: 'asc' }],
+      }),
+      this.planQuota.getQuotaSnapshot(chainId).catch(() => null),
+    ]);
+
+    const items = branches.map(({ specialHours, operatingHours, ...branch }) => ({
+      ...branch,
+      operatingHours,
+      today: this.resolveOpenState({ ...branch, operatingHours, specialHours }, now),
+    }));
+
+    return {
+      chain,
+      subscription: quota,
+      summary: {
+        total: items.length,
+        byStatus: this.countByStatus(items),
+        openNow: items.filter(({ today }) => today.isOpenNow).length,
+      },
+      branches: items,
+    };
   }
 
   async listBranches(user: AuthenticatedUser, query: ListBranchesQueryDto) {
@@ -475,6 +559,149 @@ export class BranchesService {
     }
 
     return branch;
+  }
+
+  /** The seven identical weekday rows seeded from a single open/close pair. */
+  private buildWeeklyHours(openTime?: string, closeTime?: string) {
+    if (!openTime && !closeTime) {
+      return null;
+    }
+    if (!openTime || !closeTime) {
+      throw new BadRequestException('openTime and closeTime must be provided together');
+    }
+    if (openTime === closeTime) {
+      throw new BadRequestException('openTime and closeTime must be different');
+    }
+    return Array.from({ length: 7 }, (_unused, dayOfWeek) => ({
+      dayOfWeek,
+      openTime,
+      closeTime,
+      isClosed: false,
+    }));
+  }
+
+  private async getOwnedChainIds(user: AuthenticatedUser): Promise<string[]> {
+    if (user.role !== AppRole.OWNER) {
+      throw new ForbiddenException('Only OWNER can list restaurant chains');
+    }
+    if (!user.ownerId) {
+      throw new ForbiddenException('The owner profile is missing');
+    }
+    const assignments = await this.prisma.ownerChainAssignment.findMany({
+      where: { ownerId: user.ownerId },
+      select: { chainId: true },
+    });
+    return assignments.map(({ chainId }) => chainId);
+  }
+
+  private countByStatus(branches: { status: BranchStatus }[]): Record<BranchStatus, number> {
+    const counts = Object.fromEntries(
+      Object.values(BranchStatus).map((status) => [status, 0]),
+    ) as Record<BranchStatus, number>;
+    for (const { status } of branches) {
+      counts[status] += 1;
+    }
+    return counts;
+  }
+
+  /**
+   * Resolves whether a branch is serving right now in its own timezone.
+   * A special hour for the branch-local date wins over the weekly schedule, and a
+   * closeTime earlier than openTime is read as closing after midnight.
+   */
+  private resolveOpenState(
+    branch: {
+      status: BranchStatus;
+      timezone: string;
+      operatingHours: {
+        dayOfWeek: number;
+        openTime: string | null;
+        closeTime: string | null;
+        isClosed: boolean;
+      }[];
+      specialHours: {
+        date: Date;
+        openTime: string | null;
+        closeTime: string | null;
+        isClosed: boolean;
+        note: string | null;
+      }[];
+    },
+    now: Date,
+  ) {
+    const local = this.getLocalParts(now, branch.timezone);
+    const special = branch.specialHours.find(
+      (entry) => entry.date.toISOString().slice(0, 10) === local.date,
+    );
+    const weekly = branch.operatingHours.find((entry) => entry.dayOfWeek === local.dayOfWeek);
+    const schedule = special ?? weekly ?? null;
+
+    const base = {
+      localDate: local.date,
+      localTime: local.time,
+      dayOfWeek: local.dayOfWeek,
+      source: special ? ('SPECIAL_HOUR' as const) : weekly ? ('WEEKLY' as const) : null,
+      note: special?.note ?? null,
+      openTime: schedule?.isClosed ? null : (schedule?.openTime ?? null),
+      closeTime: schedule?.isClosed ? null : (schedule?.closeTime ?? null),
+    };
+
+    if (branch.status !== BranchStatus.ACTIVE) {
+      return { ...base, isOpenNow: false, reason: `BRANCH_${branch.status}` as const };
+    }
+    if (!schedule) {
+      return { ...base, isOpenNow: false, reason: 'NO_SCHEDULE' as const };
+    }
+    if (schedule.isClosed || !schedule.openTime || !schedule.closeTime) {
+      return { ...base, isOpenNow: false, reason: 'CLOSED_TODAY' as const };
+    }
+
+    const current = this.toMinutes(local.time);
+    const open = this.toMinutes(schedule.openTime);
+    const close = this.toMinutes(schedule.closeTime);
+    // An overnight shift (22:00 -> 02:00) is open on either side of midnight.
+    const isOpenNow =
+      close > open ? current >= open && current < close : current >= open || current < close;
+
+    return {
+      ...base,
+      isOpenNow,
+      reason: isOpenNow ? ('OPEN' as const) : ('OUTSIDE_HOURS' as const),
+    };
+  }
+
+  private getLocalParts(now: Date, timezone: string) {
+    const parts = this.formatInTimezone(now, timezone);
+    return {
+      date: `${parts.year}-${parts.month}-${parts.day}`,
+      time: `${parts.hour}:${parts.minute}`,
+      dayOfWeek: WEEKDAY_INDEX[parts.weekday] ?? now.getUTCDay(),
+    };
+  }
+
+  private formatInTimezone(now: Date, timezone: string): Record<string, string> {
+    const options: Intl.DateTimeFormatOptions = {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+      weekday: 'short',
+    };
+    let formatter: Intl.DateTimeFormat;
+    try {
+      formatter = new Intl.DateTimeFormat('en-US', { ...options, timeZone: timezone });
+    } catch {
+      // A branch saved with an unknown timezone still has to render on the overview.
+      formatter = new Intl.DateTimeFormat('en-US', { ...options, timeZone: 'UTC' });
+    }
+    return Object.fromEntries(formatter.formatToParts(now).map(({ type, value }) => [type, value]));
+  }
+
+  private toMinutes(value: string): number {
+    const [hours, minutes] = value.split(':').map(Number);
+    return hours * 60 + minutes;
   }
 
   private async ensureChainExists(id: string): Promise<void> {

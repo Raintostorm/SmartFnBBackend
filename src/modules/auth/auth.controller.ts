@@ -59,9 +59,15 @@ export class AuthController {
   @Roles(AppRole.OWNER)
   @Post('staff')
   @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
-  @ApiOperation({ summary: 'Create a staff account in an owned branch' })
+  @ApiOperation({
+    summary: 'Create a MANAGER account in an owned branch',
+    deprecated: true,
+    description:
+      'Superseded by POST /auth/managers. An OWNER may only create MANAGER accounts; WAITER, ' +
+      'KITCHEN, and CASHIER accounts are created by the branch manager.',
+  })
   @ApiCreatedResponse({ type: AuthResponseDto })
-  @ApiBadRequestResponse({ description: 'Request validation failed' })
+  @ApiBadRequestResponse({ description: 'Request validation failed, or role is not MANAGER' })
   @ApiUnauthorizedResponse({ description: 'Access token is missing, invalid, or expired' })
   @ApiForbiddenResponse({ description: 'Only the owning OWNER can create staff accounts' })
   @ApiNotFoundResponse({ description: 'Branch not found' })
@@ -77,7 +83,9 @@ export class AuthController {
   @Public()
   @HttpCode(HttpStatus.OK)
   @Post('setup-password')
-  @ApiOperation({ summary: 'Set or reset an Owner password using a one-time email token' })
+  @ApiOperation({
+    summary: 'Set or reset an OWNER or MANAGER password using a one-time email token',
+  })
   @ApiOkResponse({ type: MessageResponseDto })
   @ApiUnauthorizedResponse({ description: 'Setup token is invalid or expired' })
   setupPassword(@Body() dto: SetupPasswordDto): Promise<{ message: string }> {

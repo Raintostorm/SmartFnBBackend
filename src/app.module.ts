@@ -17,6 +17,7 @@ import { TablesModule } from './modules/tables/tables.module.js';
 import { UsersModule } from './modules/users/users.module.js';
 import { VouchersModule } from './modules/vouchers/vouchers.module.js';
 import { PlatformAdminModule } from './modules/platform-admin/platform-admin.module.js';
+import { ReportsModule } from './modules/reports/reports.module.js';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { PlatformAdminModule } from './modules/platform-admin/platform-admin.mod
     VouchersModule,
     AttendanceModule,
     PlatformAdminModule,
+    ReportsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

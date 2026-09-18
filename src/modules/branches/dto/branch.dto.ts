@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer';
-import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, OmitType, PartialType } from '@nestjs/swagger';
 import {
   IsEmail,
   IsEnum,
@@ -11,6 +11,9 @@ import {
   MinLength,
 } from 'class-validator';
 import { BranchStatus } from '../../../generated/prisma/client.js';
+
+const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+const TIME_PATTERN_SOURCE = TIME_PATTERN.source;
 
 export class CreateBranchDto {
   @ApiProperty({ example: 'HCM-D1', maxLength: 50 })
@@ -84,9 +87,31 @@ export class CreateBranchDto {
   @IsString()
   @MaxLength(50)
   timezone?: string;
+
+  @ApiPropertyOptional({
+    example: '08:00',
+    description: 'Opening time applied to all seven days; pair it with closeTime.',
+    pattern: TIME_PATTERN_SOURCE,
+  })
+  @IsOptional()
+  @Matches(TIME_PATTERN, { message: 'openTime must use HH:mm format' })
+  openTime?: string;
+
+  @ApiPropertyOptional({
+    example: '22:00',
+    description:
+      'Closing time applied to all seven days. Also the cut-off used to auto-close work sessions.',
+    pattern: TIME_PATTERN_SOURCE,
+  })
+  @IsOptional()
+  @Matches(TIME_PATTERN, { message: 'closeTime must use HH:mm format' })
+  closeTime?: string;
 }
 
-export class UpdateBranchDto extends PartialType(CreateBranchDto) {}
+// Opening hours are seeded at creation; per-day edits go through the operating-hours routes.
+export class UpdateBranchDto extends PartialType(
+  OmitType(CreateBranchDto, ['openTime', 'closeTime'] as const),
+) {}
 
 export class UpdateBranchStatusDto {
   @ApiProperty({ enum: BranchStatus, enumName: 'BranchStatus' })
