@@ -10,8 +10,8 @@ import {
   MinLength,
 } from 'class-validator';
 
-export class RegisterCustomerDto {
-  @ApiProperty({ example: 'customer@example.com', maxLength: 255 })
+export class CreateOwnerDto {
+  @ApiProperty({ example: 'owner@example.com', maxLength: 255 })
   @Transform(({ value }: { value: unknown }) =>
     typeof value === 'string' ? value.trim().toLowerCase() : value,
   )
@@ -48,7 +48,7 @@ export class RegisterCustomerDto {
   @MaxLength(100)
   lastName!: string;
 
-  @ApiPropertyOptional({ example: '2000-01-31', format: 'date' })
+  @ApiPropertyOptional({ example: '1985-01-31', format: 'date' })
   @IsOptional()
   @IsDateString({ strict: true })
   dateOfBirth?: string;

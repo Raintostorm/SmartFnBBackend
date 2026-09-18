@@ -19,12 +19,12 @@ export class EmployeeProfileResponseDto {
   lastName!: string;
 }
 
-export class CustomerProfileResponseDto {
+export class OwnerProfileResponseDto {
   @ApiProperty({ format: 'uuid' })
   id!: string;
 
-  @ApiProperty({ example: 'CUS-A1B2C3D4E5F6' })
-  customerCode!: string;
+  @ApiProperty({ example: 'OWN-A1B2C3D4E5F6' })
+  ownerCode!: string;
 
   @ApiProperty({ example: 'An' })
   firstName!: string;
@@ -37,7 +37,7 @@ export class AuthUserResponseDto {
   @ApiProperty({ format: 'uuid' })
   id!: string;
 
-  @ApiProperty({ example: 'customer@example.com' })
+  @ApiProperty({ example: 'owner@example.com' })
   email!: string;
 
   @ApiProperty({ example: '+84901234567', nullable: true })
@@ -52,8 +52,8 @@ export class AuthUserResponseDto {
   @ApiProperty({ type: EmployeeProfileResponseDto, nullable: true })
   employee!: EmployeeProfileResponseDto | null;
 
-  @ApiProperty({ type: CustomerProfileResponseDto, nullable: true })
-  customer!: CustomerProfileResponseDto | null;
+  @ApiProperty({ type: OwnerProfileResponseDto, nullable: true })
+  owner!: OwnerProfileResponseDto | null;
 }
 
 export class AuthResponseDto {
@@ -80,7 +80,7 @@ export class AuthenticatedUserResponseDto {
   @ApiProperty({ format: 'uuid' })
   id!: string;
 
-  @ApiProperty({ example: 'customer@example.com' })
+  @ApiProperty({ example: 'owner@example.com' })
   email!: string;
 
   @ApiProperty({ example: '+84901234567', nullable: true })
@@ -96,7 +96,7 @@ export class AuthenticatedUserResponseDto {
   employeeId!: string | null;
 
   @ApiProperty({ format: 'uuid', nullable: true })
-  customerId!: string | null;
+  ownerId!: string | null;
 
   @ApiProperty({ format: 'uuid', nullable: true })
   branchId!: string | null;

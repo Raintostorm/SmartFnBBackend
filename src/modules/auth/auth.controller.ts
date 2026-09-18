@@ -25,26 +25,48 @@ import {
   MessageResponseDto,
 } from './dto/auth-response.dto.js';
 import { CreateStaffDto } from './dto/create-staff.dto.js';
+import { CreateManagerDto } from './dto/create-manager.dto.js';
+import { CreateOwnerDto } from './dto/create-owner.dto.js';
 import { LoginDto } from './dto/login.dto.js';
 import { RefreshTokenDto } from './dto/refresh-token.dto.js';
-import { RegisterCustomerDto } from './dto/register-customer.dto.js';
 
 @ApiTags('Authentication')
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
-  @Public()
-  @Post('register')
-  @ApiOperation({ summary: 'Register a customer account' })
+  @Roles(AppRole.ADMIN)
+  @Post('owners')
+  @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
+  @ApiOperation({ summary: 'Create an OWNER account (ADMIN only)' })
   @ApiCreatedResponse({ type: AuthResponseDto })
   @ApiBadRequestResponse({ description: 'Request validation failed' })
-  @ApiConflictResponse({ description: 'Email, phone, or generated customer code already exists' })
-  registerCustomer(
-    @Body() dto: RegisterCustomerDto,
+  @ApiUnauthorizedResponse({ description: 'Access token is missing, invalid, or expired' })
+  @ApiForbiddenResponse({ description: 'Only ADMIN can create OWNER accounts' })
+  @ApiConflictResponse({ description: 'Email, phone, or generated owner code already exists' })
+  registerOwner(@Body() dto: CreateOwnerDto, @Req() request: Request): Promise<AuthResponse> {
+    return this.authService.registerOwner(dto, this.getRequestMetadata(request));
+  }
+
+  @Roles(AppRole.ADMIN, AppRole.OWNER)
+  @Post('managers')
+  @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
+  @ApiOperation({
+    summary: 'Create a MANAGER for one branch (ADMIN or owning OWNER)',
+    description: 'An OWNER may select only a branch that belongs to one of their assigned chains.',
+  })
+  @ApiCreatedResponse({ type: AuthResponseDto })
+  @ApiBadRequestResponse({ description: 'Request validation failed' })
+  @ApiUnauthorizedResponse({ description: 'Access token is missing, invalid, or expired' })
+  @ApiForbiddenResponse({ description: 'OWNER does not own the branch chain' })
+  @ApiNotFoundResponse({ description: 'Branch not found' })
+  @ApiConflictResponse({ description: 'Email, phone, or employee code already exists' })
+  registerManager(
+    @Body() dto: CreateManagerDto,
     @Req() request: Request,
+    @CurrentUser() user: AuthenticatedUser,
   ): Promise<AuthResponse> {
-    return this.authService.registerCustomer(dto, this.getRequestMetadata(request));
+    return this.authService.registerManager(user, dto, this.getRequestMetadata(request));
   }
 
   @Roles(AppRole.ADMIN)

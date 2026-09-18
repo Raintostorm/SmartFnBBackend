@@ -1,5 +1,6 @@
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   InternalServerErrorException,
   NotFoundException,
@@ -21,8 +22,9 @@ import type {
   RequestMetadata,
 } from './auth.interfaces.js';
 import type { CreateStaffDto } from './dto/create-staff.dto.js';
+import type { CreateManagerDto } from './dto/create-manager.dto.js';
+import type { CreateOwnerDto } from './dto/create-owner.dto.js';
 import type { LoginDto } from './dto/login.dto.js';
-import type { RegisterCustomerDto } from './dto/register-customer.dto.js';
 import { PasswordService } from './password.service.js';
 
 interface TokenPair {
@@ -57,27 +59,24 @@ export class AuthService {
     this.audience = configService.getOrThrow<string>('JWT_AUDIENCE');
   }
 
-  async registerCustomer(
-    dto: RegisterCustomerDto,
-    metadata: RequestMetadata,
-  ): Promise<AuthResponse> {
-    const role = await this.usersService.findRoleByCode(AppRole.CUSTOMER);
+  async registerOwner(dto: CreateOwnerDto, metadata: RequestMetadata): Promise<AuthResponse> {
+    const role = await this.usersService.findRoleByCode(AppRole.OWNER);
 
     if (!role) {
-      throw new InternalServerErrorException('CUSTOMER role is not configured');
+      throw new InternalServerErrorException('OWNER role is not configured');
     }
 
     const passwordHash = await this.passwordService.hash(dto.password);
 
     try {
-      const user = await this.usersService.createCustomer({
+      const user = await this.usersService.createOwner({
         email: this.normalizeEmail(dto.email),
         phone: dto.phone?.trim(),
         passwordHash,
         firstName: dto.firstName.trim(),
         lastName: dto.lastName.trim(),
         dateOfBirth: this.parseOptionalDate(dto.dateOfBirth),
-        customerCode: this.generateCode('CUS'),
+        ownerCode: this.generateCode('OWN'),
         roleId: role.id,
       });
 
@@ -85,6 +84,26 @@ export class AuthService {
     } catch (error: unknown) {
       this.rethrowCreateUserError(error);
     }
+  }
+
+  async registerManager(
+    actor: AuthenticatedUser,
+    dto: CreateManagerDto,
+    metadata: RequestMetadata,
+  ): Promise<AuthResponse> {
+    if (actor.role !== AppRole.ADMIN && actor.role !== AppRole.OWNER) {
+      throw new ForbiddenException('Only ADMIN or OWNER can create a MANAGER account');
+    }
+    if (actor.role === AppRole.OWNER) {
+      if (!actor.ownerId) {
+        throw new ForbiddenException('The owner profile is missing');
+      }
+      if (!(await this.usersService.ownerCanManageBranch(actor.ownerId, dto.branchId))) {
+        throw new ForbiddenException('OWNER can only create a MANAGER for an owned chain');
+      }
+    }
+
+    return this.registerStaff({ ...dto, role: AppRole.MANAGER }, metadata);
   }
 
   async registerStaff(dto: CreateStaffDto, metadata: RequestMetadata): Promise<AuthResponse> {
@@ -272,7 +291,7 @@ export class AuthService {
       role,
       sessionId: session.id,
       employeeId: user.employee?.id ?? null,
-      customerId: user.customer?.id ?? null,
+      ownerId: user.owner?.id ?? null,
       branchId: user.employee?.branchId ?? null,
     };
   }
@@ -381,7 +400,7 @@ export class AuthService {
       status: user.status,
       role: this.getAppRole(user),
       employee: user.employee,
-      customer: user.customer,
+      owner: user.owner,
     };
   }
 

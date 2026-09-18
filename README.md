@@ -31,9 +31,9 @@ Lệnh này build NestJS bằng Node.js 24, khởi động cả API và PostgreS
 migration/seed tự động rồi mở API tại `http://localhost:3100`. Xem log API bằng
 `pnpm docker:logs`.
 
-Khi deploy Railway, dùng `Dockerfile` cho service BE và tạo PostgreSQL thành một
-managed service riêng. Đặt `DATABASE_URL` của BE tham chiếu tới `DATABASE_URL`
-của PostgreSQL; không dùng địa chỉ `127.0.0.1` trên Railway.
+Khi deploy Render/Railway, dùng `Dockerfile` cho service BE và dùng PostgreSQL
+managed (ví dụ Neon) làm database riêng. Đặt `DATABASE_URL` của BE bằng connection
+string PostgreSQL; không dùng địa chỉ `127.0.0.1` trên môi trường deploy.
 
 ## Swagger / OpenAPI
 
@@ -56,18 +56,35 @@ Mọi API mặc định đều yêu cầu `Authorization: Bearer <accessToken>`,
 
 | Method  | Endpoint                       | Quyền                                                       |
 | ------- | ------------------------------ | ----------------------------------------------------------- |
-| `POST`  | `/api/v1/auth/register`        | Public, luôn tạo `CUSTOMER`                                 |
 | `POST`  | `/api/v1/auth/login`           | Public                                                      |
 | `POST`  | `/api/v1/auth/refresh`         | Public, đổi refresh token một lần                           |
 | `POST`  | `/api/v1/auth/logout`          | Public, thu hồi session bằng refresh token                  |
 | `POST`  | `/api/v1/auth/logout-all`      | Đã đăng nhập                                                |
 | `GET`   | `/api/v1/auth/me`              | Đã đăng nhập                                                |
-| `POST`  | `/api/v1/auth/staff`           | Chỉ `ADMIN`; tạo `WAITER`, `KITCHEN`, `CASHIER`             |
+| `POST`  | `/api/v1/auth/owners`          | Chỉ `ADMIN`; tạo tài khoản `OWNER`                          |
+| `POST`  | `/api/v1/auth/managers`        | `ADMIN` hoặc `OWNER`; tạo `MANAGER` cho đúng một chi nhánh  |
+| `POST`  | `/api/v1/auth/staff`           | Chỉ `ADMIN`; tạo `MANAGER`, `WAITER`, `KITCHEN`, `CASHIER`  |
 | `PATCH` | `/api/v1/users/:userId/status` | Chỉ `ADMIN`; cập nhật `ACTIVE`, `INACTIVE` hoặc `SUSPENDED` |
 
-Các role ứng dụng: `ADMIN`, `WAITER`, `KITCHEN`, `CASHIER`, `CUSTOMER`. Gắn
-`@Roles(AppRole.ADMIN, ...)` vào controller/handler để giới hạn route theo role;
-route public phải được gắn `@Public()` một cách tường minh.
+Các role ứng dụng: `ADMIN`, `OWNER`, `MANAGER`, `WAITER`, `KITCHEN`, `CASHIER`.
+Gắn `@Roles(AppRole.ADMIN, ...)` vào controller/handler để giới hạn
+route theo role; route public phải được gắn `@Public()` một cách tường minh.
+
+## Quản lý chuỗi nhà hàng
+
+| Nhóm API       | ADMIN           | OWNER                                                    | MANAGER                                                      | WAITER                  | KITCHEN                         | CASHIER                 | Public                   |
+| -------------- | --------------- | -------------------------------------------------------- | ------------------------------------------------------------ | ----------------------- | ------------------------------- | ----------------------- | ------------------------ |
+| Chuỗi nhà hàng | Quản lý tất cả  | Xem phạm vi qua các chi nhánh; không sửa thông tin chuỗi | Không                                                        | Không                   | Không                           | Không                   | Xem chuỗi active         |
+| Chi nhánh      | Quản lý tất cả  | Quản lý mọi chi nhánh thuộc các chuỗi được giao          | Quản lý đúng một chi nhánh, không được chuyển thành INACTIVE | Chỉ xem chi nhánh chính | Chỉ xem chi nhánh chính         | Chỉ xem chi nhánh chính | Xem chi nhánh active     |
+| Giờ hoạt động  | Xem và cấu hình | Xem và cấu hình toàn bộ chi nhánh thuộc chuỗi            | Xem và cấu hình chi nhánh được giao                          | Xem                     | Xem                             | Xem                     | Xem giờ công khai        |
+| Khu vực        | Quản lý tất cả  | Quản lý khu vực trong các chuỗi được giao                | Quản lý khu thuộc chi nhánh được giao                        | Xem dining/pickup       | Xem kitchen/bar, đổi trạng thái | Xem cashier/pickup      | Xem dining/pickup active |
+
+Các endpoint được mô tả đầy đủ trên Swagger. Nhóm chính là
+`/api/v1/restaurant-chains`, `/api/v1/branches` và `/api/v1/public/branches`.
+ADMIN tạo OWNER qua `POST /api/v1/auth/owners`, sau đó phân công chuỗi bằng
+`PUT /api/v1/owners/:ownerId/chains`. OWNER tạo MANAGER qua
+`POST /api/v1/auth/managers`; hệ thống chỉ chấp nhận chi nhánh thuộc chuỗi của OWNER.
+Mỗi MANAGER chỉ quản lý `Employee.branchId` của mình.
 
 Không có API đăng ký `ADMIN`. Để tạo tài khoản quản trị đầu tiên, điền tạm
 `SEED_ADMIN_EMAIL` và `SEED_ADMIN_PASSWORD` trong `.env`, chạy `pnpm prisma:seed`,
@@ -89,13 +106,21 @@ src/
 
 ## Các bảng nền
 
+Data dictionary đầy đủ (từng bảng, cột, lý do tồn tại và khóa ngoại) nằm tại
+[`docs/database-dictionary.md`](docs/database-dictionary.md). Chạy
+`node scripts/generate-database-dictionary.mjs` sau khi sửa Prisma schema để cập nhật tài liệu.
+
 - `roles`: vai trò dùng cho RBAC.
 - `users`: tài khoản đăng nhập; mỗi tài khoản có một vai trò.
 - `branches`: thông tin chi nhánh nhà hàng.
+- `restaurant_chains`: thông tin thương hiệu/chuỗi sở hữu các chi nhánh.
+- `branch_operating_hours`, `branch_special_hours`: lịch mở cửa định kỳ và ngày đặc biệt.
+- `branch_areas`: khu phục vụ, bếp, bar, thu ngân và nhận món theo chi nhánh.
+- `owners`: hồ sơ chủ sở hữu; liên kết 1–1 với User.
+- `owner_chain_assignments`: các chuỗi nhà hàng được ADMIN giao cho OWNER.
 - `employees`: hồ sơ nhân viên; liên kết 1–1 với User và thuộc một Branch.
-- `customers`: hồ sơ khách hàng; liên kết 1–1 với User và lưu điểm/tier loyalty.
 - `restaurant_tables`: bàn ăn theo từng chi nhánh.
-- `reservations`: lịch đặt bàn của thành viên hoặc khách vãng lai.
+- `reservations`: lịch đặt bàn theo thông tin khách vãng lai.
 - `menu_categories`, `menu_items`: danh mục và món ăn theo chi nhánh.
 - `orders`, `order_items`: đơn hàng và snapshot món tại thời điểm đặt.
 - `table_sessions`, `table_session_tables`: phiên phục vụ tại bàn; một phiên có thể
@@ -107,7 +132,6 @@ src/
   Waiter/Kitchen Staff đang trong ca.
 - `payments`: các lần thanh toán hoặc hoàn tiền của đơn hàng.
 - `vouchers`: voucher toàn chuỗi hoặc giới hạn theo chi nhánh.
-- `loyalty_points`: sổ giao dịch điểm của khách hàng.
 - `attendances`: chấm công theo nhân viên, chi nhánh và ngày làm việc.
 
 ### Luồng dữ liệu Waiter và Kitchen Staff
@@ -126,6 +150,20 @@ Khi món sẵn sàng, hệ thống tạo đúng một `serving_task`; Waiter nh�
 first-claim-wins và xác nhận `SERVED`. Trạng thái sẵn bán và số phần còn lại được quản
 lý riêng theo chi nhánh trong `branch_menu_items`, không sửa trực tiếp menu gốc.
 
+### Dữ liệu demo Waiter và Kitchen Staff
+
+Để có dữ liệu kiểm tra trong PostgreSQL/pgAdmin, cấu hình local:
+
+```dotenv
+SEED_DEMO_DATA=true
+SEED_DEMO_PASSWORD=your_local_demo_password
+```
+
+Sau đó chạy `pnpm prisma:seed`. Seed có thể chạy lại nhiều lần mà không nhân đôi dữ liệu.
+Nó tạo chi nhánh, khu vực, bốn bàn và quan hệ liền kề, menu/tồn món, một Waiter,
+một Kitchen Staff, hai ca đang hoạt động, một phiên bàn, một order, hai order item,
+một serving task và một payment đang chờ. Không bật `SEED_DEMO_DATA` ở production.
+
 ## Lệnh hữu ích
 
 ```bash
@@ -136,7 +174,7 @@ pnpm prisma:migrate        # Tạo/chạy migration trong môi trường dev
 pnpm prisma:migrate:deploy # Chạy migration đã có trong production
 pnpm prisma:studio         # Mở Prisma Studio
 pnpm test                  # Chạy unit test
-pnpm test:e2e              # Chạy kiểm thử luồng auth với PostgreSQL local
+pnpm test:e2e              # Chạy kiểm thử auth và quản lý chuỗi với PostgreSQL local
 pnpm build                 # Build production
 ```
 

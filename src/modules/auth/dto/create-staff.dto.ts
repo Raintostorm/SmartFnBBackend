@@ -39,7 +39,7 @@ export class CreateStaffDto {
 
   @ApiProperty({ enum: STAFF_ROLES, enumName: 'StaffRole', example: AppRole.WAITER })
   @IsIn(STAFF_ROLES)
-  role!: AppRole.WAITER | AppRole.KITCHEN | AppRole.CASHIER;
+  role!: AppRole.MANAGER | AppRole.WAITER | AppRole.KITCHEN | AppRole.CASHIER;
 
   @ApiProperty({ format: 'uuid', description: 'Branch assigned to the employee' })
   @IsUUID()

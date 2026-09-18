@@ -31,7 +31,7 @@ describe('RolesGuard', () => {
   });
 
   it('denies a user whose role is not required', () => {
-    const context = createContext(AppRole.CUSTOMER, [AppRole.ADMIN]);
+    const context = createContext(AppRole.WAITER, [AppRole.ADMIN]);
     assert.throws(() => guard.canActivate(context), /permission/i);
   });
 });
