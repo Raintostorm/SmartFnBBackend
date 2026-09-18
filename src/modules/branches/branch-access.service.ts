@@ -1,4 +1,8 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
+import {
+  BusinessSubscriptionStatus,
+  RestaurantChainStatus,
+} from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { AppRole } from '../auth/app-role.enum.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
@@ -9,7 +13,7 @@ export class BranchAccessService {
 
   async getAccessibleBranchIds(user: AuthenticatedUser): Promise<string[] | null> {
     if (user.role === AppRole.ADMIN) {
-      return null;
+      throw new ForbiddenException('Platform ADMIN cannot access restaurant operations');
     }
 
     if (user.role === AppRole.OWNER) {
@@ -17,7 +21,17 @@ export class BranchAccessService {
         throw new ForbiddenException('The owner profile is missing');
       }
       const assignments = await this.prisma.ownerChainAssignment.findMany({
-        where: { ownerId: user.ownerId },
+        where: {
+          ownerId: user.ownerId,
+          chain: {
+            deletedAt: null,
+            status: RestaurantChainStatus.ACTIVE,
+            subscription: {
+              status: BusinessSubscriptionStatus.ACTIVE,
+              expiresAt: { gt: new Date() },
+            },
+          },
+        },
         select: { chainId: true },
       });
       if (assignments.length === 0) {
@@ -36,6 +50,23 @@ export class BranchAccessService {
     if (!user.branchId) {
       throw new ForbiddenException('The current employee is not assigned to a branch');
     }
+    const activeBranch = await this.prisma.branch.count({
+      where: {
+        id: user.branchId,
+        deletedAt: null,
+        chain: {
+          deletedAt: null,
+          status: RestaurantChainStatus.ACTIVE,
+          subscription: {
+            status: BusinessSubscriptionStatus.ACTIVE,
+            expiresAt: { gt: new Date() },
+          },
+        },
+      },
+    });
+    if (activeBranch === 0) {
+      throw new ForbiddenException('The business subscription is not active');
+    }
     return [user.branchId];
   }
 
@@ -47,25 +78,29 @@ export class BranchAccessService {
   }
 
   async assertCanManageBranch(user: AuthenticatedUser, branchId: string): Promise<void> {
-    if (
-      user.role !== AppRole.ADMIN &&
-      user.role !== AppRole.OWNER &&
-      user.role !== AppRole.MANAGER
-    ) {
-      throw new ForbiddenException('Only ADMIN, OWNER, or MANAGER can manage this branch');
+    if (user.role !== AppRole.OWNER && user.role !== AppRole.MANAGER) {
+      throw new ForbiddenException('Only OWNER or MANAGER can manage this branch');
     }
     await this.assertCanAccessBranch(user, branchId);
   }
 
   async assertCanManageChain(user: AuthenticatedUser, chainId: string): Promise<void> {
-    if (user.role === AppRole.ADMIN) {
-      return;
-    }
     if (user.role !== AppRole.OWNER || !user.ownerId) {
-      throw new ForbiddenException('Only ADMIN or an assigned OWNER can manage this chain');
+      throw new ForbiddenException('Only an assigned OWNER can manage this chain');
     }
     const assignmentCount = await this.prisma.ownerChainAssignment.count({
-      where: { ownerId: user.ownerId, chainId },
+      where: {
+        ownerId: user.ownerId,
+        chainId,
+        chain: {
+          deletedAt: null,
+          status: RestaurantChainStatus.ACTIVE,
+          subscription: {
+            status: BusinessSubscriptionStatus.ACTIVE,
+            expiresAt: { gt: new Date() },
+          },
+        },
+      },
     });
     if (assignmentCount === 0) {
       throw new ForbiddenException('OWNER can only manage an assigned restaurant chain');

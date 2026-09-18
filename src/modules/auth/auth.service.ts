@@ -23,8 +23,8 @@ import type {
 } from './auth.interfaces.js';
 import type { CreateStaffDto } from './dto/create-staff.dto.js';
 import type { CreateManagerDto } from './dto/create-manager.dto.js';
-import type { CreateOwnerDto } from './dto/create-owner.dto.js';
 import type { LoginDto } from './dto/login.dto.js';
+import type { SetupPasswordDto } from './dto/setup-password.dto.js';
 import { PasswordService } from './password.service.js';
 
 interface TokenPair {
@@ -59,63 +59,33 @@ export class AuthService {
     this.audience = configService.getOrThrow<string>('JWT_AUDIENCE');
   }
 
-  async registerOwner(dto: CreateOwnerDto, metadata: RequestMetadata): Promise<AuthResponse> {
-    const role = await this.usersService.findRoleByCode(AppRole.OWNER);
-
-    if (!role) {
-      throw new InternalServerErrorException('OWNER role is not configured');
-    }
-
-    const passwordHash = await this.passwordService.hash(dto.password);
-
-    try {
-      const user = await this.usersService.createOwner({
-        email: this.normalizeEmail(dto.email),
-        phone: dto.phone?.trim(),
-        passwordHash,
-        firstName: dto.firstName.trim(),
-        lastName: dto.lastName.trim(),
-        dateOfBirth: this.parseOptionalDate(dto.dateOfBirth),
-        ownerCode: this.generateCode('OWN'),
-        roleId: role.id,
-      });
-
-      return this.createSession(user, metadata);
-    } catch (error: unknown) {
-      this.rethrowCreateUserError(error);
-    }
-  }
-
   async registerManager(
     actor: AuthenticatedUser,
     dto: CreateManagerDto,
     metadata: RequestMetadata,
   ): Promise<AuthResponse> {
-    if (actor.role !== AppRole.ADMIN && actor.role !== AppRole.OWNER) {
-      throw new ForbiddenException('Only ADMIN or OWNER can create a MANAGER account');
-    }
-    if (actor.role === AppRole.OWNER) {
-      if (!actor.ownerId) {
-        throw new ForbiddenException('The owner profile is missing');
-      }
-      if (!(await this.usersService.ownerCanManageBranch(actor.ownerId, dto.branchId))) {
-        throw new ForbiddenException('OWNER can only create a MANAGER for an owned chain');
-      }
+    if (actor.role !== AppRole.OWNER || !actor.ownerId) {
+      throw new ForbiddenException('Only an OWNER can create a MANAGER account');
     }
 
-    return this.registerStaff({ ...dto, role: AppRole.MANAGER }, metadata);
+    return this.registerStaff(actor, { ...dto, role: AppRole.MANAGER }, metadata);
   }
 
-  async registerStaff(dto: CreateStaffDto, metadata: RequestMetadata): Promise<AuthResponse> {
+  async registerStaff(
+    actor: AuthenticatedUser,
+    dto: CreateStaffDto,
+    metadata: RequestMetadata,
+  ): Promise<AuthResponse> {
+    if (actor.role !== AppRole.OWNER || !actor.ownerId) {
+      throw new ForbiddenException('Only an OWNER can create staff accounts');
+    }
     const role = await this.usersService.findRoleByCode(dto.role);
 
     if (!role) {
       throw new InternalServerErrorException(`${dto.role} role is not configured`);
     }
 
-    if (!(await this.usersService.branchExists(dto.branchId))) {
-      throw new NotFoundException('Branch not found');
-    }
+    await this.usersService.assertOwnerCanCreateAccount(actor.ownerId, dto.branchId);
 
     const passwordHash = await this.passwordService.hash(dto.password);
 
@@ -138,6 +108,49 @@ export class AuthService {
     } catch (error: unknown) {
       this.rethrowCreateUserError(error);
     }
+  }
+
+  async setupPassword(dto: SetupPasswordDto): Promise<{ message: string }> {
+    const tokenHash = this.hashToken(dto.token);
+    const setupToken = await this.prisma.passwordSetupToken.findFirst({
+      where: { tokenHash, usedAt: null, expiresAt: { gt: new Date() } },
+      select: {
+        id: true,
+        userId: true,
+        user: { select: { status: true, deletedAt: true, role: { select: { code: true } } } },
+      },
+    });
+    if (!setupToken || setupToken.user.deletedAt || setupToken.user.role.code !== AppRole.OWNER) {
+      throw new UnauthorizedException('Password setup token is invalid or expired');
+    }
+
+    const passwordHash = await this.passwordService.hash(dto.password);
+    const now = new Date();
+    await this.prisma.$transaction(async (transaction) => {
+      const consumed = await transaction.passwordSetupToken.updateMany({
+        where: { id: setupToken.id, usedAt: null, expiresAt: { gt: now } },
+        data: { usedAt: now },
+      });
+      if (consumed.count !== 1) {
+        throw new UnauthorizedException('Password setup token is invalid or expired');
+      }
+      await transaction.user.update({
+        where: { id: setupToken.userId },
+        data: {
+          passwordHash,
+          status:
+            setupToken.user.status === UserStatus.INACTIVE
+              ? UserStatus.ACTIVE
+              : setupToken.user.status,
+          emailVerifiedAt: now,
+        },
+      });
+      await transaction.authSession.updateMany({
+        where: { userId: setupToken.userId, revokedAt: null },
+        data: { revokedAt: now },
+      });
+    });
+    return { message: 'Password configured successfully' };
   }
 
   async login(dto: LoginDto, metadata: RequestMetadata): Promise<AuthResponse> {

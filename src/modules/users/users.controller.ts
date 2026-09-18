@@ -28,14 +28,14 @@ export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
   @Patch(':userId/status')
-  @ApiOperation({ summary: 'Change the status of another user account' })
+  @ApiOperation({ summary: 'Change the status of an OWNER account' })
   @ApiParam({ name: 'userId', format: 'uuid', description: 'Target user ID' })
   @ApiOkResponse({ type: AccountStatusResponseDto })
   @ApiBadRequestResponse({
     description: 'Invalid status, user ID, or attempt to change own status',
   })
   @ApiUnauthorizedResponse({ description: 'Access token is missing, invalid, or expired' })
-  @ApiForbiddenResponse({ description: 'Only ADMIN can change account status' })
+  @ApiForbiddenResponse({ description: 'ADMIN may only change OWNER account status' })
   @ApiNotFoundResponse({ description: 'User not found' })
   updateAccountStatus(
     @Param('userId', new ParseUUIDPipe()) userId: string,

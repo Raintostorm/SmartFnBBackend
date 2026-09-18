@@ -26,39 +26,26 @@ import {
 } from './dto/auth-response.dto.js';
 import { CreateStaffDto } from './dto/create-staff.dto.js';
 import { CreateManagerDto } from './dto/create-manager.dto.js';
-import { CreateOwnerDto } from './dto/create-owner.dto.js';
 import { LoginDto } from './dto/login.dto.js';
 import { RefreshTokenDto } from './dto/refresh-token.dto.js';
+import { SetupPasswordDto } from './dto/setup-password.dto.js';
 
 @ApiTags('Authentication')
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
-  @Roles(AppRole.ADMIN)
-  @Post('owners')
-  @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
-  @ApiOperation({ summary: 'Create an OWNER account (ADMIN only)' })
-  @ApiCreatedResponse({ type: AuthResponseDto })
-  @ApiBadRequestResponse({ description: 'Request validation failed' })
-  @ApiUnauthorizedResponse({ description: 'Access token is missing, invalid, or expired' })
-  @ApiForbiddenResponse({ description: 'Only ADMIN can create OWNER accounts' })
-  @ApiConflictResponse({ description: 'Email, phone, or generated owner code already exists' })
-  registerOwner(@Body() dto: CreateOwnerDto, @Req() request: Request): Promise<AuthResponse> {
-    return this.authService.registerOwner(dto, this.getRequestMetadata(request));
-  }
-
-  @Roles(AppRole.ADMIN, AppRole.OWNER)
+  @Roles(AppRole.OWNER)
   @Post('managers')
   @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
   @ApiOperation({
-    summary: 'Create a MANAGER for one branch (ADMIN or owning OWNER)',
+    summary: 'Create a MANAGER for one branch (owning OWNER)',
     description: 'An OWNER may select only a branch that belongs to one of their assigned chains.',
   })
   @ApiCreatedResponse({ type: AuthResponseDto })
   @ApiBadRequestResponse({ description: 'Request validation failed' })
   @ApiUnauthorizedResponse({ description: 'Access token is missing, invalid, or expired' })
-  @ApiForbiddenResponse({ description: 'OWNER does not own the branch chain' })
+  @ApiForbiddenResponse({ description: 'Only the owning OWNER can create this account' })
   @ApiNotFoundResponse({ description: 'Branch not found' })
   @ApiConflictResponse({ description: 'Email, phone, or employee code already exists' })
   registerManager(
@@ -69,18 +56,32 @@ export class AuthController {
     return this.authService.registerManager(user, dto, this.getRequestMetadata(request));
   }
 
-  @Roles(AppRole.ADMIN)
+  @Roles(AppRole.OWNER)
   @Post('staff')
   @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
-  @ApiOperation({ summary: 'Create a staff account and assign it to a branch' })
+  @ApiOperation({ summary: 'Create a staff account in an owned branch' })
   @ApiCreatedResponse({ type: AuthResponseDto })
   @ApiBadRequestResponse({ description: 'Request validation failed' })
   @ApiUnauthorizedResponse({ description: 'Access token is missing, invalid, or expired' })
-  @ApiForbiddenResponse({ description: 'Only ADMIN can create staff accounts' })
+  @ApiForbiddenResponse({ description: 'Only the owning OWNER can create staff accounts' })
   @ApiNotFoundResponse({ description: 'Branch not found' })
   @ApiConflictResponse({ description: 'Email, phone, or employee code already exists' })
-  registerStaff(@Body() dto: CreateStaffDto, @Req() request: Request): Promise<AuthResponse> {
-    return this.authService.registerStaff(dto, this.getRequestMetadata(request));
+  registerStaff(
+    @Body() dto: CreateStaffDto,
+    @Req() request: Request,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<AuthResponse> {
+    return this.authService.registerStaff(user, dto, this.getRequestMetadata(request));
+  }
+
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @Post('setup-password')
+  @ApiOperation({ summary: 'Set or reset an Owner password using a one-time email token' })
+  @ApiOkResponse({ type: MessageResponseDto })
+  @ApiUnauthorizedResponse({ description: 'Setup token is invalid or expired' })
+  setupPassword(@Body() dto: SetupPasswordDto): Promise<{ message: string }> {
+    return this.authService.setupPassword(dto);
   }
 
   @Public()

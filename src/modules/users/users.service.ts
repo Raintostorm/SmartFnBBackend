@@ -1,7 +1,18 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { UserStatus, type Prisma } from '../../generated/prisma/client.js';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import {
+  BusinessSubscriptionStatus,
+  RestaurantChainStatus,
+  UserStatus,
+  type Prisma,
+} from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
-import type { AppRole } from '../auth/app-role.enum.js';
+import { AppRole } from '../auth/app-role.enum.js';
 
 export const authUserInclude = {
   role: {
@@ -33,17 +44,6 @@ export const authUserInclude = {
 export type AuthUserRecord = Prisma.UserGetPayload<{
   include: typeof authUserInclude;
 }>;
-
-export interface CreateOwnerInput {
-  email: string;
-  phone?: string;
-  passwordHash: string;
-  firstName: string;
-  lastName: string;
-  dateOfBirth?: Date;
-  ownerCode: string;
-  roleId: string;
-}
 
 export interface CreateStaffInput {
   email: string;
@@ -117,6 +117,11 @@ export class UsersService {
           ownerId,
           chain: {
             deletedAt: null,
+            status: RestaurantChainStatus.ACTIVE,
+            subscription: {
+              status: BusinessSubscriptionStatus.ACTIVE,
+              expiresAt: { gt: new Date() },
+            },
             branches: { some: { id: branchId, deletedAt: null } },
           },
         },
@@ -124,33 +129,49 @@ export class UsersService {
       .then((count) => count > 0);
   }
 
-  createOwner(input: CreateOwnerInput): Promise<AuthUserRecord> {
-    return this.prisma.$transaction(async (transaction) => {
-      const user = await transaction.user.create({
-        data: {
-          email: input.email,
-          phone: input.phone,
-          passwordHash: input.passwordHash,
-          roleId: input.roleId,
+  async assertOwnerCanCreateAccount(ownerId: string, branchId: string): Promise<void> {
+    const assignment = await this.prisma.ownerChainAssignment.findFirst({
+      where: {
+        ownerId,
+        chain: {
+          deletedAt: null,
+          status: RestaurantChainStatus.ACTIVE,
+          subscription: {
+            status: BusinessSubscriptionStatus.ACTIVE,
+            expiresAt: { gt: new Date() },
+          },
+          branches: { some: { id: branchId, deletedAt: null } },
         },
-        select: { id: true },
-      });
-
-      await transaction.owner.create({
-        data: {
-          userId: user.id,
-          ownerCode: input.ownerCode,
-          firstName: input.firstName,
-          lastName: input.lastName,
-          dateOfBirth: input.dateOfBirth,
+      },
+      select: {
+        chainId: true,
+        chain: {
+          select: { subscription: { select: { plan: { select: { maxAccounts: true } } } } },
         },
-      });
-
-      return transaction.user.findUniqueOrThrow({
-        where: { id: user.id },
-        include: authUserInclude,
-      });
+      },
     });
+    if (!assignment?.chain.subscription) {
+      throw new ForbiddenException('OWNER can only create accounts in an active assigned business');
+    }
+
+    const [employeeCount, ownerCount] = await Promise.all([
+      this.prisma.employee.count({
+        where: {
+          branch: { chainId: assignment.chainId },
+          deletedAt: null,
+          user: { deletedAt: null },
+        },
+      }),
+      this.prisma.ownerChainAssignment.count({
+        where: {
+          chainId: assignment.chainId,
+          owner: { deletedAt: null, user: { deletedAt: null } },
+        },
+      }),
+    ]);
+    if (employeeCount + ownerCount >= assignment.chain.subscription.plan.maxAccounts) {
+      throw new ConflictException('Service plan account limit has been reached');
+    }
   }
 
   createStaff(input: CreateStaffInput): Promise<AuthUserRecord> {
@@ -178,7 +199,7 @@ export class UsersService {
         },
       });
 
-      return transaction.user.findUniqueOrThrow({
+      return await transaction.user.findUniqueOrThrow({
         where: { id: user.id },
         include: authUserInclude,
       });
@@ -208,11 +229,14 @@ export class UsersService {
           id: userId,
           deletedAt: null,
         },
-        select: { id: true },
+        select: { id: true, role: { select: { code: true } } },
       });
 
       if (!target) {
         throw new NotFoundException('User not found');
+      }
+      if (target.role.code !== AppRole.OWNER) {
+        throw new ForbiddenException('Platform ADMIN can only change OWNER account status');
       }
 
       const updatedUser = await transaction.user.update({

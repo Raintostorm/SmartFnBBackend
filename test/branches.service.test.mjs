@@ -4,7 +4,6 @@ import { BranchAreaStatus, BranchAreaType, BranchStatus } from '../dist/generate
 import { AppRole } from '../dist/modules/auth/app-role.enum.js';
 import { BranchAccessService } from '../dist/modules/branches/branch-access.service.js';
 import { BranchesService } from '../dist/modules/branches/branches.service.js';
-import { OwnerAssignmentsService } from '../dist/modules/branches/owner-assignments.service.js';
 
 function authenticatedUser(role, branchId = null) {
   return {
@@ -144,7 +143,7 @@ describe('BranchesService role scopes', () => {
     );
   });
 
-  it('does not let MANAGER reactivate a branch closed by ADMIN', async () => {
+  it('does not let MANAGER reactivate a branch closed by OWNER', async () => {
     const branchAccess = { assertCanManageBranch: async () => undefined };
     const service = new BranchesService(
       { branch: { findFirst: async () => ({ status: BranchStatus.INACTIVE }) } },
@@ -164,7 +163,7 @@ describe('BranchesService role scopes', () => {
 
 describe('BranchAccessService owner and manager scopes', () => {
   it('limits a MANAGER to exactly its Employee.branchId', async () => {
-    const service = new BranchAccessService({});
+    const service = new BranchAccessService({ branch: { count: async () => 1 } });
     const branchIds = await service.getAccessibleBranchIds(
       authenticatedUser(AppRole.MANAGER, 'branch-one'),
     );
@@ -189,7 +188,7 @@ describe('BranchAccessService owner and manager scopes', () => {
   });
 
   it('rejects a MANAGER from an unassigned branch', async () => {
-    const service = new BranchAccessService({});
+    const service = new BranchAccessService({ branch: { count: async () => 1 } });
 
     await assert.rejects(
       service.assertCanManageBranch(
@@ -199,50 +198,12 @@ describe('BranchAccessService owner and manager scopes', () => {
       (error) => error?.getStatus?.() === 403,
     );
   });
-});
 
-describe('OwnerAssignmentsService', () => {
-  it('replaces the complete list of chains assigned by ADMIN', async () => {
-    let assignedChainIds = [];
-    const chainById = {
-      'chain-one': { id: 'chain-one', code: 'C1', name: 'First' },
-      'chain-two': { id: 'chain-two', code: 'C2', name: 'Second' },
-    };
-    const prisma = {
-      owner: {
-        findFirst: async () => ({
-          id: 'owner-one',
-          ownerCode: 'OWN-001',
-          chainAssignments: assignedChainIds.map((chainId) => ({
-            chain: chainById[chainId],
-          })),
-        }),
-      },
-      restaurantChain: { count: async ({ where }) => where.id.in.length },
-      $transaction: async (callback) =>
-        callback({
-          ownerChainAssignment: {
-            deleteMany: async () => {
-              assignedChainIds = [];
-            },
-            createMany: async ({ data }) => {
-              assignedChainIds = data.map(({ chainId }) => chainId);
-            },
-          },
-        }),
-    };
-    const service = new OwnerAssignmentsService(prisma);
-
-    const result = await service.replaceOwnerChains(
-      'owner-one',
-      ['chain-one', 'chain-two'],
-      'admin-one',
-    );
-
-    assert.deepEqual(assignedChainIds, ['chain-one', 'chain-two']);
-    assert.deepEqual(
-      result.chains.map(({ id }) => id),
-      ['chain-one', 'chain-two'],
+  it('rejects Platform ADMIN from restaurant branch access', async () => {
+    const service = new BranchAccessService({});
+    await assert.rejects(
+      service.getAccessibleBranchIds(authenticatedUser(AppRole.ADMIN)),
+      (error) => error?.getStatus?.() === 403,
     );
   });
 });

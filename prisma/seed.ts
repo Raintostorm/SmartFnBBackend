@@ -146,6 +146,10 @@ async function createDemoOperationsData(): Promise<void> {
     preparingItem: '10000000-0000-4000-8000-000000000025',
     servingTask: '10000000-0000-4000-8000-000000000026',
     payment: '10000000-0000-4000-8000-000000000027',
+    servicePlan: '10000000-0000-4000-8000-000000000028',
+    subscription: '10000000-0000-4000-8000-000000000029',
+    branding: '10000000-0000-4000-8000-000000000030',
+    wallet: '10000000-0000-4000-8000-000000000031',
   } as const;
 
   const [waiterRole, kitchenRole] = await Promise.all([
@@ -168,6 +172,71 @@ async function createDemoOperationsData(): Promise<void> {
       name: 'Smart F&B Demo Chain',
     },
   });
+
+  const demoPlan = await prisma.servicePlan.upsert({
+    where: { code: 'DEMO_OPERATIONS' },
+    update: {
+      name: 'Demo Operations',
+      description: 'Gói dữ liệu mẫu phục vụ kiểm thử các luồng vận hành',
+      monthlyPrice: 0,
+      maxBranches: 5,
+      maxAccounts: 20,
+      maxTables: 100,
+      isActive: true,
+    },
+    create: {
+      id: ids.servicePlan,
+      code: 'DEMO_OPERATIONS',
+      name: 'Demo Operations',
+      description: 'Gói dữ liệu mẫu phục vụ kiểm thử các luồng vận hành',
+      monthlyPrice: 0,
+      maxBranches: 5,
+      maxAccounts: 20,
+      maxTables: 100,
+    },
+  });
+
+  await Promise.all([
+    prisma.businessSubscription.upsert({
+      where: { chainId: ids.chain },
+      update: {
+        planId: demoPlan.id,
+        status: 'ACTIVE',
+        monthlyPrice: 0,
+        startsAt: new Date('2026-01-01T00:00:00.000Z'),
+        expiresAt: new Date('2099-12-31T23:59:59.999Z'),
+        suspendedAt: null,
+      },
+      create: {
+        id: ids.subscription,
+        chainId: ids.chain,
+        planId: demoPlan.id,
+        status: 'ACTIVE',
+        monthlyPrice: 0,
+        startsAt: new Date('2026-01-01T00:00:00.000Z'),
+        expiresAt: new Date('2099-12-31T23:59:59.999Z'),
+      },
+    }),
+    prisma.businessBranding.upsert({
+      where: { chainId: ids.chain },
+      update: { displayName: 'Smart F&B Demo Chain' },
+      create: {
+        id: ids.branding,
+        chainId: ids.chain,
+        displayName: 'Smart F&B Demo Chain',
+      },
+    }),
+    prisma.businessWallet.upsert({
+      where: { chainId: ids.chain },
+      update: { currency: 'VND', status: 'ACTIVE' },
+      create: {
+        id: ids.wallet,
+        chainId: ids.chain,
+        currency: 'VND',
+      },
+    }),
+  ]);
+
   await prisma.branch.upsert({
     where: { id: ids.branch },
     update: { name: 'Smart F&B Nguyễn Huệ', status: 'ACTIVE' },
