@@ -41,7 +41,6 @@ import { ListBranchesQueryDto, UpdateBranchDto, UpdateBranchStatusDto } from './
 import { UpsertBranchHourDto, UpsertBranchSpecialHourDto } from './dto/branch-hours.dto.js';
 
 const INTERNAL_BRANCH_ROLES = [
-  AppRole.ADMIN,
   AppRole.OWNER,
   AppRole.MANAGER,
   AppRole.WAITER,
@@ -62,7 +61,7 @@ export class BranchesController {
 
   @Get()
   @ApiOperation({
-    summary: 'List branches: ADMIN sees all; OWNER sees owned chains; staff see one branch',
+    summary: 'List branches: OWNER sees owned chains; staff see their assigned branch',
   })
   @ApiOkResponse({ description: 'Accessible branches' })
   list(@CurrentUser() user: AuthenticatedUser, @Query() query: ListBranchesQueryDto) {
@@ -81,9 +80,9 @@ export class BranchesController {
     return this.branchesService.getBranch(branchId, user);
   }
 
-  @Roles(AppRole.ADMIN, AppRole.OWNER, AppRole.MANAGER)
+  @Roles(AppRole.OWNER, AppRole.MANAGER)
   @Patch(':branchId')
-  @ApiOperation({ summary: 'Update branch information (ADMIN or assigned MANAGER)' })
+  @ApiOperation({ summary: 'Update branch information (OWNER or assigned MANAGER)' })
   @ApiParam({ name: 'branchId', format: 'uuid' })
   @ApiOkResponse({ description: 'Branch updated' })
   @ApiConflictResponse({ description: 'Branch code already exists' })
@@ -96,11 +95,11 @@ export class BranchesController {
     return this.branchesService.updateBranch(branchId, dto, user);
   }
 
-  @Roles(AppRole.ADMIN, AppRole.OWNER, AppRole.MANAGER)
+  @Roles(AppRole.OWNER, AppRole.MANAGER)
   @Patch(':branchId/status')
   @ApiOperation({
-    summary: 'Change branch status (ADMIN or assigned MANAGER)',
-    description: 'MANAGER may set ACTIVE or MAINTENANCE; ADMIN/OWNER may also set INACTIVE.',
+    summary: 'Change branch status (OWNER or assigned MANAGER)',
+    description: 'MANAGER may set ACTIVE or MAINTENANCE; OWNER may also set INACTIVE.',
   })
   @ApiParam({ name: 'branchId', format: 'uuid' })
   @ApiOkResponse({ description: 'Branch status updated' })
@@ -124,10 +123,10 @@ export class BranchesController {
     return this.branchesService.listOperatingHours(branchId, user);
   }
 
-  @Roles(AppRole.ADMIN, AppRole.OWNER, AppRole.MANAGER)
+  @Roles(AppRole.OWNER, AppRole.MANAGER)
   @Put(':branchId/operating-hours/:dayOfWeek')
   @ApiOperation({
-    summary: 'Create or replace a weekly operating hour (ADMIN or assigned MANAGER)',
+    summary: 'Create or replace a weekly operating hour (OWNER or assigned MANAGER)',
   })
   @ApiParam({ name: 'branchId', format: 'uuid' })
   @ApiParam({
@@ -156,10 +155,10 @@ export class BranchesController {
     return this.branchesService.listSpecialHours(branchId, user);
   }
 
-  @Roles(AppRole.ADMIN, AppRole.OWNER, AppRole.MANAGER)
+  @Roles(AppRole.OWNER, AppRole.MANAGER)
   @Put(':branchId/special-hours/:date')
   @ApiOperation({
-    summary: 'Create or replace a special operating hour (ADMIN or assigned MANAGER)',
+    summary: 'Create or replace a special operating hour (OWNER or assigned MANAGER)',
   })
   @ApiParam({ name: 'branchId', format: 'uuid' })
   @ApiParam({ name: 'date', example: '2026-09-02', description: 'YYYY-MM-DD' })
@@ -174,11 +173,11 @@ export class BranchesController {
     return this.branchesService.upsertSpecialHour(branchId, date, dto, user);
   }
 
-  @Roles(AppRole.ADMIN, AppRole.OWNER, AppRole.MANAGER)
+  @Roles(AppRole.OWNER, AppRole.MANAGER)
   @Delete(':branchId/special-hours/:date')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Delete a special operating hour (ADMIN or assigned MANAGER)',
+    summary: 'Delete a special operating hour (OWNER or assigned MANAGER)',
   })
   @ApiParam({ name: 'branchId', format: 'uuid' })
   @ApiParam({ name: 'date', example: '2026-09-02', description: 'YYYY-MM-DD' })
@@ -196,7 +195,7 @@ export class BranchesController {
   @ApiOperation({
     summary: 'List branch areas filtered for the current role',
     description:
-      'ADMIN/OWNER/MANAGER: all; WAITER: dining/pickup; KITCHEN: kitchen/bar; CASHIER: cashier/pickup.',
+      'OWNER/MANAGER: all; WAITER: dining/pickup; KITCHEN: kitchen/bar; CASHIER: cashier/pickup.',
   })
   @ApiParam({ name: 'branchId', format: 'uuid' })
   @ApiOkResponse({ description: 'Role-visible branch areas' })
@@ -207,9 +206,9 @@ export class BranchesController {
     return this.branchesService.listAreas(branchId, user);
   }
 
-  @Roles(AppRole.ADMIN, AppRole.OWNER, AppRole.MANAGER)
+  @Roles(AppRole.OWNER, AppRole.MANAGER)
   @Post(':branchId/areas')
-  @ApiOperation({ summary: 'Create a branch area (ADMIN or assigned MANAGER)' })
+  @ApiOperation({ summary: 'Create a branch area (OWNER or assigned MANAGER)' })
   @ApiParam({ name: 'branchId', format: 'uuid' })
   @ApiCreatedResponse({ description: 'Branch area created' })
   @ApiConflictResponse({ description: 'Area code already exists in this branch' })
@@ -221,9 +220,9 @@ export class BranchesController {
     return this.branchesService.createArea(branchId, dto, user);
   }
 
-  @Roles(AppRole.ADMIN, AppRole.OWNER, AppRole.MANAGER)
+  @Roles(AppRole.OWNER, AppRole.MANAGER)
   @Patch(':branchId/areas/:areaId')
-  @ApiOperation({ summary: 'Update a branch area (ADMIN or assigned MANAGER)' })
+  @ApiOperation({ summary: 'Update a branch area (OWNER or assigned MANAGER)' })
   @ApiParam({ name: 'branchId', format: 'uuid' })
   @ApiParam({ name: 'areaId', format: 'uuid' })
   @ApiOkResponse({ description: 'Branch area updated' })
@@ -237,10 +236,10 @@ export class BranchesController {
     return this.branchesService.updateArea(branchId, areaId, dto, user);
   }
 
-  @Roles(AppRole.ADMIN, AppRole.OWNER, AppRole.MANAGER, AppRole.KITCHEN)
+  @Roles(AppRole.OWNER, AppRole.MANAGER, AppRole.KITCHEN)
   @Patch(':branchId/areas/:areaId/status')
   @ApiOperation({
-    summary: 'Change area status (ADMIN, assigned MANAGER, or assigned KITCHEN for kitchen/bar)',
+    summary: 'Change area status (OWNER, assigned MANAGER, or assigned KITCHEN for kitchen/bar)',
   })
   @ApiParam({ name: 'branchId', format: 'uuid' })
   @ApiParam({ name: 'areaId', format: 'uuid' })

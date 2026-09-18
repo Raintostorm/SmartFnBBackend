@@ -147,6 +147,54 @@ enum AttendanceStatus {
   ON_LEAVE
 }
 
+enum RegistrationApplicationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum BusinessSubscriptionStatus {
+  ACTIVE
+  SUSPENDED
+  EXPIRED
+}
+
+enum SubscriptionEventType {
+  CREATED
+  RENEWED
+  UPGRADED
+  DOWNGRADED
+  SUSPENDED
+  REACTIVATED
+}
+
+enum WalletStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum WalletLedgerEntryType {
+  PAYMENT_CREDIT
+  SERVICE_FEE
+  WITHDRAWAL
+  REFUND
+  ADJUSTMENT
+}
+
+enum WithdrawalRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  TRANSFERRED
+  TRANSFER_FAILED
+}
+
+enum EmailOutboxStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
 model Role {
   id          String   @id @default(uuid()) @db.Uuid
   code        String   @unique @db.VarChar(50)
@@ -174,11 +222,19 @@ model User {
   updatedAt       DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt       DateTime?  @map("deleted_at") @db.Timestamptz(6)
 
-  role                      Role                   @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  role                      Role                        @relation(fields: [roleId], references: [id], onDelete: Restrict)
   employee                  Employee?
   owner                     Owner?
   sessions                  AuthSession[]
-  ownerChainAssignmentsMade OwnerChainAssignment[] @relation("OwnerChainAssignedBy")
+  ownerChainAssignmentsMade OwnerChainAssignment[]      @relation("OwnerChainAssignedBy")
+  reviewedApplications      RegistrationApplication[]   @relation("RegistrationReviewedBy")
+  approvedApplications      RegistrationApplication[]   @relation("RegistrationOwnerUser")
+  subscriptionEvents        BusinessSubscriptionEvent[] @relation("SubscriptionChangedBy")
+  financeConfigsUpdated     PlatformFinanceConfig[]     @relation("FinanceConfigUpdatedBy")
+  withdrawalRequests        WithdrawalRequest[]         @relation("WithdrawalRequestedBy")
+  withdrawalsReviewed       WithdrawalRequest[]         @relation("WithdrawalReviewedBy")
+  withdrawalsTransferred    WithdrawalRequest[]         @relation("WithdrawalTransferredBy")
+  passwordSetupTokens       PasswordSetupToken[]
 
   @@index([roleId])
   @@index([status])
@@ -221,8 +277,12 @@ model RestaurantChain {
   updatedAt           DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt           DateTime?             @map("deleted_at") @db.Timestamptz(6)
 
-  branches         Branch[]
-  ownerAssignments OwnerChainAssignment[]
+  branches                Branch[]
+  ownerAssignments        OwnerChainAssignment[]
+  registrationApplication RegistrationApplication?
+  subscription            BusinessSubscription?
+  branding                BusinessBranding?
+  wallet                  BusinessWallet?
 
   @@index([status])
   @@map("restaurant_chains")
@@ -247,22 +307,23 @@ model Branch {
   updatedAt    DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt    DateTime?    @map("deleted_at") @db.Timestamptz(6)
 
-  chain            RestaurantChain       @relation(fields: [chainId], references: [id], onDelete: Restrict)
-  operatingHours   BranchOperatingHour[]
-  specialHours     BranchSpecialHour[]
-  areas            BranchArea[]
-  employees        Employee[]
-  tables           RestaurantTable[]
-  reservations     Reservation[]
-  menuCategories   MenuCategory[]
-  orders           Order[]
-  vouchers         Voucher[]
-  attendances      Attendance[]
-  workSessions     WorkSession[]
-  tableSessions    TableSession[]
-  tableAdjacencies TableAdjacency[]
-  branchMenuItems  BranchMenuItem[]
-  servingTasks     ServingTask[]
+  chain               RestaurantChain       @relation(fields: [chainId], references: [id], onDelete: Restrict)
+  operatingHours      BranchOperatingHour[]
+  specialHours        BranchSpecialHour[]
+  areas               BranchArea[]
+  employees           Employee[]
+  tables              RestaurantTable[]
+  reservations        Reservation[]
+  menuCategories      MenuCategory[]
+  orders              Order[]
+  vouchers            Voucher[]
+  attendances         Attendance[]
+  workSessions        WorkSession[]
+  tableSessions       TableSession[]
+  tableAdjacencies    TableAdjacency[]
+  branchMenuItems     BranchMenuItem[]
+  servingTasks        ServingTask[]
+  walletLedgerEntries WalletLedgerEntry[]
 
   @@index([chainId, status])
   @@index([status])
@@ -393,6 +454,228 @@ model OwnerChainAssignment {
   @@index([chainId])
   @@index([assignedById])
   @@map("owner_chain_assignments")
+}
+
+model RegistrationApplication {
+  id                  String                        @id @default(uuid()) @db.Uuid
+  applicationCode     String                        @unique @map("application_code") @db.VarChar(50)
+  businessName        String                        @map("business_name") @db.VarChar(150)
+  taxCode             String?                       @map("tax_code") @db.VarChar(50)
+  representativeName  String                        @map("representative_name") @db.VarChar(150)
+  representativeEmail String                        @map("representative_email") @db.VarChar(255)
+  representativePhone String                        @map("representative_phone") @db.VarChar(20)
+  headquartersAddress String?                       @map("headquarters_address") @db.VarChar(500)
+  requestedPlanId     String?                       @map("requested_plan_id") @db.Uuid
+  status              RegistrationApplicationStatus @default(PENDING)
+  rejectionReason     String?                       @map("rejection_reason") @db.VarChar(1000)
+  reviewedById        String?                       @map("reviewed_by_id") @db.Uuid
+  reviewedAt          DateTime?                     @map("reviewed_at") @db.Timestamptz(6)
+  approvedChainId     String?                       @unique @map("approved_chain_id") @db.Uuid
+  ownerUserId         String?                       @unique @map("owner_user_id") @db.Uuid
+  createdAt           DateTime                      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime                      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  requestedPlan ServicePlan?     @relation(fields: [requestedPlanId], references: [id], onDelete: SetNull)
+  reviewedBy    User?            @relation("RegistrationReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  approvedChain RestaurantChain? @relation(fields: [approvedChainId], references: [id], onDelete: SetNull)
+  ownerUser     User?            @relation("RegistrationOwnerUser", fields: [ownerUserId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([businessName])
+  @@index([representativeEmail])
+  @@map("registration_applications")
+}
+
+model ServicePlan {
+  id           String   @id @default(uuid()) @db.Uuid
+  code         String   @unique @db.VarChar(50)
+  name         String   @db.VarChar(100)
+  description  String?  @db.VarChar(500)
+  monthlyPrice Decimal  @map("monthly_price") @db.Decimal(14, 2)
+  maxBranches  Int      @map("max_branches")
+  maxAccounts  Int      @map("max_accounts")
+  maxTables    Int      @map("max_tables")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  applications  RegistrationApplication[]
+  subscriptions BusinessSubscription[]
+  eventsFrom    BusinessSubscriptionEvent[] @relation("SubscriptionEventFromPlan")
+  eventsTo      BusinessSubscriptionEvent[] @relation("SubscriptionEventToPlan")
+
+  @@map("service_plans")
+}
+
+model BusinessSubscription {
+  id           String                     @id @default(uuid()) @db.Uuid
+  chainId      String                     @unique @map("chain_id") @db.Uuid
+  planId       String                     @map("plan_id") @db.Uuid
+  status       BusinessSubscriptionStatus @default(ACTIVE)
+  monthlyPrice Decimal                    @map("monthly_price") @db.Decimal(14, 2)
+  startsAt     DateTime                   @map("starts_at") @db.Timestamptz(6)
+  expiresAt    DateTime                   @map("expires_at") @db.Timestamptz(6)
+  suspendedAt  DateTime?                  @map("suspended_at") @db.Timestamptz(6)
+  createdAt    DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  chain  RestaurantChain             @relation(fields: [chainId], references: [id], onDelete: Cascade)
+  plan   ServicePlan                 @relation(fields: [planId], references: [id], onDelete: Restrict)
+  events BusinessSubscriptionEvent[]
+
+  @@index([status, expiresAt])
+  @@index([planId])
+  @@map("business_subscriptions")
+}
+
+model BusinessSubscriptionEvent {
+  id             String                @id @default(uuid()) @db.Uuid
+  subscriptionId String                @map("subscription_id") @db.Uuid
+  type           SubscriptionEventType
+  fromPlanId     String?               @map("from_plan_id") @db.Uuid
+  toPlanId       String?               @map("to_plan_id") @db.Uuid
+  changedById    String?               @map("changed_by_id") @db.Uuid
+  effectiveAt    DateTime              @default(now()) @map("effective_at") @db.Timestamptz(6)
+  note           String?               @db.VarChar(1000)
+
+  subscription BusinessSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  fromPlan     ServicePlan?         @relation("SubscriptionEventFromPlan", fields: [fromPlanId], references: [id], onDelete: SetNull)
+  toPlan       ServicePlan?         @relation("SubscriptionEventToPlan", fields: [toPlanId], references: [id], onDelete: SetNull)
+  changedBy    User?                @relation("SubscriptionChangedBy", fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@index([subscriptionId, effectiveAt])
+  @@index([changedById])
+  @@map("business_subscription_events")
+}
+
+model BusinessBranding {
+  id             String   @id @default(uuid()) @db.Uuid
+  chainId        String   @unique @map("chain_id") @db.Uuid
+  displayName    String   @map("display_name") @db.VarChar(150)
+  logoUrl        String?  @map("logo_url") @db.VarChar(500)
+  primaryColor   String   @default("#0F172A") @map("primary_color") @db.VarChar(7)
+  secondaryColor String   @default("#FFFFFF") @map("secondary_color") @db.VarChar(7)
+  accentColor    String   @default("#22C55E") @map("accent_color") @db.VarChar(7)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  chain RestaurantChain @relation(fields: [chainId], references: [id], onDelete: Cascade)
+
+  @@map("business_branding")
+}
+
+model BusinessWallet {
+  id          String       @id @default(uuid()) @db.Uuid
+  chainId     String       @unique @map("chain_id") @db.Uuid
+  currency    String       @default("VND") @db.VarChar(3)
+  balance     Decimal      @default(0) @db.Decimal(14, 2)
+  heldBalance Decimal      @default(0) @map("held_balance") @db.Decimal(14, 2)
+  status      WalletStatus @default(ACTIVE)
+  createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  chain       RestaurantChain     @relation(fields: [chainId], references: [id], onDelete: Cascade)
+  entries     WalletLedgerEntry[]
+  withdrawals WithdrawalRequest[]
+
+  @@index([status])
+  @@map("business_wallets")
+}
+
+model WalletLedgerEntry {
+  id            String                @id @default(uuid()) @db.Uuid
+  walletId      String                @map("wallet_id") @db.Uuid
+  branchId      String?               @map("branch_id") @db.Uuid
+  type          WalletLedgerEntryType
+  amount        Decimal               @db.Decimal(14, 2)
+  balanceAfter  Decimal               @map("balance_after") @db.Decimal(14, 2)
+  referenceType String?               @map("reference_type") @db.VarChar(50)
+  referenceId   String?               @map("reference_id") @db.VarChar(100)
+  description   String?               @db.VarChar(500)
+  createdAt     DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  wallet BusinessWallet @relation(fields: [walletId], references: [id], onDelete: Restrict)
+  branch Branch?        @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  @@index([walletId, createdAt])
+  @@index([branchId, createdAt])
+  @@index([referenceType, referenceId])
+  @@map("wallet_ledger_entries")
+}
+
+model WithdrawalRequest {
+  id                    String                  @id @default(uuid()) @db.Uuid
+  walletId              String                  @map("wallet_id") @db.Uuid
+  requestedById         String                  @map("requested_by_id") @db.Uuid
+  amount                Decimal                 @db.Decimal(14, 2)
+  status                WithdrawalRequestStatus @default(PENDING)
+  bankName              String                  @map("bank_name") @db.VarChar(150)
+  bankAccountName       String                  @map("bank_account_name") @db.VarChar(150)
+  bankAccountNumber     String                  @map("bank_account_number") @db.VarChar(50)
+  rejectionReason       String?                 @map("rejection_reason") @db.VarChar(1000)
+  reviewedById          String?                 @map("reviewed_by_id") @db.Uuid
+  reviewedAt            DateTime?               @map("reviewed_at") @db.Timestamptz(6)
+  bankTransactionCode   String?                 @map("bank_transaction_code") @db.VarChar(100)
+  transferFailureReason String?                 @map("transfer_failure_reason") @db.VarChar(1000)
+  transferredById       String?                 @map("transferred_by_id") @db.Uuid
+  transferredAt         DateTime?               @map("transferred_at") @db.Timestamptz(6)
+  createdAt             DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  wallet        BusinessWallet @relation(fields: [walletId], references: [id], onDelete: Restrict)
+  requestedBy   User           @relation("WithdrawalRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  reviewedBy    User?          @relation("WithdrawalReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  transferredBy User?          @relation("WithdrawalTransferredBy", fields: [transferredById], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([walletId, createdAt])
+  @@index([requestedById])
+  @@map("withdrawal_requests")
+}
+
+model PlatformFinanceConfig {
+  id                      String   @id @db.VarChar(30)
+  paymentFeeRate          Decimal  @map("payment_fee_rate") @db.Decimal(7, 6)
+  holdingPeriodDays       Int      @map("holding_period_days")
+  minimumWithdrawalAmount Decimal  @map("minimum_withdrawal_amount") @db.Decimal(14, 2)
+  updatedById             String?  @map("updated_by_id") @db.Uuid
+  updatedAt               DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  updatedBy User? @relation("FinanceConfigUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@map("platform_finance_configs")
+}
+
+model PasswordSetupToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash") @db.VarChar(64)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, usedAt])
+  @@index([expiresAt])
+  @@map("password_setup_tokens")
+}
+
+model EmailOutbox {
+  id        String            @id @default(uuid()) @db.Uuid
+  recipient String            @db.VarChar(255)
+  subject   String            @db.VarChar(255)
+  template  String            @db.VarChar(100)
+  payload   Json
+  status    EmailOutboxStatus @default(PENDING)
+  attempts  Int               @default(0)
+  lastError String?           @map("last_error") @db.VarChar(1000)
+  sentAt    DateTime?         @map("sent_at") @db.Timestamptz(6)
+  createdAt DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([status, createdAt])
+  @@map("email_outbox")
 }
 
 model RestaurantTable {

@@ -16,6 +16,7 @@ import { RolesModule } from './modules/roles/roles.module.js';
 import { TablesModule } from './modules/tables/tables.module.js';
 import { UsersModule } from './modules/users/users.module.js';
 import { VouchersModule } from './modules/vouchers/vouchers.module.js';
+import { PlatformAdminModule } from './modules/platform-admin/platform-admin.module.js';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { VouchersModule } from './modules/vouchers/vouchers.module.js';
     PaymentsModule,
     VouchersModule,
     AttendanceModule,
+    PlatformAdminModule,
   ],
   controllers: [AppController],
   providers: [AppService],

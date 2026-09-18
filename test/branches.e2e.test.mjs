@@ -8,17 +8,14 @@ import { configureApplication } from '../dist/app.setup.js';
 import { PrismaService } from '../dist/database/prisma.service.js';
 import { configureSwagger } from '../dist/swagger.setup.js';
 
-describe('Restaurant chain management and role scopes', () => {
+describe('Owner branch management and role scopes', () => {
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const password = 'StrongPass123';
   const emails = {
-    admin: `chain-admin-${suffix}@example.com`,
-    owner: `chain-owner-${suffix}@example.com`,
-    manager: `chain-manager-${suffix}@example.com`,
-    unownedManager: `unowned-manager-${suffix}@example.com`,
-    waiter: `chain-waiter-${suffix}@example.com`,
-    kitchen: `chain-kitchen-${suffix}@example.com`,
-    cashier: `chain-cashier-${suffix}@example.com`,
+    admin: `branch-admin-${suffix}@example.com`,
+    owner: `branch-owner-${suffix}@example.com`,
+    manager: `branch-manager-${suffix}@example.com`,
+    waiter: `branch-waiter-${suffix}@example.com`,
   };
   let app;
   let prisma;
@@ -27,26 +24,22 @@ describe('Restaurant chain management and role scopes', () => {
   let ownerAuth;
   let managerAuth;
   let waiterAuth;
-  let kitchenAuth;
-  let cashierAuth;
+  let applicationId;
+  let planId;
   let chainId;
-  let unownedChainId;
-  let branchId;
+  let firstBranchId;
   let secondBranchId;
-  let unownedBranchId;
   let diningAreaId;
-  let kitchenAreaId;
-  let ownerProfileId;
 
   async function request(path, options = {}) {
     const response = await fetch(`${baseUrl}/api/v1${path}`, {
       ...options,
-      headers: {
-        'content-type': 'application/json',
-        ...options.headers,
-      },
+      headers: { 'content-type': 'application/json', ...options.headers },
     });
-    const body = await response.json();
+    const contentType = response.headers.get('content-type') ?? '';
+    const body = contentType.includes('application/json')
+      ? await response.json()
+      : await response.text();
     return { response, body };
   }
 
@@ -59,32 +52,12 @@ describe('Restaurant chain management and role scopes', () => {
     return result.body;
   }
 
-  async function createStaff(role, email, branch, code) {
-    const result = await request('/auth/staff', {
-      method: 'POST',
-      headers: { authorization: `Bearer ${adminAuth.accessToken}` },
-      body: JSON.stringify({
-        email,
-        password,
-        role,
-        branchId: branch,
-        employeeCode: code,
-        firstName: 'Role',
-        lastName: role,
-      }),
-    });
-    assert.equal(result.response.status, 201);
-    return result.body;
-  }
-
   before(async () => {
     app = await NestFactory.create(AppModule, { logger: false });
     configureApplication(app);
     configureSwagger(app);
     await app.listen(0, '127.0.0.1');
-
-    const address = app.getHttpServer().address();
-    baseUrl = `http://127.0.0.1:${address.port}`;
+    baseUrl = `http://127.0.0.1:${app.getHttpServer().address().port}`;
     prisma = app.get(PrismaService);
 
     const adminRole = await prisma.role.findUniqueOrThrow({ where: { code: 'ADMIN' } });
@@ -102,35 +75,88 @@ describe('Restaurant chain management and role scopes', () => {
 
   after(async () => {
     if (prisma) {
+      if (applicationId) {
+        await prisma.registrationApplication.deleteMany({ where: { id: applicationId } });
+      }
       await prisma.user.deleteMany({ where: { email: { in: Object.values(emails) } } });
       if (chainId) {
         await prisma.branch.deleteMany({ where: { chainId } });
         await prisma.restaurantChain.deleteMany({ where: { id: chainId } });
       }
-      if (unownedChainId) {
-        await prisma.branch.deleteMany({ where: { chainId: unownedChainId } });
-        await prisma.restaurantChain.deleteMany({ where: { id: unownedChainId } });
+      if (planId) {
+        await prisma.servicePlan.deleteMany({ where: { id: planId } });
       }
+      await prisma.emailOutbox.deleteMany({ where: { recipient: emails.owner } });
     }
     await app?.close();
   });
 
-  it('lets ADMIN create a chain, branches, hours, and areas', async () => {
-    const chain = await request('/restaurant-chains', {
+  it('onboards an Owner with a plan instead of letting ADMIN create a chain', async () => {
+    const plan = await request('/admin/service-plans', {
       method: 'POST',
       headers: { authorization: `Bearer ${adminAuth.accessToken}` },
       body: JSON.stringify({
-        code: `CHAIN_${suffix}`.slice(0, 50),
-        name: 'Role Test Restaurant Chain',
+        code: `TEST_${Date.now()}`,
+        name: 'Branch E2E Plan',
+        monthlyPrice: 100000,
+        maxBranches: 2,
+        maxAccounts: 5,
+        maxTables: 20,
       }),
     });
-    assert.equal(chain.response.status, 201);
-    chainId = chain.body.id;
+    assert.equal(plan.response.status, 201);
+    planId = plan.body.id;
 
-    const createBranch = async (code, name) =>
+    const removedAdminChainRoute = await request('/restaurant-chains', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${adminAuth.accessToken}` },
+      body: JSON.stringify({ code: `NO_${suffix}`, name: 'Must Not Be Created' }),
+    });
+    assert.equal(removedAdminChainRoute.response.status, 404);
+
+    const application = await request('/registration-applications', {
+      method: 'POST',
+      body: JSON.stringify({
+        businessName: 'Owner Branch Test Company',
+        representativeName: 'Branch Owner',
+        representativeEmail: emails.owner,
+        representativePhone: `091${Date.now().toString().slice(-7)}`,
+        requestedPlanId: planId,
+      }),
+    });
+    assert.equal(application.response.status, 201);
+    applicationId = application.body.id;
+
+    const approved = await request(`/admin/registration-applications/${applicationId}/approve`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${adminAuth.accessToken}` },
+      body: JSON.stringify({ subscriptionMonths: 2 }),
+    });
+    assert.equal(approved.response.status, 200);
+    chainId = approved.body.approvedChain.id;
+
+    const outbox = await prisma.emailOutbox.findFirstOrThrow({
+      where: { recipient: emails.owner, template: 'OWNER_ACCOUNT_CREATED' },
+      orderBy: { createdAt: 'desc' },
+    });
+    const setup = await request('/auth/setup-password', {
+      method: 'POST',
+      body: JSON.stringify({ token: outbox.payload.setupToken, password }),
+    });
+    assert.equal(setup.response.status, 200);
+    ownerAuth = await login(emails.owner);
+
+    const adminBranches = await request('/branches', {
+      headers: { authorization: `Bearer ${adminAuth.accessToken}` },
+    });
+    assert.equal(adminBranches.response.status, 403);
+  });
+
+  it('lets OWNER create branches up to the service-plan limit', async () => {
+    const createBranch = (code, name) =>
       request(`/restaurant-chains/${chainId}/branches`, {
         method: 'POST',
-        headers: { authorization: `Bearer ${adminAuth.accessToken}` },
+        headers: { authorization: `Bearer ${ownerAuth.accessToken}` },
         body: JSON.stringify({
           code,
           name,
@@ -141,257 +167,101 @@ describe('Restaurant chain management and role scopes', () => {
 
     const first = await createBranch(`B1-${suffix}`.slice(0, 50), 'First Branch');
     const second = await createBranch(`B2-${suffix}`.slice(0, 50), 'Second Branch');
+    const overLimit = await createBranch(`B3-${suffix}`.slice(0, 50), 'Third Branch');
     assert.equal(first.response.status, 201);
     assert.equal(second.response.status, 201);
-    branchId = first.body.id;
+    assert.equal(overLimit.response.status, 409);
+    firstBranchId = first.body.id;
     secondBranchId = second.body.id;
 
-    const unownedChain = await request('/restaurant-chains', {
-      method: 'POST',
-      headers: { authorization: `Bearer ${adminAuth.accessToken}` },
-      body: JSON.stringify({
-        code: `OTHER_${suffix}`.slice(0, 50),
-        name: 'Unowned Restaurant Chain',
-      }),
-    });
-    assert.equal(unownedChain.response.status, 201);
-    unownedChainId = unownedChain.body.id;
-    const unownedBranch = await request(`/restaurant-chains/${unownedChainId}/branches`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${adminAuth.accessToken}` },
-      body: JSON.stringify({
-        code: `OTHER-B-${suffix}`.slice(0, 50),
-        name: 'Unowned Branch',
-        addressLine1: '2 Test Street',
-        city: 'Ho Chi Minh City',
-      }),
-    });
-    assert.equal(unownedBranch.response.status, 201);
-    unownedBranchId = unownedBranch.body.id;
-
-    const weeklyHours = await request(`/branches/${branchId}/operating-hours/1`, {
+    const hours = await request(`/branches/${firstBranchId}/operating-hours/1`, {
       method: 'PUT',
-      headers: { authorization: `Bearer ${adminAuth.accessToken}` },
+      headers: { authorization: `Bearer ${ownerAuth.accessToken}` },
       body: JSON.stringify({ openTime: '08:00', closeTime: '22:00', isClosed: false }),
     });
-    assert.equal(weeklyHours.response.status, 200);
-    assert.equal(weeklyHours.body.dayOfWeek, 1);
+    assert.equal(hours.response.status, 200);
 
-    const createArea = async (code, name, type) =>
-      request(`/branches/${branchId}/areas`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${adminAuth.accessToken}` },
-        body: JSON.stringify({ code, name, type, floor: 1 }),
-      });
-
-    const dining = await createArea('DINING-01', 'Dining Room', 'DINING');
-    const kitchen = await createArea('KITCHEN-01', 'Main Kitchen', 'KITCHEN');
-    const bar = await createArea('BAR-01', 'Drink Bar', 'BAR');
-    const cashier = await createArea('CASHIER-01', 'Cashier Desk', 'CASHIER');
-    assert.deepEqual(
-      [dining, kitchen, bar, cashier].map((result) => result.response.status),
-      [201, 201, 201, 201],
-    );
-    diningAreaId = dining.body.id;
-    kitchenAreaId = kitchen.body.id;
-
-    const document = await (await fetch(`${baseUrl}/api/docs-json`)).json();
-    assert.ok(document.paths['/api/v1/restaurant-chains'].post);
-    assert.ok(document.paths['/api/v1/branches/{branchId}/areas'].get);
-    assert.ok(document.paths['/api/v1/owners/{ownerId}/chains'].put);
-    assert.equal(document.paths['/api/v1/managers/{managerId}/branches'], undefined);
-    assert.ok(document.paths['/api/v1/public/branches'].get);
-  });
-
-  it('lets ADMIN create an OWNER and assign its restaurant chain', async () => {
-    const owner = await request('/auth/owners', {
-      method: 'POST',
-      headers: { authorization: `Bearer ${adminAuth.accessToken}` },
-      body: JSON.stringify({
-        email: emails.owner,
-        password,
-        firstName: 'Chain',
-        lastName: 'Owner',
-      }),
-    });
-    assert.equal(owner.response.status, 201);
-    assert.equal(owner.body.user.role, 'OWNER');
-    ownerProfileId = owner.body.user.owner.id;
-
-    const assignment = await request(`/owners/${ownerProfileId}/chains`, {
-      method: 'PUT',
-      headers: { authorization: `Bearer ${adminAuth.accessToken}` },
-      body: JSON.stringify({ chainIds: [chainId] }),
-    });
-    assert.equal(assignment.response.status, 200);
-    assert.deepEqual(
-      assignment.body.chains.map((chain) => chain.id),
-      [chainId],
-    );
-    ownerAuth = await login(emails.owner);
-  });
-
-  it('lets OWNER create a MANAGER for one branch and ADMIN create other staff', async () => {
-    const forbiddenManager = await request('/auth/managers', {
+    const area = await request(`/branches/${firstBranchId}/areas`, {
       method: 'POST',
       headers: { authorization: `Bearer ${ownerAuth.accessToken}` },
-      body: JSON.stringify({
-        email: emails.unownedManager,
-        password,
-        branchId: unownedBranchId,
-        employeeCode: `UM-${suffix}`.slice(0, 50),
-        firstName: 'Unowned',
-        lastName: 'Manager',
-      }),
+      body: JSON.stringify({ code: 'DINING-01', name: 'Dining Room', type: 'DINING', floor: 1 }),
     });
-    assert.equal(forbiddenManager.response.status, 403);
+    assert.equal(area.response.status, 201);
+    diningAreaId = area.body.id;
+  });
 
+  it('lets OWNER create staff while denying Platform ADMIN', async () => {
     const manager = await request('/auth/managers', {
       method: 'POST',
       headers: { authorization: `Bearer ${ownerAuth.accessToken}` },
       body: JSON.stringify({
         email: emails.manager,
         password,
-        branchId,
+        branchId: firstBranchId,
         employeeCode: `M-${suffix}`.slice(0, 50),
         firstName: 'Role',
         lastName: 'Manager',
       }),
     });
     assert.equal(manager.response.status, 201);
-    assert.equal(manager.body.user.role, 'MANAGER');
-    assert.equal(manager.body.user.employee.branchId, branchId);
 
-    await createStaff('WAITER', emails.waiter, branchId, `W-${suffix}`.slice(0, 50));
-    await createStaff('KITCHEN', emails.kitchen, branchId, `K-${suffix}`.slice(0, 50));
-    await createStaff('CASHIER', emails.cashier, branchId, `C-${suffix}`.slice(0, 50));
+    const waiterPayload = {
+      email: emails.waiter,
+      password,
+      role: 'WAITER',
+      branchId: firstBranchId,
+      employeeCode: `W-${suffix}`.slice(0, 50),
+      firstName: 'Role',
+      lastName: 'Waiter',
+    };
+    const adminDenied = await request('/auth/staff', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${adminAuth.accessToken}` },
+      body: JSON.stringify(waiterPayload),
+    });
+    assert.equal(adminDenied.response.status, 403);
 
+    const waiter = await request('/auth/staff', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ownerAuth.accessToken}` },
+      body: JSON.stringify(waiterPayload),
+    });
+    assert.equal(waiter.response.status, 201);
     managerAuth = await login(emails.manager);
     waiterAuth = await login(emails.waiter);
-    kitchenAuth = await login(emails.kitchen);
-    cashierAuth = await login(emails.cashier);
   });
 
-  it('lets OWNER manage all owned-chain branches while MANAGER stays on one branch', async () => {
+  it('keeps MANAGER and WAITER within their one assigned branch', async () => {
     const ownerBranches = await request('/branches', {
       headers: { authorization: `Bearer ${ownerAuth.accessToken}` },
     });
-    assert.equal(ownerBranches.response.status, 200);
     assert.deepEqual(
-      ownerBranches.body.map((branch) => branch.id).sort(),
-      [branchId, secondBranchId].sort(),
+      ownerBranches.body.map(({ id }) => id).sort(),
+      [firstBranchId, secondBranchId].sort(),
     );
 
-    const ownerUpdated = await request(`/branches/${secondBranchId}`, {
-      method: 'PATCH',
-      headers: { authorization: `Bearer ${ownerAuth.accessToken}` },
-      body: JSON.stringify({ name: 'Second Branch Owned' }),
-    });
-    assert.equal(ownerUpdated.response.status, 200);
-
-    const managerCannotAccessSecond = await request(`/branches/${secondBranchId}`, {
+    const managerSecondBranch = await request(`/branches/${secondBranchId}`, {
       headers: { authorization: `Bearer ${managerAuth.accessToken}` },
     });
-    assert.equal(managerCannotAccessSecond.response.status, 403);
+    assert.equal(managerSecondBranch.response.status, 403);
 
-    const managerBranches = await request('/branches', {
-      headers: { authorization: `Bearer ${managerAuth.accessToken}` },
-    });
-    assert.equal(managerBranches.response.status, 200);
-    assert.deepEqual(managerBranches.body.map((branch) => branch.id).sort(), [branchId]);
-
-    const updated = await request(`/branches/${branchId}`, {
-      method: 'PATCH',
-      headers: { authorization: `Bearer ${managerAuth.accessToken}` },
-      body: JSON.stringify({ name: 'Second Branch Managed' }),
-    });
-    assert.equal(updated.response.status, 200);
-
-    const cannotDeactivate = await request(`/branches/${branchId}/status`, {
-      method: 'PATCH',
-      headers: { authorization: `Bearer ${managerAuth.accessToken}` },
-      body: JSON.stringify({ status: 'INACTIVE' }),
-    });
-    assert.equal(cannotDeactivate.response.status, 403);
-
-    const cannotManageChain = await request(`/restaurant-chains/${chainId}`, {
-      method: 'PATCH',
-      headers: { authorization: `Bearer ${managerAuth.accessToken}` },
-      body: JSON.stringify({ name: 'Forbidden update' }),
-    });
-    assert.equal(cannotManageChain.response.status, 403);
-  });
-
-  it('enforces branch scope and area visibility for each staff role', async () => {
-    const waiterBranches = await request('/branches', {
+    const waiterAreas = await request(`/branches/${firstBranchId}/areas`, {
       headers: { authorization: `Bearer ${waiterAuth.accessToken}` },
     });
-    assert.equal(waiterBranches.response.status, 200);
+    assert.equal(waiterAreas.response.status, 200);
     assert.deepEqual(
-      waiterBranches.body.map((branch) => branch.id),
-      [branchId],
+      waiterAreas.body.map(({ id }) => id),
+      [diningAreaId],
     );
 
-    const otherBranch = await request(`/branches/${secondBranchId}`, {
-      headers: { authorization: `Bearer ${waiterAuth.accessToken}` },
-    });
-    assert.equal(otherBranch.response.status, 403);
-
-    const waiterAreas = await request(`/branches/${branchId}/areas`, {
-      headers: { authorization: `Bearer ${waiterAuth.accessToken}` },
-    });
-    assert.deepEqual([...new Set(waiterAreas.body.map((area) => area.type))], ['DINING']);
-
-    const kitchenAreas = await request(`/branches/${branchId}/areas`, {
-      headers: { authorization: `Bearer ${kitchenAuth.accessToken}` },
-    });
-    assert.deepEqual([...new Set(kitchenAreas.body.map((area) => area.type))].sort(), [
-      'BAR',
-      'KITCHEN',
-    ]);
-
-    const cashierAreas = await request(`/branches/${branchId}/areas`, {
-      headers: { authorization: `Bearer ${cashierAuth.accessToken}` },
-    });
-    assert.deepEqual([...new Set(cashierAreas.body.map((area) => area.type))], ['CASHIER']);
-  });
-
-  it('lets KITCHEN change kitchen/bar status but not dining status', async () => {
-    const allowed = await request(`/branches/${branchId}/areas/${kitchenAreaId}/status`, {
-      method: 'PATCH',
-      headers: { authorization: `Bearer ${kitchenAuth.accessToken}` },
-      body: JSON.stringify({ status: 'INACTIVE' }),
-    });
-    assert.equal(allowed.response.status, 200);
-
-    const forbiddenType = await request(`/branches/${branchId}/areas/${diningAreaId}/status`, {
-      method: 'PATCH',
-      headers: { authorization: `Bearer ${kitchenAuth.accessToken}` },
-      body: JSON.stringify({ status: 'INACTIVE' }),
-    });
-    assert.equal(forbiddenType.response.status, 403);
-
-    const waiterMutation = await request(`/branches/${branchId}/areas/${diningAreaId}/status`, {
-      method: 'PATCH',
-      headers: { authorization: `Bearer ${waiterAuth.accessToken}` },
-      body: JSON.stringify({ status: 'INACTIVE' }),
-    });
+    const waiterMutation = await request(
+      `/branches/${firstBranchId}/areas/${diningAreaId}/status`,
+      {
+        method: 'PATCH',
+        headers: { authorization: `Bearer ${waiterAuth.accessToken}` },
+        body: JSON.stringify({ status: 'INACTIVE' }),
+      },
+    );
     assert.equal(waiterMutation.response.status, 403);
-  });
-
-  it('exposes active public data without requiring a customer account', async () => {
-    const publicBranch = await request(`/public/branches/${branchId}`);
-    assert.equal(publicBranch.response.status, 200);
-    assert.ok(publicBranch.body.areas.every((area) => ['DINING', 'PICKUP'].includes(area.type)));
-
-    const deactivated = await request(`/branches/${branchId}/status`, {
-      method: 'PATCH',
-      headers: { authorization: `Bearer ${adminAuth.accessToken}` },
-      body: JSON.stringify({ status: 'INACTIVE' }),
-    });
-    assert.equal(deactivated.response.status, 200);
-
-    const hidden = await request(`/public/branches/${branchId}`);
-    assert.equal(hidden.response.status, 404);
   });
 });

@@ -9,6 +9,7 @@ import {
   BranchAreaStatus,
   BranchAreaType,
   BranchStatus,
+  BusinessSubscriptionStatus,
   Prisma,
   RestaurantChainStatus,
 } from '../../generated/prisma/client.js';
@@ -147,6 +148,21 @@ export class BranchesService {
   async createBranch(chainId: string, dto: CreateBranchDto, user: AuthenticatedUser) {
     await this.branchAccess.assertCanManageChain(user, chainId);
     await this.ensureChainExists(chainId);
+    const subscription = await this.prisma.businessSubscription.findFirst({
+      where: {
+        chainId,
+        status: BusinessSubscriptionStatus.ACTIVE,
+        expiresAt: { gt: new Date() },
+      },
+      select: { plan: { select: { maxBranches: true } } },
+    });
+    if (!subscription) {
+      throw new ForbiddenException('The business subscription is not active');
+    }
+    const branchCount = await this.prisma.branch.count({ where: { chainId, deletedAt: null } });
+    if (branchCount >= subscription.plan.maxBranches) {
+      throw new ConflictException('Service plan branch limit has been reached');
+    }
     return this.withUniqueConflict('Branch code already exists', () =>
       this.prisma.branch.create({
         data: { ...dto, chainId },
@@ -157,7 +173,7 @@ export class BranchesService {
 
   async listBranches(user: AuthenticatedUser, query: ListBranchesQueryDto) {
     const accessibleBranchIds = await this.branchAccess.getAccessibleBranchIds(user);
-    const canUseFilters = user.role === AppRole.ADMIN || user.role === AppRole.OWNER;
+    const canUseFilters = user.role === AppRole.OWNER;
     return this.prisma.branch.findMany({
       where: {
         deletedAt: null,
@@ -227,7 +243,7 @@ export class BranchesService {
       user.role === AppRole.MANAGER &&
       (status === BranchStatus.INACTIVE || branch.status === BranchStatus.INACTIVE)
     ) {
-      throw new ForbiddenException('Only ADMIN can deactivate or reactivate a branch');
+      throw new ForbiddenException('Only OWNER can deactivate or reactivate a branch');
     }
     return this.prisma.branch.update({
       where: { id },
@@ -353,12 +369,11 @@ export class BranchesService {
     user: AuthenticatedUser,
   ) {
     if (
-      user.role !== AppRole.ADMIN &&
       user.role !== AppRole.OWNER &&
       user.role !== AppRole.MANAGER &&
       user.role !== AppRole.KITCHEN
     ) {
-      throw new ForbiddenException('Only ADMIN, OWNER, MANAGER, or KITCHEN can change area status');
+      throw new ForbiddenException('Only OWNER, MANAGER, or KITCHEN can change area status');
     }
 
     if (user.role === AppRole.MANAGER) {
@@ -493,6 +508,7 @@ export class BranchesService {
   private getVisibleAreaTypes(role: AppRole): BranchAreaType[] {
     switch (role) {
       case AppRole.ADMIN:
+        throw new ForbiddenException('Platform ADMIN cannot access restaurant operations');
       case AppRole.OWNER:
       case AppRole.MANAGER:
         return Object.values(BranchAreaType);
