@@ -351,6 +351,8 @@ model Employee {
   servedOrderItems       OrderItem[]      @relation("OrderItemServedBy")
   cancelledOrderItems    OrderItem[]      @relation("OrderItemCancelledBy")
   unavailableOrderItems  OrderItem[]      @relation("OrderItemUnavailableBy")
+  startedOrderItems      OrderItem[]      @relation("OrderItemStartedByKitchen")
+  completedOrderItems    OrderItem[]      @relation("OrderItemCompletedByKitchen")
   claimedServingTasks    ServingTask[]    @relation("ServingTaskClaimedBy")
   completedServingTasks  ServingTask[]    @relation("ServingTaskServedBy")
   processedPayments      Payment[]        @relation("PaymentProcessedBy")
@@ -631,42 +633,48 @@ model Order {
 }
 
 model OrderItem {
-  id                  String          @id @default(uuid()) @db.Uuid
-  orderId             String          @map("order_id") @db.Uuid
-  menuItemId          String          @map("menu_item_id") @db.Uuid
-  itemName            String          @map("item_name") @db.VarChar(150)
-  unitPrice           Decimal         @map("unit_price") @db.Decimal(14, 2)
-  quantity            Int
-  discountAmount      Decimal         @default(0) @map("discount_amount") @db.Decimal(14, 2)
-  totalPrice          Decimal         @map("total_price") @db.Decimal(14, 2)
-  specialInstructions String?         @map("special_instructions") @db.VarChar(500)
-  selectedOptions     Json?           @map("selected_options")
-  status              OrderItemStatus @default(PENDING)
-  startedAt           DateTime?       @map("started_at") @db.Timestamptz(6)
-  completedAt         DateTime?       @map("completed_at") @db.Timestamptz(6)
-  queuedAt            DateTime?       @map("queued_at") @db.Timestamptz(6)
-  readyAt             DateTime?       @map("ready_at") @db.Timestamptz(6)
-  servedAt            DateTime?       @map("served_at") @db.Timestamptz(6)
-  servedByWaiterId    String?         @map("served_by_waiter_id") @db.Uuid
-  unavailableAt       DateTime?       @map("unavailable_at") @db.Timestamptz(6)
-  unavailableById     String?         @map("unavailable_by_id") @db.Uuid
-  cancelledAt         DateTime?       @map("cancelled_at") @db.Timestamptz(6)
-  cancelledById       String?         @map("cancelled_by_id") @db.Uuid
-  cancellationReason  String?         @map("cancellation_reason") @db.VarChar(500)
-  createdAt           DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt           DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id                   String          @id @default(uuid()) @db.Uuid
+  orderId              String          @map("order_id") @db.Uuid
+  menuItemId           String          @map("menu_item_id") @db.Uuid
+  itemName             String          @map("item_name") @db.VarChar(150)
+  unitPrice            Decimal         @map("unit_price") @db.Decimal(14, 2)
+  quantity             Int
+  discountAmount       Decimal         @default(0) @map("discount_amount") @db.Decimal(14, 2)
+  totalPrice           Decimal         @map("total_price") @db.Decimal(14, 2)
+  specialInstructions  String?         @map("special_instructions") @db.VarChar(500)
+  selectedOptions      Json?           @map("selected_options")
+  status               OrderItemStatus @default(PENDING)
+  startedAt            DateTime?       @map("started_at") @db.Timestamptz(6)
+  completedAt          DateTime?       @map("completed_at") @db.Timestamptz(6)
+  queuedAt             DateTime?       @map("queued_at") @db.Timestamptz(6)
+  readyAt              DateTime?       @map("ready_at") @db.Timestamptz(6)
+  servedAt             DateTime?       @map("served_at") @db.Timestamptz(6)
+  servedByWaiterId     String?         @map("served_by_waiter_id") @db.Uuid
+  unavailableAt        DateTime?       @map("unavailable_at") @db.Timestamptz(6)
+  unavailableById      String?         @map("unavailable_by_id") @db.Uuid
+  startedByKitchenId   String?         @map("started_by_kitchen_id") @db.Uuid
+  completedByKitchenId String?         @map("completed_by_kitchen_id") @db.Uuid
+  cancelledAt          DateTime?       @map("cancelled_at") @db.Timestamptz(6)
+  cancelledById        String?         @map("cancelled_by_id") @db.Uuid
+  cancellationReason   String?         @map("cancellation_reason") @db.VarChar(500)
+  createdAt            DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  order          Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  menuItem       MenuItem     @relation(fields: [menuItemId], references: [id], onDelete: Restrict)
-  servedByWaiter Employee?    @relation("OrderItemServedBy", fields: [servedByWaiterId], references: [id], onDelete: SetNull)
-  unavailableBy  Employee?    @relation("OrderItemUnavailableBy", fields: [unavailableById], references: [id], onDelete: SetNull)
-  cancelledBy    Employee?    @relation("OrderItemCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
-  servingTask    ServingTask?
+  order              Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItem           MenuItem     @relation(fields: [menuItemId], references: [id], onDelete: Restrict)
+  servedByWaiter     Employee?    @relation("OrderItemServedBy", fields: [servedByWaiterId], references: [id], onDelete: SetNull)
+  unavailableBy      Employee?    @relation("OrderItemUnavailableBy", fields: [unavailableById], references: [id], onDelete: SetNull)
+  startedByKitchen   Employee?    @relation("OrderItemStartedByKitchen", fields: [startedByKitchenId], references: [id], onDelete: SetNull)
+  completedByKitchen Employee?    @relation("OrderItemCompletedByKitchen", fields: [completedByKitchenId], references: [id], onDelete: SetNull)
+  cancelledBy        Employee?    @relation("OrderItemCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+  servingTask        ServingTask?
 
   @@index([orderId, status])
   @@index([menuItemId])
   @@index([status, queuedAt])
   @@index([servedByWaiterId])
+  @@index([startedByKitchenId])
+  @@index([completedByKitchenId])
   @@map("order_items")
 }
 
