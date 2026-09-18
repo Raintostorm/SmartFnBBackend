@@ -532,6 +532,8 @@ Snapshot từng món tại thời điểm gọi và trạng thái xử lý bếp
 | `served_by_waiter_id` | `servedByWaiterId` | `String` | Có | — | Waiter xác nhận đã bưng món. |
 | `unavailable_at` | `unavailableAt` | `DateTime` | Có | — | Thời điểm Kitchen Staff báo không thể chế biến. |
 | `unavailable_by_id` | `unavailableById` | `String` | Có | — | Kitchen Staff báo món không khả dụng. |
+| `started_by_kitchen_id` | `startedByKitchenId` | `String` | Có | — | started by kitchen id của OrderItem. |
+| `completed_by_kitchen_id` | `completedByKitchenId` | `String` | Có | — | completed by kitchen id của OrderItem. |
 | `cancelled_at` | `cancelledAt` | `DateTime` | Có | — | Thời điểm hủy. |
 | `cancelled_by_id` | `cancelledById` | `String` | Có | — | Nhân viên thực hiện hủy. |
 | `cancellation_reason` | `cancellationReason` | `String` | Có | — | Lý do hủy để truy vết. |
@@ -544,6 +546,8 @@ Snapshot từng món tại thời điểm gọi và trạng thái xử lý bếp
 - `menuItemId` → `menu_items.id` (xóa: `Restrict`).
 - `servedByWaiterId` → `employees.id` (xóa: `SetNull`).
 - `unavailableById` → `employees.id` (xóa: `SetNull`).
+- `startedByKitchenId` → `employees.id` (xóa: `SetNull`).
+- `completedByKitchenId` → `employees.id` (xóa: `SetNull`).
 - `cancelledById` → `employees.id` (xóa: `SetNull`).
 
 ## `payments`

@@ -11,6 +11,10 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
   const swaggerEnabledValue = String(
     config.SWAGGER_ENABLED ?? (nodeEnv === 'production' ? 'false' : 'true'),
   ).toLowerCase();
+  const operationsDefaultPageSize = Number(config.OPERATIONS_DEFAULT_PAGE_SIZE ?? 20);
+  const operationsMaxPageSize = Number(config.OPERATIONS_MAX_PAGE_SIZE ?? 100);
+  const operationsMaxItemsPerOrder = Number(config.OPERATIONS_MAX_ITEMS_PER_ORDER ?? 50);
+  const servingTaskClaimTimeoutSeconds = Number(config.SERVING_TASK_CLAIM_TIMEOUT_SECONDS ?? 300);
 
   if (!validEnvironments.has(nodeEnv)) {
     throw new Error('NODE_ENV must be development, test, or production.');
@@ -50,6 +54,20 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
     throw new Error('SWAGGER_PATH must not be empty.');
   }
 
+  const positiveIntegers = {
+    OPERATIONS_DEFAULT_PAGE_SIZE: operationsDefaultPageSize,
+    OPERATIONS_MAX_PAGE_SIZE: operationsMaxPageSize,
+    OPERATIONS_MAX_ITEMS_PER_ORDER: operationsMaxItemsPerOrder,
+    SERVING_TASK_CLAIM_TIMEOUT_SECONDS: servingTaskClaimTimeoutSeconds,
+  };
+  for (const [name, value] of Object.entries(positiveIntegers)) {
+    if (!Number.isInteger(value) || value < 1)
+      throw new Error(`${name} must be a positive integer.`);
+  }
+  if (operationsDefaultPageSize > operationsMaxPageSize) {
+    throw new Error('OPERATIONS_DEFAULT_PAGE_SIZE must not exceed OPERATIONS_MAX_PAGE_SIZE.');
+  }
+
   return {
     ...config,
     NODE_ENV: nodeEnv,
@@ -64,5 +82,9 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
     JWT_AUDIENCE: String(config.JWT_AUDIENCE ?? 'smart-fnb-client'),
     SWAGGER_ENABLED: swaggerEnabledValue === 'true',
     SWAGGER_PATH: swaggerPath,
+    OPERATIONS_DEFAULT_PAGE_SIZE: operationsDefaultPageSize,
+    OPERATIONS_MAX_PAGE_SIZE: operationsMaxPageSize,
+    OPERATIONS_MAX_ITEMS_PER_ORDER: operationsMaxItemsPerOrder,
+    SERVING_TASK_CLAIM_TIMEOUT_SECONDS: servingTaskClaimTimeoutSeconds,
   };
 }
