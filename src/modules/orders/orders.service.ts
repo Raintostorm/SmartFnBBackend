@@ -45,6 +45,60 @@ export class OrdersService {
     return { employeeId: user.employeeId, branchId: user.branchId };
   }
 
+  async waiterContext(user: AuthenticatedUser) {
+    const actor = this.employee(user);
+    const [branch, tables, sessions, menuItems, orders, workSessions] =
+      await this.prisma.$transaction([
+        this.prisma.branch.findUniqueOrThrow({
+          where: { id: actor.branchId },
+          select: { id: true, chainId: true, name: true },
+        }),
+        this.prisma.restaurantTable.findMany({
+          where: { branchId: actor.branchId, deletedAt: null, isActive: true },
+          include: {
+            sessionTables: {
+              where: {
+                releasedAt: null,
+                tableSession: { status: { in: ['OPEN', 'SERVING', 'PAID'] } },
+              },
+              select: { tableSessionId: true },
+              take: 1,
+            },
+            adjacentFrom: { select: { adjacentTableId: true } },
+          },
+          orderBy: [{ floor: 'asc' }, { code: 'asc' }],
+        }),
+        this.prisma.tableSession.findMany({
+          where: { branchId: actor.branchId, status: { in: ['OPEN', 'SERVING', 'PAID'] } },
+          include: { tables: { where: { releasedAt: null }, select: { tableId: true } } },
+          orderBy: { openedAt: 'desc' },
+        }),
+        this.prisma.branchMenuItem.findMany({
+          where: {
+            branchId: actor.branchId,
+            isEnabled: true,
+            menuItem: { isActive: true, deletedAt: null },
+          },
+          include: { menuItem: { include: { category: { select: { name: true } } } } },
+          orderBy: { menuItem: { name: 'asc' } },
+        }),
+        this.prisma.order.findMany({
+          where: {
+            branchId: actor.branchId,
+            tableSession: { status: { in: ['OPEN', 'SERVING', 'PAID'] } },
+          },
+          include: orderInclude,
+          orderBy: { placedAt: 'asc' },
+        }),
+        this.prisma.workSession.findMany({
+          where: { employeeId: actor.employeeId, branchId: actor.branchId, status: 'ACTIVE' },
+          orderBy: { checkedInAt: 'desc' },
+          take: 1,
+        }),
+      ]);
+    return { branch, tables, sessions, menuItems, orders, workSessions };
+  }
+
   async createOrder(user: AuthenticatedUser, dto: CreateOrderDto) {
     const actor = this.employee(user);
     const session = await this.prisma.tableSession.findFirst({
@@ -184,8 +238,15 @@ export class OrdersService {
       this.prisma.orderItem.findMany({
         where,
         include: {
-          order: { select: { orderCode: true, tableId: true, placedAt: true } },
-          menuItem: { select: { preparationMinutes: true } },
+          order: {
+            select: {
+              orderCode: true,
+              tableId: true,
+              placedAt: true,
+              table: { select: { code: true, name: true } },
+            },
+          },
+          menuItem: { select: { preparationMinutes: true, category: { select: { name: true } } } },
           startedByKitchen: { select: { id: true, firstName: true, lastName: true } },
         },
         orderBy: [{ queuedAt: 'asc' }, { createdAt: 'asc' }],
@@ -257,7 +318,17 @@ export class OrdersService {
       this.prisma.servingTask.findMany({
         where,
         include: {
-          orderItem: { include: { order: { select: { orderCode: true, tableId: true } } } },
+          orderItem: {
+            include: {
+              order: {
+                select: {
+                  orderCode: true,
+                  tableId: true,
+                  table: { select: { code: true, name: true } },
+                },
+              },
+            },
+          },
           claimedByWaiter: { select: { id: true, firstName: true, lastName: true } },
         },
         orderBy: { availableAt: 'asc' },

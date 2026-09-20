@@ -1,5 +1,17 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiCreatedResponse,
+  ApiOkResponse,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
+import {
+  ApiAuthenticatedOperation,
+  ApiPaginatedResponse,
+  ApiStandardMutationErrors,
+  ApiUuidPath,
+} from '../../common/swagger/swagger.decorators.js';
 import { AppRole } from '../auth/app-role.enum.js';
 import { SWAGGER_ACCESS_TOKEN } from '../auth/auth.constants.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
@@ -11,26 +23,67 @@ import {
   PaginationDto,
   UnavailableItemDto,
 } from './dto/order-operations.dto.js';
+import {
+  KitchenQueueItemResponseDto,
+  OrderItemResponseDto,
+  OrderResponseDto,
+  ServingTaskResponseDto,
+  WaiterContextResponseDto,
+} from './dto/order-responses.dto.js';
 import { OrdersService } from './orders.service.js';
 
 @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
-@ApiTags('Waiter orders')
+@ApiTags('Waiter · Orders')
+@ApiAuthenticatedOperation()
 @Roles(AppRole.WAITER)
 @Controller('waiter/orders')
 export class WaiterOrdersController {
   constructor(private readonly service: OrdersService) {}
+  @Get('context/current')
+  @ApiOperation({
+    summary: 'Load the Waiter workspace',
+    description:
+      'Returns one branch-scoped snapshot containing active tables, open sessions, sellable menu entries, orders, and the current work session.',
+  })
+  @ApiOkResponse({ type: WaiterContextResponseDto })
+  context(@CurrentUser() user: AuthenticatedUser) {
+    return this.service.waiterContext(user);
+  }
   @Post()
-  @ApiOperation({ summary: 'Create a draft order for an open table session' })
+  @ApiOperation({
+    summary: 'Create a draft order',
+    description:
+      'Precondition: the table session belongs to the Waiter branch and is OPEN or SERVING. The new order starts in PENDING.',
+  })
+  @ApiCreatedResponse({ type: OrderResponseDto })
+  @ApiStandardMutationErrors({ notFound: 'Open table session was not found in the current branch' })
   create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateOrderDto) {
     return this.service.createOrder(user, dto);
   }
   @Get(':orderId')
-  @ApiOperation({ summary: 'View an order in the waiter branch' })
+  @ApiOperation({
+    summary: 'View an order in the waiter branch',
+    description:
+      'Returns the order, its table session, and item details only when it belongs to the authenticated Waiter branch.',
+  })
+  @ApiUuidPath('orderId', 'Order to retrieve')
+  @ApiOkResponse({ type: OrderResponseDto })
+  @ApiStandardMutationErrors({ notFound: 'Order was not found in the current branch' })
   get(@CurrentUser() user: AuthenticatedUser, @Param('orderId', new ParseUUIDPipe()) id: string) {
     return this.service.getOrder(user, id);
   }
   @Post(':orderId/items')
-  @ApiOperation({ summary: 'Add an item to a draft order' })
+  @ApiOperation({
+    summary: 'Add an item to a draft order',
+    description:
+      'Allowed only while the order is PENDING. Availability and remaining portions are checked for the current branch.',
+  })
+  @ApiUuidPath('orderId', 'Draft order receiving the item')
+  @ApiCreatedResponse({ type: OrderItemResponseDto })
+  @ApiStandardMutationErrors({
+    notFound: 'Order was not found in the current branch',
+    conflict: 'Order was submitted, item is unavailable, or remaining portions are insufficient',
+  })
   addItem(
     @CurrentUser() user: AuthenticatedUser,
     @Param('orderId', new ParseUUIDPipe()) id: string,
@@ -39,7 +92,17 @@ export class WaiterOrdersController {
     return this.service.addItem(user, id, dto);
   }
   @Post(':orderId/submit')
-  @ApiOperation({ summary: 'Submit all draft items to the kitchen queue' })
+  @ApiOperation({
+    summary: 'Submit an order to Kitchen Staff',
+    description:
+      'Transition: Order PENDING → SUBMITTED and every item PENDING → QUEUED. Limited portions are reserved atomically; the whole transaction rolls back on failure.',
+  })
+  @ApiUuidPath('orderId', 'Draft order to submit')
+  @ApiCreatedResponse({ type: OrderResponseDto })
+  @ApiStandardMutationErrors({
+    notFound: 'Order was not found in the current branch',
+    conflict: 'Order was already submitted or portions changed concurrently',
+  })
   submit(
     @CurrentUser() user: AuthenticatedUser,
     @Param('orderId', new ParseUUIDPipe()) id: string,
@@ -49,28 +112,64 @@ export class WaiterOrdersController {
 }
 
 @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
-@ApiTags('Kitchen operations')
+@ApiTags('Kitchen · Queue')
+@ApiAuthenticatedOperation()
 @Roles(AppRole.KITCHEN)
 @Controller('kitchen')
 export class KitchenController {
   constructor(private readonly service: OrdersService) {}
   @Get('queue')
-  @ApiOperation({ summary: 'List queued and preparing items in the kitchen branch' })
+  @ApiOperation({
+    summary: 'List the Kitchen queue',
+    description:
+      'Returns QUEUED and PREPARING items for the authenticated Kitchen Staff branch, oldest first.',
+  })
+  @ApiPaginatedResponse(KitchenQueueItemResponseDto, 'Paginated Kitchen queue')
   queue(@CurrentUser() user: AuthenticatedUser, @Query() query: PaginationDto) {
     return this.service.kitchenQueue(user, query);
   }
   @Post('items/:itemId/start')
-  @ApiOperation({ summary: 'Atomically claim and start preparing a queued item' })
+  @ApiOperation({
+    summary: 'Start preparing an item',
+    description:
+      'Atomic transition: QUEUED → PREPARING. A conditional update prevents two Kitchen Staff members from starting the same item.',
+  })
+  @ApiUuidPath('itemId', 'Queued order item')
+  @ApiCreatedResponse({ type: OrderItemResponseDto })
+  @ApiStandardMutationErrors({
+    notFound: 'Order item was not found in the current branch',
+    conflict: 'Item is no longer QUEUED or was updated concurrently',
+  })
   start(@CurrentUser() user: AuthenticatedUser, @Param('itemId', new ParseUUIDPipe()) id: string) {
     return this.service.startItem(user, id);
   }
   @Post('items/:itemId/ready')
-  @ApiOperation({ summary: 'Mark a preparing item ready and create a serving task' })
+  @ApiOperation({
+    summary: 'Mark an item ready',
+    description:
+      'Atomic transition: PREPARING → READY. Exactly one WAITING serving task is created in the same transaction.',
+  })
+  @ApiUuidPath('itemId', 'Preparing order item')
+  @ApiCreatedResponse({ type: OrderItemResponseDto })
+  @ApiStandardMutationErrors({
+    notFound: 'Order item was not found in the current branch',
+    conflict: 'Item is no longer PREPARING or was updated concurrently',
+  })
   ready(@CurrentUser() user: AuthenticatedUser, @Param('itemId', new ParseUUIDPipe()) id: string) {
     return this.service.readyItem(user, id);
   }
   @Post('items/:itemId/unavailable')
-  @ApiOperation({ summary: 'Mark a queued or preparing item unavailable' })
+  @ApiOperation({
+    summary: 'Report an unavailable item',
+    description:
+      'Transition: QUEUED or PREPARING → OUT_OF_STOCK. The reason and Kitchen Staff identity are audited.',
+  })
+  @ApiUuidPath('itemId', 'Queued or preparing order item')
+  @ApiCreatedResponse({ type: OrderItemResponseDto })
+  @ApiStandardMutationErrors({
+    notFound: 'Order item was not found in the current branch',
+    conflict: 'Item can no longer be marked unavailable',
+  })
   unavailable(
     @CurrentUser() user: AuthenticatedUser,
     @Param('itemId', new ParseUUIDPipe()) id: string,
@@ -81,23 +180,48 @@ export class KitchenController {
 }
 
 @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
-@ApiTags('Waiter serving')
+@ApiTags('Waiter · Serving')
+@ApiAuthenticatedOperation()
 @Roles(AppRole.WAITER)
 @Controller('waiter/serving-tasks')
 export class ServingTasksController {
   constructor(private readonly service: OrdersService) {}
   @Get()
-  @ApiOperation({ summary: 'List ready items available to serve' })
+  @ApiOperation({
+    summary: 'List serving tasks',
+    description:
+      'Shows WAITING tasks, tasks claimed by the current Waiter, and expired claims eligible for recovery.',
+  })
+  @ApiPaginatedResponse(ServingTaskResponseDto, 'Paginated ready-item serving queue')
   list(@CurrentUser() user: AuthenticatedUser, @Query() query: PaginationDto) {
     return this.service.servingQueue(user, query);
   }
   @Post(':taskId/claim')
-  @ApiOperation({ summary: 'Atomically claim a serving task' })
+  @ApiOperation({
+    summary: 'Claim a serving task',
+    description:
+      'Atomic transition: WAITING → CLAIMED. An expired claim may be recovered after SERVING_TASK_CLAIM_TIMEOUT_SECONDS.',
+  })
+  @ApiUuidPath('taskId', 'Serving task to claim')
+  @ApiCreatedResponse({ type: ServingTaskResponseDto })
+  @ApiStandardMutationErrors({
+    conflict: 'Task is unavailable, already claimed, or the previous claim has not expired',
+  })
   claim(@CurrentUser() user: AuthenticatedUser, @Param('taskId', new ParseUUIDPipe()) id: string) {
     return this.service.claimTask(user, id);
   }
   @Post(':taskId/serve')
-  @ApiOperation({ summary: 'Confirm that the claimed item was served' })
+  @ApiOperation({
+    summary: 'Confirm item service',
+    description:
+      'Transitions the current Waiter claim CLAIMED → SERVED and the order item READY → SERVED in one transaction.',
+  })
+  @ApiUuidPath('taskId', 'Claimed serving task')
+  @ApiCreatedResponse({ type: ServingTaskResponseDto })
+  @ApiStandardMutationErrors({
+    notFound: 'Serving task was not found in the current branch',
+    conflict: 'Task is not claimed by the current Waiter',
+  })
   serve(@CurrentUser() user: AuthenticatedUser, @Param('taskId', new ParseUUIDPipe()) id: string) {
     return this.service.serveTask(user, id);
   }
