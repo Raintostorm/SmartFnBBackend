@@ -11,19 +11,27 @@ TypeScript, Prisma ORM và PostgreSQL.
 
 ## Chạy lần đầu
 
-```bash
+```powershell
+Copy-Item .env.example .env
 pnpm install
 pnpm db:up
-pnpm prisma:migrate --name init
+pnpm prisma:generate
+pnpm prisma:migrate:deploy
 pnpm prisma:seed
 pnpm start:dev
 ```
+
+Trên macOS/Linux, thay lệnh đầu bằng `cp .env.example .env`. Không chạy
+`prisma migrate --name init` trên máy mới vì repository đã có sẵn lịch sử migration.
+Chỉ người thay đổi `prisma/schema.prisma` mới tạo migration mới; các thành viên còn
+lại dùng `pnpm prisma:migrate:deploy` sau khi pull.
 
 API kiểm tra trạng thái: `GET http://localhost:3100/api/v1/health`
 
 ## Chạy đồng nhất bằng Docker
 
 ```bash
+cp .env.example .env # PowerShell: Copy-Item .env.example .env
 pnpm docker:up
 ```
 
@@ -54,17 +62,16 @@ băm bằng Argon2id; refresh token chỉ được lưu trong database dưới d
 Mọi API mặc định đều yêu cầu `Authorization: Bearer <accessToken>`, trừ các route
 được khai báo public.
 
-| Method  | Endpoint                       | Quyền                                                       |
-| ------- | ------------------------------ | ----------------------------------------------------------- |
-| `POST`  | `/api/v1/auth/login`           | Public                                                      |
-| `POST`  | `/api/v1/auth/refresh`         | Public, đổi refresh token một lần                           |
-| `POST`  | `/api/v1/auth/logout`          | Public, thu hồi session bằng refresh token                  |
-| `POST`  | `/api/v1/auth/logout-all`      | Đã đăng nhập                                                |
-| `GET`   | `/api/v1/auth/me`              | Đã đăng nhập                                                |
-| `POST`  | `/api/v1/auth/owners`          | Chỉ `ADMIN`; tạo tài khoản `OWNER`                          |
-| `POST`  | `/api/v1/auth/managers`        | `ADMIN` hoặc `OWNER`; tạo `MANAGER` cho đúng một chi nhánh  |
-| `POST`  | `/api/v1/auth/staff`           | Chỉ `ADMIN`; tạo `MANAGER`, `WAITER`, `KITCHEN`, `CASHIER`  |
-| `PATCH` | `/api/v1/users/:userId/status` | Chỉ `ADMIN`; cập nhật `ACTIVE`, `INACTIVE` hoặc `SUSPENDED` |
+| Method  | Endpoint                       | Quyền                                                             |
+| ------- | ------------------------------ | ----------------------------------------------------------------- |
+| `POST`  | `/api/v1/auth/login`           | Public                                                            |
+| `POST`  | `/api/v1/auth/refresh`         | Public, đổi refresh token một lần                                 |
+| `POST`  | `/api/v1/auth/logout`          | Public, thu hồi session bằng refresh token                        |
+| `POST`  | `/api/v1/auth/logout-all`      | Đã đăng nhập                                                      |
+| `GET`   | `/api/v1/auth/me`              | Đã đăng nhập                                                      |
+| `POST`  | `/api/v1/auth/managers`        | `ADMIN` hoặc `OWNER`; tạo `MANAGER` cho đúng một chi nhánh        |
+| `POST`  | `/api/v1/auth/staff`           | Endpoint cũ; `OWNER` chỉ tạo `MANAGER`, nên dùng `/auth/managers` |
+| `PATCH` | `/api/v1/users/:userId/status` | Chỉ `ADMIN`; cập nhật `ACTIVE`, `INACTIVE` hoặc `SUSPENDED`       |
 
 Các role ứng dụng: `ADMIN`, `OWNER`, `MANAGER`, `WAITER`, `KITCHEN`, `CASHIER`.
 Gắn `@Roles(AppRole.ADMIN, ...)` vào controller/handler để giới hạn
@@ -81,8 +88,7 @@ route theo role; route public phải được gắn `@Public()` một cách tư�
 
 Các endpoint được mô tả đầy đủ trên Swagger. Nhóm chính là
 `/api/v1/restaurant-chains`, `/api/v1/branches` và `/api/v1/public/branches`.
-ADMIN tạo OWNER qua `POST /api/v1/auth/owners`, sau đó phân công chuỗi bằng
-`PUT /api/v1/owners/:ownerId/chains`. OWNER tạo MANAGER qua
+Owner được tạo sau khi Platform Admin phê duyệt hồ sơ đăng ký. OWNER tạo MANAGER qua
 `POST /api/v1/auth/managers`; hệ thống chỉ chấp nhận chi nhánh thuộc chuỗi của OWNER.
 Mỗi MANAGER chỉ quản lý `Employee.branchId` của mình.
 
@@ -121,7 +127,7 @@ Data dictionary đầy đủ (từng bảng, cột, lý do tồn tại và khóa
 - `employees`: hồ sơ nhân viên; liên kết 1–1 với User và thuộc một Branch.
 - `restaurant_tables`: bàn ăn theo từng chi nhánh.
 - `reservations`: lịch đặt bàn theo thông tin khách vãng lai.
-- `menu_categories`, `menu_items`: danh mục và món ăn theo chi nhánh.
+- `menu_categories`, `menu_items`: danh mục và món ăn dùng chung ở cấp chuỗi.
 - `orders`, `order_items`: đơn hàng và snapshot món tại thời điểm đặt.
 - `table_sessions`, `table_session_tables`: phiên phục vụ tại bàn; một phiên có thể
   ghép nhiều bàn và chứa nhiều lần gọi món.
@@ -174,7 +180,7 @@ pnpm prisma:migrate        # Tạo/chạy migration trong môi trường dev
 pnpm prisma:migrate:deploy # Chạy migration đã có trong production
 pnpm prisma:studio         # Mở Prisma Studio
 pnpm test                  # Chạy unit test
-pnpm test:e2e              # Chạy kiểm thử auth và quản lý chuỗi với PostgreSQL local
+pnpm test:e2e              # Chạy kiểm thử auth, chi nhánh, Swagger và flow Waiter/Kitchen
 pnpm build                 # Build production
 ```
 

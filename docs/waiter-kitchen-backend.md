@@ -14,19 +14,20 @@ All reads and writes are restricted to the employee's assigned branch. Role guar
 
 ## API routes
 
-| Role | Method and route | Purpose |
-| --- | --- | --- |
-| Waiter | `POST /api/v1/waiter/orders` | Create a draft order for an open table session |
-| Waiter | `GET /api/v1/waiter/orders/:orderId` | View an order and its items |
-| Waiter | `POST /api/v1/waiter/orders/:orderId/items` | Add an available item to a draft order |
-| Waiter | `POST /api/v1/waiter/orders/:orderId/submit` | Reserve portions and send items to the kitchen |
-| Kitchen Staff | `GET /api/v1/kitchen/queue` | List queued and preparing items, oldest first |
-| Kitchen Staff | `POST /api/v1/kitchen/items/:itemId/start` | Start preparing a queued item |
-| Kitchen Staff | `POST /api/v1/kitchen/items/:itemId/ready` | Mark an item ready and publish a serving task |
-| Kitchen Staff | `POST /api/v1/kitchen/items/:itemId/unavailable` | Report an unavailable item with a reason |
-| Waiter | `GET /api/v1/waiter/serving-tasks` | List available or personally claimed serving tasks |
-| Waiter | `POST /api/v1/waiter/serving-tasks/:taskId/claim` | Claim a ready item for service |
-| Waiter | `POST /api/v1/waiter/serving-tasks/:taskId/serve` | Confirm that the claimed item was served |
+| Role          | Method and route                                  | Purpose                                                                  |
+| ------------- | ------------------------------------------------- | ------------------------------------------------------------------------ |
+| Waiter        | `GET /api/v1/waiter/orders/context/current`       | Load the branch, tables, sessions, menu, orders, and active work session |
+| Waiter        | `POST /api/v1/waiter/orders`                      | Create a draft order for an open table session                           |
+| Waiter        | `GET /api/v1/waiter/orders/:orderId`              | View an order and its items                                              |
+| Waiter        | `POST /api/v1/waiter/orders/:orderId/items`       | Add an available item to a draft order                                   |
+| Waiter        | `POST /api/v1/waiter/orders/:orderId/submit`      | Reserve portions and send items to the kitchen                           |
+| Kitchen Staff | `GET /api/v1/kitchen/queue`                       | List queued and preparing items, oldest first                            |
+| Kitchen Staff | `POST /api/v1/kitchen/items/:itemId/start`        | Start preparing a queued item                                            |
+| Kitchen Staff | `POST /api/v1/kitchen/items/:itemId/ready`        | Mark an item ready and publish a serving task                            |
+| Kitchen Staff | `POST /api/v1/kitchen/items/:itemId/unavailable`  | Report an unavailable item with a reason                                 |
+| Waiter        | `GET /api/v1/waiter/serving-tasks`                | List available or personally claimed serving tasks                       |
+| Waiter        | `POST /api/v1/waiter/serving-tasks/:taskId/claim` | Claim a ready item for service                                           |
+| Waiter        | `POST /api/v1/waiter/serving-tasks/:taskId/serve` | Confirm that the claimed item was served                                 |
 
 ## State rules
 
@@ -42,12 +43,12 @@ Conditional database updates prevent two Kitchen Staff members from starting the
 
 ## Environment configuration
 
-| Variable | Default | Meaning |
-| --- | ---: | --- |
-| `OPERATIONS_DEFAULT_PAGE_SIZE` | `20` | Default kitchen/serving queue page size |
-| `OPERATIONS_MAX_PAGE_SIZE` | `100` | Maximum accepted queue page size |
-| `OPERATIONS_MAX_ITEMS_PER_ORDER` | `50` | Maximum number of line items in an order |
-| `SERVING_TASK_CLAIM_TIMEOUT_SECONDS` | `300` | Time before an abandoned claim may be reclaimed |
+| Variable                             | Default | Meaning                                         |
+| ------------------------------------ | ------: | ----------------------------------------------- |
+| `OPERATIONS_DEFAULT_PAGE_SIZE`       |    `20` | Default kitchen/serving queue page size         |
+| `OPERATIONS_MAX_PAGE_SIZE`           |   `100` | Maximum accepted queue page size                |
+| `OPERATIONS_MAX_ITEMS_PER_ORDER`     |    `50` | Maximum number of line items in an order        |
+| `SERVING_TASK_CLAIM_TIMEOUT_SECONDS` |   `300` | Time before an abandoned claim may be reclaimed |
 
 ## Next planned slices
 
