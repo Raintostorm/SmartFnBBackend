@@ -150,11 +150,18 @@ async function createDemoOperationsData(): Promise<void> {
     subscription: '10000000-0000-4000-8000-000000000029',
     branding: '10000000-0000-4000-8000-000000000030',
     wallet: '10000000-0000-4000-8000-000000000031',
+    ownerUser: '10000000-0000-4000-8000-000000000032',
+    owner: '10000000-0000-4000-8000-000000000033',
+    ownerAssignment: '10000000-0000-4000-8000-000000000034',
+    managerUser: '10000000-0000-4000-8000-000000000035',
+    manager: '10000000-0000-4000-8000-000000000036',
   } as const;
 
-  const [waiterRole, kitchenRole] = await Promise.all([
+  const [waiterRole, kitchenRole, ownerRole, managerRole] = await Promise.all([
     prisma.role.findUniqueOrThrow({ where: { code: 'WAITER' } }),
     prisma.role.findUniqueOrThrow({ where: { code: 'KITCHEN' } }),
+    prisma.role.findUniqueOrThrow({ where: { code: 'OWNER' } }),
+    prisma.role.findUniqueOrThrow({ where: { code: 'MANAGER' } }),
   ]);
   const passwordHash = await hash(password, {
     type: argon2id,
@@ -298,6 +305,49 @@ async function createDemoOperationsData(): Promise<void> {
     lastName: 'Phục vụ',
     jobTitle: 'Waiter',
     roleId: waiterRole.id,
+    branchId: ids.branch,
+    passwordHash,
+  });
+  await prisma.user.upsert({
+    where: { id: ids.ownerUser },
+    update: {
+      email: 'owner.demo@smartfnb.local',
+      passwordHash,
+      roleId: ownerRole.id,
+      status: 'ACTIVE',
+    },
+    create: {
+      id: ids.ownerUser,
+      email: 'owner.demo@smartfnb.local',
+      passwordHash,
+      roleId: ownerRole.id,
+    },
+  });
+  await prisma.owner.upsert({
+    where: { id: ids.owner },
+    update: { firstName: 'Bảo', lastName: 'Chủ chuỗi', deletedAt: null },
+    create: {
+      id: ids.owner,
+      userId: ids.ownerUser,
+      ownerCode: 'DEMO-OWNER-01',
+      firstName: 'Bảo',
+      lastName: 'Chủ chuỗi',
+    },
+  });
+  await prisma.ownerChainAssignment.upsert({
+    where: { id: ids.ownerAssignment },
+    update: { ownerId: ids.owner, chainId: ids.chain },
+    create: { id: ids.ownerAssignment, ownerId: ids.owner, chainId: ids.chain },
+  });
+  await upsertDemoEmployee({
+    userId: ids.managerUser,
+    employeeId: ids.manager,
+    email: 'manager.demo@smartfnb.local',
+    employeeCode: 'DEMO-MANAGER-01',
+    firstName: 'Minh',
+    lastName: 'Quản lý',
+    jobTitle: 'Branch Manager',
+    roleId: managerRole.id,
     branchId: ids.branch,
     passwordHash,
   });
@@ -519,6 +569,8 @@ async function createDemoOperationsData(): Promise<void> {
   console.info('Demo operations data seeded.');
   console.info('Waiter: waiter.demo@smartfnb.local');
   console.info('Kitchen Staff: kitchen.demo@smartfnb.local');
+  console.info('Owner: owner.demo@smartfnb.local');
+  console.info('Manager: manager.demo@smartfnb.local');
 }
 
 async function upsertDemoEmployee(input: {

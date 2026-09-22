@@ -29,6 +29,7 @@ export const authUserInclude = {
       branchId: true,
       firstName: true,
       lastName: true,
+      branch: { select: { chainId: true } },
     },
   },
   owner: {
@@ -37,6 +38,7 @@ export const authUserInclude = {
       ownerCode: true,
       firstName: true,
       lastName: true,
+      chainAssignments: { select: { chainId: true } },
     },
   },
 } satisfies Prisma.UserInclude;

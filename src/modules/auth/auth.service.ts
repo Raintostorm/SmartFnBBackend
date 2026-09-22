@@ -319,6 +319,8 @@ export class AuthService {
       employeeId: user.employee?.id ?? null,
       ownerId: user.owner?.id ?? null,
       branchId: user.employee?.branchId ?? null,
+      chainId: user.employee?.branch?.chainId ?? null,
+      chainIds: user.owner?.chainAssignments?.map(({ chainId }) => chainId) ?? [],
     };
   }
 

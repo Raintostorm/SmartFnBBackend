@@ -99,7 +99,7 @@ export class ApproveRegistrationApplicationDto {
   @IsUUID()
   planId?: string;
 
-  @ApiPropertyOptional({ default: 1, minimum: 1, maximum: 60 })
+  @ApiPropertyOptional({ type: Number, default: 1, minimum: 1, maximum: 60 })
   @Type(() => Number)
   @IsInt()
   @Min(1)

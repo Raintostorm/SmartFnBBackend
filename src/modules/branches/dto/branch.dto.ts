@@ -64,12 +64,6 @@ export class CreateBranchDto {
   @MaxLength(100)
   ward?: string;
 
-  @ApiPropertyOptional({ example: 'District 1', maxLength: 100 })
-  @IsOptional()
-  @IsString()
-  @MaxLength(100)
-  district?: string;
-
   @ApiProperty({ example: 'Ho Chi Minh City', maxLength: 100 })
   @IsString()
   @MinLength(1)

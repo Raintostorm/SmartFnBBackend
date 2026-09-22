@@ -100,6 +100,17 @@ export class AuthenticatedUserResponseDto {
 
   @ApiProperty({ format: 'uuid', nullable: true })
   branchId!: string | null;
+
+  @ApiProperty({ format: 'uuid', nullable: true, description: 'Single chain scope for employees' })
+  chainId!: string | null;
+
+  @ApiProperty({
+    type: String,
+    isArray: true,
+    format: 'uuid',
+    description: 'All assigned chains for OWNER',
+  })
+  chainIds!: string[];
 }
 
 export class MessageResponseDto {

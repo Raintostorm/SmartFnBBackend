@@ -29,6 +29,8 @@ export function configureSwagger(app: INestApplication): void {
     .addTag('Waiter · Orders', 'Table context and the waiter order lifecycle.')
     .addTag('Kitchen · Queue', 'Kitchen queue and food-preparation state transitions.')
     .addTag('Waiter · Serving', 'Ready-item handoff from kitchen staff to waiters.')
+    .addTag('Tables', 'Branch floor plan, table status, and merge adjacency configuration.')
+    .addTag('Payments', 'Branch payment history and table-session payment processing.')
     .addBearerAuth(
       {
         type: 'http',

@@ -17,7 +17,7 @@
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main.js",
     "typecheck": "tsc --noEmit",
-    "test": "pnpm build && node --test test/app.controller.test.mjs test/roles.guard.test.mjs test/branches.service.test.mjs test/order-state-machine.test.mjs test/owner-features.test.mjs",
+    "test": "pnpm build && node --test test/app.controller.test.mjs test/roles.guard.test.mjs test/branches.service.test.mjs test/order-state-machine.test.mjs test/owner-features.test.mjs test/tables-payments.service.test.mjs",
     "test:e2e": "pnpm build && node --test test/auth.e2e.test.mjs test/branches.e2e.test.mjs test/orders.e2e.test.mjs",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",

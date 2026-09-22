@@ -39,6 +39,7 @@ import {
 } from './dto/branch-area.dto.js';
 import { ListBranchesQueryDto, UpdateBranchDto, UpdateBranchStatusDto } from './dto/branch.dto.js';
 import { UpsertBranchHourDto, UpsertBranchSpecialHourDto } from './dto/branch-hours.dto.js';
+import { BranchDetailResponseDto, BranchResponseDto } from './dto/branch-response.dto.js';
 
 const INTERNAL_BRANCH_ROLES = [
   AppRole.OWNER,
@@ -63,7 +64,7 @@ export class BranchesController {
   @ApiOperation({
     summary: 'List branches: OWNER sees owned chains; staff see their assigned branch',
   })
-  @ApiOkResponse({ description: 'Accessible branches' })
+  @ApiOkResponse({ description: 'Accessible branches', type: BranchResponseDto, isArray: true })
   list(@CurrentUser() user: AuthenticatedUser, @Query() query: ListBranchesQueryDto) {
     return this.branchesService.listBranches(user, query);
   }
@@ -71,7 +72,7 @@ export class BranchesController {
   @Get(':branchId')
   @ApiOperation({ summary: 'Get accessible branch detail, hours, and role-visible areas' })
   @ApiParam({ name: 'branchId', format: 'uuid' })
-  @ApiOkResponse({ description: 'Branch detail' })
+  @ApiOkResponse({ description: 'Branch detail', type: BranchDetailResponseDto })
   @ApiNotFoundResponse({ description: 'Branch not found' })
   get(
     @Param('branchId', new ParseUUIDPipe()) branchId: string,
@@ -84,7 +85,7 @@ export class BranchesController {
   @Patch(':branchId')
   @ApiOperation({ summary: 'Update branch information (OWNER or assigned MANAGER)' })
   @ApiParam({ name: 'branchId', format: 'uuid' })
-  @ApiOkResponse({ description: 'Branch updated' })
+  @ApiOkResponse({ description: 'Branch updated', type: BranchResponseDto })
   @ApiConflictResponse({ description: 'Branch code already exists' })
   @ApiNotFoundResponse({ description: 'Branch not found' })
   update(
@@ -102,7 +103,7 @@ export class BranchesController {
     description: 'MANAGER may set ACTIVE or MAINTENANCE; OWNER may also set INACTIVE.',
   })
   @ApiParam({ name: 'branchId', format: 'uuid' })
-  @ApiOkResponse({ description: 'Branch status updated' })
+  @ApiOkResponse({ description: 'Branch status updated', type: BranchResponseDto })
   @ApiNotFoundResponse({ description: 'Branch not found' })
   updateStatus(
     @Param('branchId', new ParseUUIDPipe()) branchId: string,
@@ -110,6 +111,21 @@ export class BranchesController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.branchesService.updateBranchStatus(branchId, dto.status, user);
+  }
+
+  @Roles(AppRole.OWNER)
+  @Delete(':branchId')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Archive a branch and release its subscription quota' })
+  @ApiParam({ name: 'branchId', format: 'uuid' })
+  @ApiOkResponse({ description: 'Branch archived', type: BranchResponseDto })
+  @ApiConflictResponse({ description: 'Branch still has an open table session' })
+  @ApiNotFoundResponse({ description: 'Branch not found' })
+  deleteBranch(
+    @Param('branchId', new ParseUUIDPipe()) branchId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.branchesService.deleteBranch(branchId, user);
   }
 
   @Get(':branchId/operating-hours')

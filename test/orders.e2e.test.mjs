@@ -15,7 +15,18 @@ describe('Waiter and Kitchen Staff operational flow', () => {
     waiter: `flow-waiter-${suffix}@example.com`,
     kitchen: `flow-kitchen-${suffix}@example.com`,
   };
-  let app, prisma, baseUrl, waiterToken, kitchenToken, branchId, chainId, orderId, itemId, taskId;
+  let app,
+    prisma,
+    baseUrl,
+    waiterToken,
+    kitchenToken,
+    branchId,
+    chainId,
+    planId,
+    orderId,
+    itemId,
+    taskId,
+    tableSessionId;
 
   async function api(path, token, options = {}) {
     const response = await fetch(`${baseUrl}/api/v1${path}`, {
@@ -55,6 +66,26 @@ describe('Waiter and Kitchen Staff operational flow', () => {
       data: { code: `FLOW-${suffix}`.slice(0, 50), name: 'Flow Test Chain' },
     });
     chainId = chain.id;
+    const plan = await prisma.servicePlan.create({
+      data: {
+        code: `FLOW-PLAN-${suffix}`.slice(0, 50),
+        name: 'Flow Test Plan',
+        monthlyPrice: 0,
+        maxBranches: 2,
+        maxAccounts: 10,
+        maxTables: 20,
+      },
+    });
+    planId = plan.id;
+    await prisma.businessSubscription.create({
+      data: {
+        chainId,
+        planId,
+        monthlyPrice: 0,
+        startsAt: new Date(Date.now() - 60_000),
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      },
+    });
     const branch = await prisma.branch.create({
       data: {
         chainId,
@@ -104,6 +135,7 @@ describe('Waiter and Kitchen Staff operational flow', () => {
         tables: { create: { tableId: table.id } },
       },
     });
+    tableSessionId = session.id;
     const category = await prisma.menuCategory.create({
       data: { chainId, name: `Flow Menu ${suffix}` },
     });
@@ -155,6 +187,15 @@ describe('Waiter and Kitchen Staff operational flow', () => {
       ['/api/v1/waiter/serving-tasks', 'get', 'Waiter · Serving'],
       ['/api/v1/waiter/serving-tasks/{taskId}/claim', 'post', 'Waiter · Serving'],
       ['/api/v1/waiter/serving-tasks/{taskId}/serve', 'post', 'Waiter · Serving'],
+      ['/api/v1/branches/{branchId}/tables', 'get', 'Tables'],
+      ['/api/v1/branches/{branchId}/tables', 'post', 'Tables'],
+      ['/api/v1/tables/{tableId}', 'patch', 'Tables'],
+      ['/api/v1/tables/{tableId}/status', 'patch', 'Tables'],
+      ['/api/v1/branches/{branchId}/table-adjacency', 'put', 'Tables'],
+      ['/api/v1/branches/{branchId}/payments', 'get', 'Payments'],
+      ['/api/v1/table-sessions/{tableSessionId}/payments', 'post', 'Payments'],
+      ['/api/v1/payments/{paymentId}/confirm', 'post', 'Payments'],
+      ['/api/v1/payments/{paymentId}', 'get', 'Payments'],
     ];
 
     for (const [path, method, tag] of operations) {
@@ -175,6 +216,9 @@ describe('Waiter and Kitchen Staff operational flow', () => {
       'WaiterContextResponseDto',
       'ApiErrorDto',
       'PageMetaDto',
+      'TableResponseDto',
+      'PaymentResponseDto',
+      'PaymentListResponseDto',
     ]) {
       assert.ok(document.components.schemas[schema], `Missing OpenAPI schema: ${schema}`);
     }
@@ -184,6 +228,7 @@ describe('Waiter and Kitchen Staff operational flow', () => {
   after(async () => {
     if (prisma && branchId) {
       await prisma.servingTask.deleteMany({ where: { branchId } });
+      await prisma.payment.deleteMany({ where: { tableSession: { branchId } } });
       await prisma.order.deleteMany({ where: { branchId } });
       await prisma.tableSession.deleteMany({ where: { branchId } });
       await prisma.restaurantTable.deleteMany({ where: { branchId } });
@@ -193,6 +238,7 @@ describe('Waiter and Kitchen Staff operational flow', () => {
       await prisma.user.deleteMany({ where: { email: { in: Object.values(emails) } } });
       await prisma.branch.delete({ where: { id: branchId } });
       await prisma.restaurantChain.delete({ where: { id: chainId } });
+      await prisma.servicePlan.delete({ where: { id: planId } });
     }
     await app?.close();
   });
@@ -237,5 +283,34 @@ describe('Waiter and Kitchen Staff operational flow', () => {
     assert.equal(served.body.orderItem.status, 'SERVED');
     const order = await api(`/waiter/orders/${orderId}`, waiterToken);
     assert.equal(order.body.status, 'SERVED');
+  });
+
+  it('lets waiter inspect tables and complete the table-session payment', async () => {
+    const tables = await api(`/branches/${branchId}/tables`, waiterToken);
+    assert.equal(tables.response.status, 200);
+    assert.ok(tables.body.some((table) => table.code === 'T-FLOW'));
+
+    const pending = await api(`/table-sessions/${tableSessionId}/payments`, waiterToken, {
+      method: 'POST',
+      body: JSON.stringify({ method: 'CASH', amount: 100000 }),
+    });
+    assert.equal(pending.response.status, 201);
+    assert.equal(pending.body.status, 'PENDING');
+
+    const confirmed = await api(`/payments/${pending.body.id}/confirm`, waiterToken, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    assert.equal(confirmed.response.status, 200);
+    assert.equal(confirmed.body.status, 'SUCCESS');
+
+    const [session, order] = await Promise.all([
+      prisma.tableSession.findUniqueOrThrow({ where: { id: tableSessionId } }),
+      prisma.order.findUniqueOrThrow({ where: { id: orderId } }),
+    ]);
+    assert.equal(session.status, 'PAID');
+    assert.equal(session.paymentStatus, 'PAID');
+    assert.equal(order.status, 'COMPLETED');
+    assert.equal(order.paymentStatus, 'PAID');
   });
 });

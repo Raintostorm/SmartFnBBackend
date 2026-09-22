@@ -20,6 +20,8 @@ export interface AuthenticatedUser {
   employeeId: string | null;
   ownerId: string | null;
   branchId: string | null;
+  chainId: string | null;
+  chainIds: string[];
 }
 
 export interface AuthenticatedRequest extends Request {

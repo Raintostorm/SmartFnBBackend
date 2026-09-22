@@ -11,6 +11,7 @@ import {
   BranchStatus,
   Prisma,
   RestaurantChainStatus,
+  TableSessionStatus,
 } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { AppRole } from '../auth/app-role.enum.js';
@@ -159,10 +160,15 @@ export class BranchesService {
   async createBranch(chainId: string, dto: CreateBranchDto, user: AuthenticatedUser) {
     await this.branchAccess.assertCanManageChain(user, chainId);
     await this.ensureChainExists(chainId);
-    await this.planQuota.assertWithinQuota(chainId, 'branches');
-
     const { openTime, closeTime, ...branchData } = dto;
     const weeklyHours = this.buildWeeklyHours(openTime, closeTime);
+    const duplicate = await this.prisma.branch.count({
+      where: { code: dto.code, deletedAt: null },
+    });
+    if (duplicate > 0) {
+      throw new ConflictException('Branch code already exists');
+    }
+    await this.planQuota.assertWithinQuota(chainId, 'branches');
 
     return this.withUniqueConflict('Branch code already exists', () =>
       this.prisma.branch.create({
@@ -272,7 +278,10 @@ export class BranchesService {
             }
           : {}),
       },
-      select: branchSummarySelect,
+      select: {
+        ...branchSummarySelect,
+        operatingHours: { orderBy: { dayOfWeek: 'asc' } },
+      },
       orderBy: [{ city: 'asc' }, { name: 'asc' }],
     });
   }
@@ -332,6 +341,28 @@ export class BranchesService {
     return this.prisma.branch.update({
       where: { id },
       data: { status },
+      select: branchSummarySelect,
+    });
+  }
+
+  async deleteBranch(id: string, user: AuthenticatedUser) {
+    if (user.role !== AppRole.OWNER) {
+      throw new ForbiddenException('Only OWNER can archive a branch');
+    }
+    await this.branchAccess.assertCanManageBranch(user, id);
+    await this.ensureBranchExists(id);
+    const activeSessions = await this.prisma.tableSession.count({
+      where: {
+        branchId: id,
+        status: { in: [TableSessionStatus.OPEN, TableSessionStatus.SERVING] },
+      },
+    });
+    if (activeSessions > 0) {
+      throw new ConflictException('Branch cannot be archived while table sessions are open');
+    }
+    return this.prisma.branch.update({
+      where: { id },
+      data: { deletedAt: new Date(), status: BranchStatus.INACTIVE },
       select: branchSummarySelect,
     });
   }

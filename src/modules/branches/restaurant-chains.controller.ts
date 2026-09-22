@@ -18,6 +18,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { Roles } from '../auth/decorators/roles.decorator.js';
 import { BranchesService } from './branches.service.js';
 import { CreateBranchDto } from './dto/branch.dto.js';
+import { BranchResponseDto, RestaurantChainResponseDto } from './dto/branch-response.dto.js';
 
 @Roles(AppRole.OWNER)
 @ApiTags('Restaurant chains - OWNER')
@@ -33,7 +34,11 @@ export class RestaurantChainsController {
     summary: 'List the restaurant chains assigned to the current OWNER',
     description: 'Each chain carries its service plan and the current usage against its limits.',
   })
-  @ApiOkResponse({ description: 'Owned restaurant chains with plan usage' })
+  @ApiOkResponse({
+    description: 'Owned restaurant chains with plan usage',
+    type: RestaurantChainResponseDto,
+    isArray: true,
+  })
   listChains(@CurrentUser() user: AuthenticatedUser) {
     return this.branchesService.listOwnerChains(user);
   }
@@ -63,7 +68,7 @@ export class RestaurantChainsController {
       'through PUT /branches/{branchId}/operating-hours/{dayOfWeek}.',
   })
   @ApiParam({ name: 'chainId', format: 'uuid' })
-  @ApiCreatedResponse({ description: 'Branch created' })
+  @ApiCreatedResponse({ description: 'Branch created', type: BranchResponseDto })
   @ApiConflictResponse({
     description:
       'Branch code already exists, or the service plan branch limit is reached (the body then ' +

@@ -44,6 +44,7 @@ describe('Branch creation seeds opening hours', () => {
       {
         restaurantChain: { count: async () => 1 },
         branch: {
+          count: async () => 0,
           create: async (args) => {
             captured.args = args;
             return { id: 'branch-new' };

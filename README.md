@@ -166,9 +166,17 @@ SEED_DEMO_PASSWORD=your_local_demo_password
 ```
 
 Sau đó chạy `pnpm prisma:seed`. Seed có thể chạy lại nhiều lần mà không nhân đôi dữ liệu.
-Nó tạo chi nhánh, khu vực, bốn bàn và quan hệ liền kề, menu/tồn món, một Waiter,
-một Kitchen Staff, hai ca đang hoạt động, một phiên bàn, một order, hai order item,
-một serving task và một payment đang chờ. Không bật `SEED_DEMO_DATA` ở production.
+Mật khẩu phải dài tối thiểu 12 ký tự và có chữ hoa, chữ thường, chữ số. Seed tạo
+chi nhánh, khu vực, bốn bàn và quan hệ liền kề, menu/tồn món, một Owner, một Manager,
+một Waiter, một Kitchen Staff, hai ca đang hoạt động, một phiên bàn, một order,
+hai order item, một serving task và một payment đang chờ. Các tài khoản demo là:
+
+- `owner.demo@smartfnb.local`
+- `manager.demo@smartfnb.local`
+- `waiter.demo@smartfnb.local`
+- `kitchen.demo@smartfnb.local`
+
+Tất cả dùng `SEED_DEMO_PASSWORD`. Không bật `SEED_DEMO_DATA` ở production.
 
 ## Lệnh hữu ích
 
