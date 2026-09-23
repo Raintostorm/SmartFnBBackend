@@ -24,6 +24,7 @@ import {
   UpdateTableStatusDto,
 } from './dto/table.dto.js';
 import { TablesService } from './tables.service.js';
+import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
 
 @ApiTags('Tables')
 @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
@@ -31,7 +32,10 @@ import { TablesService } from './tables.service.js';
 @Roles(AppRole.OWNER, AppRole.MANAGER, AppRole.WAITER)
 @Controller()
 export class TablesController {
-  constructor(private readonly service: TablesService) {}
+  constructor(
+    private readonly service: TablesService,
+    private readonly realtime: RealtimePublisher,
+  ) {}
 
   @Get('branches/:branchId/tables')
   @ApiOperation({
@@ -54,12 +58,14 @@ export class TablesController {
     description: 'The table code must be unique inside the branch.',
   })
   @ApiCreatedResponse({ type: TableResponseDto })
-  create(
+  async create(
     @Param('branchId', new ParseUUIDPipe()) branchId: string,
     @Body() dto: CreateTableDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.service.create(branchId, dto, user);
+    const result = await this.service.create(branchId, dto, user);
+    this.realtime.branch(branchId, 'table.created', { id: result.id, status: result.status });
+    return result;
   }
 
   @Roles(AppRole.OWNER, AppRole.MANAGER)
@@ -70,12 +76,17 @@ export class TablesController {
   })
   @ApiOkResponse({ type: TableResponseDto })
   @ApiStandardMutationErrors({ notFound: 'Table not found', conflict: 'Table code already exists' })
-  update(
+  async update(
     @Param('tableId', new ParseUUIDPipe()) tableId: string,
     @Body() dto: UpdateTableDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.service.update(tableId, dto, user);
+    const result = await this.service.update(tableId, dto, user);
+    this.realtime.branch(result.branchId, 'table.updated', {
+      id: result.id,
+      status: result.status,
+    });
+    return result;
   }
 
   @Roles(AppRole.OWNER, AppRole.MANAGER)
@@ -85,12 +96,17 @@ export class TablesController {
     description: 'A table in an open serving session cannot be changed back to AVAILABLE.',
   })
   @ApiOkResponse({ type: TableResponseDto })
-  updateStatus(
+  async updateStatus(
     @Param('tableId', new ParseUUIDPipe()) tableId: string,
     @Body() dto: UpdateTableStatusDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.service.updateStatus(tableId, dto.status, user);
+    const result = await this.service.updateStatus(tableId, dto.status, user);
+    this.realtime.branch(result.branchId, 'table.status-updated', {
+      id: result.id,
+      status: result.status,
+    });
+    return result;
   }
 
   @Roles(AppRole.OWNER, AppRole.MANAGER)
@@ -101,11 +117,13 @@ export class TablesController {
       'Every adjacency is stored in both directions and all referenced tables must belong to this branch.',
   })
   @ApiOkResponse({ type: TableResponseDto, isArray: true })
-  replaceAdjacency(
+  async replaceAdjacency(
     @Param('branchId', new ParseUUIDPipe()) branchId: string,
     @Body() dto: ReplaceBranchTableAdjacencyDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.service.replaceAdjacency(branchId, dto.tableId, dto, user);
+    const result = await this.service.replaceAdjacency(branchId, dto.tableId, dto, user);
+    this.realtime.branch(branchId, 'table.adjacency-updated', { tableId: dto.tableId });
+    return result;
   }
 }

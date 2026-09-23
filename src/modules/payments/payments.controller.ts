@@ -34,15 +34,19 @@ import {
   PaymentResponseDto,
 } from './dto/payment.dto.js';
 import { PaymentsService } from './payments.service.js';
+import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
 
 @ApiTags('Payments')
 @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
 @ApiAuthenticatedOperation()
 @Controller()
 export class PaymentsController {
-  constructor(private readonly service: PaymentsService) {}
+  constructor(
+    private readonly service: PaymentsService,
+    private readonly realtime: RealtimePublisher,
+  ) {}
 
-  @Roles(AppRole.OWNER, AppRole.MANAGER, AppRole.WAITER, AppRole.CASHIER)
+  @Roles(AppRole.OWNER, AppRole.MANAGER, AppRole.CASHIER)
   @Get('branches/:branchId/payments')
   @ApiOperation({
     summary: 'List and filter payment history for a branch',
@@ -59,7 +63,7 @@ export class PaymentsController {
     return this.service.list(branchId, query, user);
   }
 
-  @Roles(AppRole.MANAGER, AppRole.WAITER, AppRole.CASHIER)
+  @Roles(AppRole.MANAGER, AppRole.CASHIER)
   @Post('table-sessions/:tableSessionId/payments')
   @ApiOperation({
     summary: 'Create a pending payment for a table session',
@@ -72,15 +76,19 @@ export class PaymentsController {
     notFound: 'Open table session not found',
     conflict: 'Session already paid',
   })
-  createForTableSession(
+  async createForTableSession(
     @Param('tableSessionId', new ParseUUIDPipe()) tableSessionId: string,
     @Body() dto: CreateTableSessionPaymentDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.service.createForTableSession(tableSessionId, dto, user);
+    const result = await this.service.createForTableSession(tableSessionId, dto, user);
+    const branchId = result.tableSession?.branchId ?? result.order?.branchId;
+    if (branchId)
+      this.realtime.branch(branchId, 'payment.created', { id: result.id, status: result.status });
+    return result;
   }
 
-  @Roles(AppRole.MANAGER, AppRole.WAITER, AppRole.CASHIER)
+  @Roles(AppRole.MANAGER, AppRole.CASHIER)
   @Post('payments/:paymentId/confirm')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -91,15 +99,19 @@ export class PaymentsController {
   @ApiUuidPath('paymentId', 'Pending payment to confirm')
   @ApiOkResponse({ type: PaymentResponseDto })
   @ApiStandardMutationErrors({ notFound: 'Payment not found', conflict: 'Payment is not pending' })
-  confirm(
+  async confirm(
     @Param('paymentId', new ParseUUIDPipe()) paymentId: string,
     @Body() dto: ConfirmPaymentDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.service.confirm(paymentId, dto, user);
+    const result = await this.service.confirm(paymentId, dto, user);
+    const branchId = result.tableSession?.branchId ?? result.order?.branchId;
+    if (branchId)
+      this.realtime.branch(branchId, 'payment.confirmed', { id: result.id, status: result.status });
+    return result;
   }
 
-  @Roles(AppRole.OWNER, AppRole.MANAGER, AppRole.WAITER, AppRole.CASHIER)
+  @Roles(AppRole.OWNER, AppRole.MANAGER, AppRole.CASHIER)
   @Get('payments/:paymentId')
   @ApiOperation({
     summary: 'Get payment details within the current user scope',

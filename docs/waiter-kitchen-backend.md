@@ -9,6 +9,8 @@
 5. Kitchen Staff moves the item to `READY`; the same transaction creates one serving task.
 6. A Waiter claims the serving task and confirms service, moving the item to `SERVED`.
 7. The order status is derived from all of its items after every kitchen or serving transition.
+8. The Waiter may show a live bill preview on the tablet, but cannot create or confirm payment.
+9. Manager/Cashier creates and confirms payment, then issues the immutable internal invoice snapshot.
 
 All reads and writes are restricted to the employee's assigned branch. Role guards additionally keep Waiter and Kitchen Staff endpoints separate.
 
@@ -28,6 +30,11 @@ All reads and writes are restricted to the employee's assigned branch. Role guar
 | Waiter        | `GET /api/v1/waiter/serving-tasks`                | List available or personally claimed serving tasks                       |
 | Waiter        | `POST /api/v1/waiter/serving-tasks/:taskId/claim` | Claim a ready item for service                                           |
 | Waiter        | `POST /api/v1/waiter/serving-tasks/:taskId/serve` | Confirm that the claimed item was served                                 |
+| Waiter        | `GET /api/v1/table-sessions/:id/bill-preview`     | Show the current provisional bill on the tablet                          |
+| Manager       | `POST /api/v1/table-sessions/:id/payments`        | Create pending cash/QR payment                                           |
+| Manager       | `POST /api/v1/payments/:id/confirm`               | Confirm successful payment                                               |
+| Manager       | `POST /api/v1/table-sessions/:id/invoices`        | Freeze the paid session as an internal invoice snapshot                  |
+| Manager       | `GET /api/v1/invoices/:id/print`                  | Load browser-printable thermal-bill data                                 |
 
 ## State rules
 
@@ -43,17 +50,21 @@ Conditional database updates prevent two Kitchen Staff members from starting the
 
 ## Environment configuration
 
-| Variable                             | Default | Meaning                                         |
-| ------------------------------------ | ------: | ----------------------------------------------- |
-| `OPERATIONS_DEFAULT_PAGE_SIZE`       |    `20` | Default kitchen/serving queue page size         |
-| `OPERATIONS_MAX_PAGE_SIZE`           |   `100` | Maximum accepted queue page size                |
-| `OPERATIONS_MAX_ITEMS_PER_ORDER`     |    `50` | Maximum number of line items in an order        |
-| `SERVING_TASK_CLAIM_TIMEOUT_SECONDS` |   `300` | Time before an abandoned claim may be reclaimed |
+| Variable                             |      Default | Meaning                                         |
+| ------------------------------------ | -----------: | ----------------------------------------------- |
+| `OPERATIONS_DEFAULT_PAGE_SIZE`       |         `20` | Default kitchen/serving queue page size         |
+| `OPERATIONS_MAX_PAGE_SIZE`           |        `100` | Maximum accepted queue page size                |
+| `OPERATIONS_MAX_ITEMS_PER_ORDER`     |         `50` | Maximum number of line items in an order        |
+| `SERVING_TASK_CLAIM_TIMEOUT_SECONDS` |        `300` | Time before an abandoned claim may be reclaimed |
+| `INVOICE_NUMBER_PREFIX`              |        `INV` | Prefix used for immutable internal bill numbers |
+| `REALTIME_ENABLED`                   |       `true` | Enable authenticated Socket.IO updates          |
+| `REALTIME_PATH`                      | `/socket.io` | Socket.IO transport path                        |
+| `REALTIME_CORS_ORIGINS`              |          `*` | Comma-separated allowed client origins          |
 
-## Next planned slices
+## Realtime client contract
 
-- Open, join, split, transfer, and close table sessions through Waiter APIs.
-- Update or remove draft items and record cancellation approval after submission.
-- Notify clients in real time when items enter `READY` or `OUT_OF_STOCK`.
-- Add payment handoff and close the table session only after payment succeeds.
-- Add operational metrics for queue age and preparation duration.
+Connect to namespace `/operations` with `{ auth: { token: accessToken } }`. After
+authentication, listen for `operations.updated`. Each message contains `type`,
+`occurredAt`, the relevant `branchId` or `chainId`, and `data`. Clients should use
+the event as an invalidation signal and refetch the authoritative API resource;
+they must not treat the socket payload as a replacement database.

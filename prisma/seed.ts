@@ -155,6 +155,9 @@ async function createDemoOperationsData(): Promise<void> {
     ownerAssignment: '10000000-0000-4000-8000-000000000034',
     managerUser: '10000000-0000-4000-8000-000000000035',
     manager: '10000000-0000-4000-8000-000000000036',
+    shiftTemplate: '10000000-0000-4000-8000-000000000037',
+    waiterShiftAssignment: '10000000-0000-4000-8000-000000000038',
+    reservation: '10000000-0000-4000-8000-000000000039',
   } as const;
 
   const [waiterRole, kitchenRole, ownerRole, managerRole] = await Promise.all([
@@ -308,6 +311,38 @@ async function createDemoOperationsData(): Promise<void> {
     branchId: ids.branch,
     passwordHash,
   });
+
+  const workDate = new Date();
+  workDate.setUTCHours(0, 0, 0, 0);
+  const shiftTemplate = await prisma.shiftTemplate.upsert({
+    where: { id: ids.shiftTemplate },
+    update: { name: 'Ca sáng demo', startTime: '08:00', endTime: '16:00', isActive: true },
+    create: {
+      id: ids.shiftTemplate,
+      branchId: ids.branch,
+      name: 'Ca sáng demo',
+      startTime: '08:00',
+      endTime: '16:00',
+    },
+  });
+  const waiterShiftAssignment = await prisma.shiftAssignment.upsert({
+    where: { id: ids.waiterShiftAssignment },
+    update: {
+      workDate,
+      scheduledStart: new Date(workDate.getTime() + 60 * 60_000),
+      scheduledEnd: new Date(workDate.getTime() + 9 * 60 * 60_000),
+      status: 'SCHEDULED',
+    },
+    create: {
+      id: ids.waiterShiftAssignment,
+      branchId: ids.branch,
+      employeeId: ids.waiter,
+      shiftTemplateId: shiftTemplate.id,
+      workDate,
+      scheduledStart: new Date(workDate.getTime() + 60 * 60_000),
+      scheduledEnd: new Date(workDate.getTime() + 9 * 60 * 60_000),
+    },
+  });
   await prisma.user.upsert({
     where: { id: ids.ownerUser },
     update: {
@@ -368,14 +403,21 @@ async function createDemoOperationsData(): Promise<void> {
   await Promise.all([
     prisma.workSession.upsert({
       where: { id: ids.waiterWorkSession },
-      update: { status: 'ACTIVE', checkedInAt, checkedOutAt: null },
+      update: {
+        status: 'ACTIVE',
+        checkedInAt,
+        checkedOutAt: null,
+        shiftAssignmentId: waiterShiftAssignment.id,
+        isUnscheduled: false,
+      },
       create: {
         id: ids.waiterWorkSession,
         employeeId: ids.waiter,
         branchId: ids.branch,
         status: 'ACTIVE',
+        shiftAssignmentId: waiterShiftAssignment.id,
         checkedInAt,
-        isUnscheduled: true,
+        isUnscheduled: false,
         note: 'Ca demo cho Waiter',
       },
     }),
@@ -429,6 +471,44 @@ async function createDemoOperationsData(): Promise<void> {
       where: { id },
       update: { tableId, adjacentTableId },
       create: { id, branchId: ids.branch, tableId, adjacentTableId },
+    });
+  }
+
+  const reservationAt = new Date(Date.now() + 24 * 60 * 60_000);
+  reservationAt.setMinutes(0, 0, 0);
+  await prisma.reservation.upsert({
+    where: { id: ids.reservation },
+    update: {
+      reservationAt,
+      status: 'CONFIRMED',
+      tableId: ids.table3,
+      confirmedById: ids.manager,
+      confirmedAt: new Date(),
+    },
+    create: {
+      id: ids.reservation,
+      reservationCode: 'DEMO-RESERVATION-001',
+      branchId: ids.branch,
+      tableId: ids.table3,
+      confirmedById: ids.manager,
+      createdById: ids.manager,
+      updatedById: ids.manager,
+      guestName: 'Khách đặt bàn demo',
+      guestPhone: '0900000000',
+      partySize: 6,
+      reservationAt,
+      durationMinutes: 120,
+      status: 'CONFIRMED',
+      source: 'PHONE',
+      confirmedAt: new Date(),
+      note: 'Đặt bàn mẫu dùng hai bàn liền kề T03 và T04',
+    },
+  });
+  for (const tableId of [ids.table3, ids.table4]) {
+    await prisma.reservationTable.upsert({
+      where: { reservationId_tableId: { reservationId: ids.reservation, tableId } },
+      update: { releasedAt: null },
+      create: { reservationId: ids.reservation, tableId },
     });
   }
 

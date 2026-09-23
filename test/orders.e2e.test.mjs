@@ -14,12 +14,14 @@ describe('Waiter and Kitchen Staff operational flow', () => {
   const emails = {
     waiter: `flow-waiter-${suffix}@example.com`,
     kitchen: `flow-kitchen-${suffix}@example.com`,
+    manager: `flow-manager-${suffix}@example.com`,
   };
   let app,
     prisma,
     baseUrl,
     waiterToken,
     kitchenToken,
+    managerToken,
     branchId,
     chainId,
     planId,
@@ -96,13 +98,18 @@ describe('Waiter and Kitchen Staff operational flow', () => {
       },
     });
     branchId = branch.id;
-    const roles = await prisma.role.findMany({ where: { code: { in: ['WAITER', 'KITCHEN'] } } });
+    const roles = await prisma.role.findMany({
+      where: { code: { in: ['WAITER', 'KITCHEN', 'MANAGER'] } },
+    });
     const role = Object.fromEntries(roles.map((r) => [r.code, r.id]));
     const waiterUser = await prisma.user.create({
       data: { email: emails.waiter, passwordHash, roleId: role.WAITER },
     });
     const kitchenUser = await prisma.user.create({
       data: { email: emails.kitchen, passwordHash, roleId: role.KITCHEN },
+    });
+    const managerUser = await prisma.user.create({
+      data: { email: emails.manager, passwordHash, roleId: role.MANAGER },
     });
     const waiter = await prisma.employee.create({
       data: {
@@ -120,6 +127,15 @@ describe('Waiter and Kitchen Staff operational flow', () => {
         employeeCode: `K-${suffix}`.slice(0, 50),
         firstName: 'Flow',
         lastName: 'Kitchen',
+      },
+    });
+    await prisma.employee.create({
+      data: {
+        userId: managerUser.id,
+        branchId,
+        employeeCode: `M-${suffix}`.slice(0, 50),
+        firstName: 'Flow',
+        lastName: 'Manager',
       },
     });
     const table = await prisma.restaurantTable.create({
@@ -152,6 +168,7 @@ describe('Waiter and Kitchen Staff operational flow', () => {
     });
     waiterToken = await login(emails.waiter);
     kitchenToken = await login(emails.kitchen);
+    managerToken = await login(emails.manager);
     const order = await api('/waiter/orders', waiterToken, {
       method: 'POST',
       body: JSON.stringify({ tableSessionId: session.id }),
@@ -228,6 +245,7 @@ describe('Waiter and Kitchen Staff operational flow', () => {
   after(async () => {
     if (prisma && branchId) {
       await prisma.servingTask.deleteMany({ where: { branchId } });
+      await prisma.invoice.deleteMany({ where: { branchId } });
       await prisma.payment.deleteMany({ where: { tableSession: { branchId } } });
       await prisma.order.deleteMany({ where: { branchId } });
       await prisma.tableSession.deleteMany({ where: { branchId } });
@@ -285,19 +303,29 @@ describe('Waiter and Kitchen Staff operational flow', () => {
     assert.equal(order.body.status, 'SERVED');
   });
 
-  it('lets waiter inspect tables and complete the table-session payment', async () => {
+  it('lets waiter preview the bill and manager complete payment and issue the invoice', async () => {
     const tables = await api(`/branches/${branchId}/tables`, waiterToken);
     assert.equal(tables.response.status, 200);
     assert.ok(tables.body.some((table) => table.code === 'T-FLOW'));
 
-    const pending = await api(`/table-sessions/${tableSessionId}/payments`, waiterToken, {
+    const preview = await api(`/table-sessions/${tableSessionId}/bill-preview`, waiterToken);
+    assert.equal(preview.response.status, 200);
+    assert.equal(Number(preview.body.totalAmount), 100000);
+
+    const denied = await api(`/table-sessions/${tableSessionId}/payments`, waiterToken, {
+      method: 'POST',
+      body: JSON.stringify({ method: 'CASH', amount: 100000 }),
+    });
+    assert.equal(denied.response.status, 403);
+
+    const pending = await api(`/table-sessions/${tableSessionId}/payments`, managerToken, {
       method: 'POST',
       body: JSON.stringify({ method: 'CASH', amount: 100000 }),
     });
     assert.equal(pending.response.status, 201);
     assert.equal(pending.body.status, 'PENDING');
 
-    const confirmed = await api(`/payments/${pending.body.id}/confirm`, waiterToken, {
+    const confirmed = await api(`/payments/${pending.body.id}/confirm`, managerToken, {
       method: 'POST',
       body: JSON.stringify({}),
     });
@@ -312,5 +340,13 @@ describe('Waiter and Kitchen Staff operational flow', () => {
     assert.equal(session.paymentStatus, 'PAID');
     assert.equal(order.status, 'COMPLETED');
     assert.equal(order.paymentStatus, 'PAID');
+
+    const invoice = await api(`/table-sessions/${tableSessionId}/invoices`, managerToken, {
+      method: 'POST',
+      body: JSON.stringify({ customerName: 'Walk-in guest' }),
+    });
+    assert.equal(invoice.response.status, 201, JSON.stringify(invoice.body));
+    assert.equal(invoice.body.status, 'ISSUED');
+    assert.equal(invoice.body.items[0].itemName, 'Test Dish');
   });
 });

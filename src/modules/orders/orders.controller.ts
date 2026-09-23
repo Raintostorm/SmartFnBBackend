@@ -31,6 +31,7 @@ import {
   WaiterContextResponseDto,
 } from './dto/order-responses.dto.js';
 import { OrdersService } from './orders.service.js';
+import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
 
 @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
 @ApiTags('Waiter · Orders')
@@ -38,7 +39,10 @@ import { OrdersService } from './orders.service.js';
 @Roles(AppRole.WAITER)
 @Controller('waiter/orders')
 export class WaiterOrdersController {
-  constructor(private readonly service: OrdersService) {}
+  constructor(
+    private readonly service: OrdersService,
+    private readonly realtime: RealtimePublisher,
+  ) {}
   @Get('context/current')
   @ApiOperation({
     summary: 'Load the Waiter workspace',
@@ -57,8 +61,10 @@ export class WaiterOrdersController {
   })
   @ApiCreatedResponse({ type: OrderResponseDto })
   @ApiStandardMutationErrors({ notFound: 'Open table session was not found in the current branch' })
-  create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateOrderDto) {
-    return this.service.createOrder(user, dto);
+  async create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateOrderDto) {
+    const result = await this.service.createOrder(user, dto);
+    this.publish(user, 'order.created', { id: result.id, status: result.status });
+    return result;
   }
   @Get(':orderId')
   @ApiOperation({
@@ -84,12 +90,14 @@ export class WaiterOrdersController {
     notFound: 'Order was not found in the current branch',
     conflict: 'Order was submitted, item is unavailable, or remaining portions are insufficient',
   })
-  addItem(
+  async addItem(
     @CurrentUser() user: AuthenticatedUser,
     @Param('orderId', new ParseUUIDPipe()) id: string,
     @Body() dto: AddOrderItemDto,
   ) {
-    return this.service.addItem(user, id, dto);
+    const result = await this.service.addItem(user, id, dto);
+    this.publish(user, 'order.item-added', { id: result.id, orderId: result.orderId });
+    return result;
   }
   @Post(':orderId/submit')
   @ApiOperation({
@@ -103,11 +111,17 @@ export class WaiterOrdersController {
     notFound: 'Order was not found in the current branch',
     conflict: 'Order was already submitted or portions changed concurrently',
   })
-  submit(
+  async submit(
     @CurrentUser() user: AuthenticatedUser,
     @Param('orderId', new ParseUUIDPipe()) id: string,
   ) {
-    return this.service.submit(user, id);
+    const result = await this.service.submit(user, id);
+    this.publish(user, 'order.submitted', { id: result.id, status: result.status });
+    return result;
+  }
+
+  private publish(user: AuthenticatedUser, type: string, data: unknown) {
+    if (user.branchId) this.realtime.branch(user.branchId, type, data);
   }
 }
 
@@ -117,7 +131,10 @@ export class WaiterOrdersController {
 @Roles(AppRole.KITCHEN)
 @Controller('kitchen')
 export class KitchenController {
-  constructor(private readonly service: OrdersService) {}
+  constructor(
+    private readonly service: OrdersService,
+    private readonly realtime: RealtimePublisher,
+  ) {}
   @Get('queue')
   @ApiOperation({
     summary: 'List the Kitchen queue',
@@ -140,8 +157,13 @@ export class KitchenController {
     notFound: 'Order item was not found in the current branch',
     conflict: 'Item is no longer QUEUED or was updated concurrently',
   })
-  start(@CurrentUser() user: AuthenticatedUser, @Param('itemId', new ParseUUIDPipe()) id: string) {
-    return this.service.startItem(user, id);
+  async start(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('itemId', new ParseUUIDPipe()) id: string,
+  ) {
+    const result = await this.service.startItem(user, id);
+    this.publish(user, 'kitchen.item-started', { id: result.id, status: result.status });
+    return result;
   }
   @Post('items/:itemId/ready')
   @ApiOperation({
@@ -155,8 +177,13 @@ export class KitchenController {
     notFound: 'Order item was not found in the current branch',
     conflict: 'Item is no longer PREPARING or was updated concurrently',
   })
-  ready(@CurrentUser() user: AuthenticatedUser, @Param('itemId', new ParseUUIDPipe()) id: string) {
-    return this.service.readyItem(user, id);
+  async ready(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('itemId', new ParseUUIDPipe()) id: string,
+  ) {
+    const result = await this.service.readyItem(user, id);
+    this.publish(user, 'kitchen.item-ready', { id: result.id, status: result.status });
+    return result;
   }
   @Post('items/:itemId/unavailable')
   @ApiOperation({
@@ -170,12 +197,18 @@ export class KitchenController {
     notFound: 'Order item was not found in the current branch',
     conflict: 'Item can no longer be marked unavailable',
   })
-  unavailable(
+  async unavailable(
     @CurrentUser() user: AuthenticatedUser,
     @Param('itemId', new ParseUUIDPipe()) id: string,
     @Body() dto: UnavailableItemDto,
   ) {
-    return this.service.unavailableItem(user, id, dto.reason);
+    const result = await this.service.unavailableItem(user, id, dto.reason);
+    this.publish(user, 'kitchen.item-unavailable', { id: result.id, status: result.status });
+    return result;
+  }
+
+  private publish(user: AuthenticatedUser, type: string, data: unknown) {
+    if (user.branchId) this.realtime.branch(user.branchId, type, data);
   }
 }
 
@@ -185,7 +218,10 @@ export class KitchenController {
 @Roles(AppRole.WAITER)
 @Controller('waiter/serving-tasks')
 export class ServingTasksController {
-  constructor(private readonly service: OrdersService) {}
+  constructor(
+    private readonly service: OrdersService,
+    private readonly realtime: RealtimePublisher,
+  ) {}
   @Get()
   @ApiOperation({
     summary: 'List serving tasks',
@@ -207,8 +243,13 @@ export class ServingTasksController {
   @ApiStandardMutationErrors({
     conflict: 'Task is unavailable, already claimed, or the previous claim has not expired',
   })
-  claim(@CurrentUser() user: AuthenticatedUser, @Param('taskId', new ParseUUIDPipe()) id: string) {
-    return this.service.claimTask(user, id);
+  async claim(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('taskId', new ParseUUIDPipe()) id: string,
+  ) {
+    const result = await this.service.claimTask(user, id);
+    this.publish(user, 'serving-task.claimed', { id: result.id, status: result.status });
+    return result;
   }
   @Post(':taskId/serve')
   @ApiOperation({
@@ -222,7 +263,16 @@ export class ServingTasksController {
     notFound: 'Serving task was not found in the current branch',
     conflict: 'Task is not claimed by the current Waiter',
   })
-  serve(@CurrentUser() user: AuthenticatedUser, @Param('taskId', new ParseUUIDPipe()) id: string) {
-    return this.service.serveTask(user, id);
+  async serve(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('taskId', new ParseUUIDPipe()) id: string,
+  ) {
+    const result = await this.service.serveTask(user, id);
+    this.publish(user, 'serving-task.served', { id: result.id, status: result.status });
+    return result;
+  }
+
+  private publish(user: AuthenticatedUser, type: string, data: unknown) {
+    if (user.branchId) this.realtime.branch(user.branchId, type, data);
   }
 }

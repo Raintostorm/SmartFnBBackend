@@ -15,6 +15,13 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
   const operationsMaxPageSize = Number(config.OPERATIONS_MAX_PAGE_SIZE ?? 100);
   const operationsMaxItemsPerOrder = Number(config.OPERATIONS_MAX_ITEMS_PER_ORDER ?? 50);
   const servingTaskClaimTimeoutSeconds = Number(config.SERVING_TASK_CLAIM_TIMEOUT_SECONDS ?? 300);
+  const invoiceNumberPrefix = String(config.INVOICE_NUMBER_PREFIX ?? 'INV').trim();
+  const realtimeEnabledValue = String(config.REALTIME_ENABLED ?? 'true').toLowerCase();
+  const realtimePath = `/${String(config.REALTIME_PATH ?? 'socket.io').replace(/^\/+|\/+$/g, '')}`;
+  const realtimeCorsOrigins = String(config.REALTIME_CORS_ORIGINS ?? '*')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
 
   if (!validEnvironments.has(nodeEnv)) {
     throw new Error('NODE_ENV must be development, test, or production.');
@@ -67,6 +74,17 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
   if (operationsDefaultPageSize > operationsMaxPageSize) {
     throw new Error('OPERATIONS_DEFAULT_PAGE_SIZE must not exceed OPERATIONS_MAX_PAGE_SIZE.');
   }
+  if (!/^[A-Z0-9-]{1,12}$/.test(invoiceNumberPrefix)) {
+    throw new Error(
+      'INVOICE_NUMBER_PREFIX must contain 1-12 uppercase letters, numbers, or dashes.',
+    );
+  }
+  if (realtimeEnabledValue !== 'true' && realtimeEnabledValue !== 'false') {
+    throw new Error('REALTIME_ENABLED must be true or false.');
+  }
+  if (realtimeCorsOrigins.length === 0) {
+    throw new Error('REALTIME_CORS_ORIGINS must contain at least one origin or *.');
+  }
 
   return {
     ...config,
@@ -86,5 +104,9 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
     OPERATIONS_MAX_PAGE_SIZE: operationsMaxPageSize,
     OPERATIONS_MAX_ITEMS_PER_ORDER: operationsMaxItemsPerOrder,
     SERVING_TASK_CLAIM_TIMEOUT_SECONDS: servingTaskClaimTimeoutSeconds,
+    INVOICE_NUMBER_PREFIX: invoiceNumberPrefix,
+    REALTIME_ENABLED: realtimeEnabledValue === 'true',
+    REALTIME_PATH: realtimePath,
+    REALTIME_CORS_ORIGINS: realtimeCorsOrigins,
   };
 }

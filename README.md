@@ -127,6 +127,7 @@ Data dictionary đầy đủ (từng bảng, cột, lý do tồn tại và khóa
 - `employees`: hồ sơ nhân viên; liên kết 1–1 với User và thuộc một Branch.
 - `restaurant_tables`: bàn ăn theo từng chi nhánh.
 - `reservations`: lịch đặt bàn theo thông tin khách vãng lai.
+- `reservation_tables`: phân bổ một hoặc nhiều bàn liền kề cho lịch đặt trước.
 - `menu_categories`, `menu_items`: danh mục và món ăn dùng chung ở cấp chuỗi.
 - `orders`, `order_items`: đơn hàng và snapshot món tại thời điểm đặt.
 - `table_sessions`, `table_session_tables`: phiên phục vụ tại bàn; một phiên có thể
@@ -136,7 +137,10 @@ Data dictionary đầy đủ (từng bảng, cột, lý do tồn tại và khóa
 - `serving_tasks`: hàng đợi món đã sẵn sàng, hỗ trợ Waiter nhận việc và xác nhận đã phục vụ.
 - `work_sessions`: phiên làm việc thực tế; dùng để giới hạn thông báo thời gian thực cho
   Waiter/Kitchen Staff đang trong ca.
+- `shift_templates`, `shift_assignments`: mẫu ca và lịch phân công nhân viên theo ngày.
 - `payments`: các lần thanh toán hoặc hoàn tiền của đơn hàng.
+- `invoices`, `invoice_items`, `invoice_payments`: snapshot bill nội bộ bất biến sau
+  thanh toán, giữ đúng tên món/giá và phân bổ payment tại thời điểm in.
 - `vouchers`: voucher toàn chuỗi hoặc giới hạn theo chi nhánh.
 - `attendances`: chấm công theo nhân viên, chi nhánh và ngày làm việc.
 
@@ -156,6 +160,26 @@ Khi món sẵn sàng, hệ thống tạo đúng một `serving_task`; Waiter nh�
 first-claim-wins và xác nhận `SERVED`. Trạng thái sẵn bán và số phần còn lại được quản
 lý riêng theo chi nhánh trong `branch_menu_items`, không sửa trực tiếp menu gốc.
 
+### Bill, thanh toán và in giấy theo V7
+
+- Waiter dùng `GET /api/v1/table-sessions/:id/bill-preview` để cho khách xem bill tạm
+  ngay trên tablet; Waiter không được tạo hoặc xác nhận payment.
+- Manager/Cashier tạo payment/QR và xác nhận payment thành công.
+- Sau khi phiên bàn đã `PAID`, Manager/Cashier phát hành snapshot bằng
+  `POST /api/v1/table-sessions/:id/invoices` và lấy dữ liệu in trình duyệt tại
+  `GET /api/v1/invoices/:id/print`.
+- Đây là bill nội bộ phục vụ máy in nhiệt qua trình duyệt, không phải hóa đơn điện tử
+  hợp pháp và không tích hợp trực tiếp driver máy in.
+
+### Realtime
+
+Socket.IO namespace `/operations` phát sự kiện `operations.updated` theo phòng
+`branch:<id>` hoặc `chain:<id>`. Client kết nối bằng access token tại
+`auth.token`; server xác thực cả token và session trước khi cho vào phòng. Các sự
+kiện hiện bao phủ order, Kitchen, serving task, bàn, payment, invoice, reservation,
+ca làm và branding. Cấu hình bằng `REALTIME_ENABLED`, `REALTIME_PATH` và
+`REALTIME_CORS_ORIGINS`; production phải dùng danh sách origin cụ thể thay vì `*`.
+
 ### Dữ liệu demo Waiter và Kitchen Staff
 
 Để có dữ liệu kiểm tra trong PostgreSQL/pgAdmin, cấu hình local:
@@ -168,8 +192,9 @@ SEED_DEMO_PASSWORD=your_local_demo_password
 Sau đó chạy `pnpm prisma:seed`. Seed có thể chạy lại nhiều lần mà không nhân đôi dữ liệu.
 Mật khẩu phải dài tối thiểu 12 ký tự và có chữ hoa, chữ thường, chữ số. Seed tạo
 chi nhánh, khu vực, bốn bàn và quan hệ liền kề, menu/tồn món, một Owner, một Manager,
-một Waiter, một Kitchen Staff, hai ca đang hoạt động, một phiên bàn, một order,
-hai order item, một serving task và một payment đang chờ. Các tài khoản demo là:
+một Waiter, một Kitchen Staff, mẫu ca/phân ca, hai ca đang hoạt động, một đặt bàn
+đã xác nhận với hai bàn liền kề, một phiên bàn, một order, hai order item, một
+serving task và một payment đang chờ. Các tài khoản demo là:
 
 - `owner.demo@smartfnb.local`
 - `manager.demo@smartfnb.local`

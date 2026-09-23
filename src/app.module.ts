@@ -18,6 +18,9 @@ import { UsersModule } from './modules/users/users.module.js';
 import { VouchersModule } from './modules/vouchers/vouchers.module.js';
 import { PlatformAdminModule } from './modules/platform-admin/platform-admin.module.js';
 import { ReportsModule } from './modules/reports/reports.module.js';
+import { InvoicesModule } from './modules/invoices/invoices.module.js';
+import { BrandingModule } from './modules/branding/branding.module.js';
+import { RealtimeModule } from './realtime/realtime.module.js';
 
 @Module({
   imports: [
@@ -37,6 +40,9 @@ import { ReportsModule } from './modules/reports/reports.module.js';
     MenuModule,
     OrdersModule,
     PaymentsModule,
+    InvoicesModule,
+    BrandingModule,
+    RealtimeModule,
     VouchersModule,
     AttendanceModule,
     PlatformAdminModule,
