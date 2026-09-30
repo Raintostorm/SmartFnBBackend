@@ -47,6 +47,7 @@ const INTERNAL_BRANCH_ROLES = [
   AppRole.WAITER,
   AppRole.KITCHEN,
   AppRole.CASHIER,
+  AppRole.BARISTA,
 ];
 
 @Roles(...INTERNAL_BRANCH_ROLES)
@@ -252,10 +253,10 @@ export class BranchesController {
     return this.branchesService.updateArea(branchId, areaId, dto, user);
   }
 
-  @Roles(AppRole.OWNER, AppRole.MANAGER, AppRole.KITCHEN)
+  @Roles(AppRole.OWNER, AppRole.MANAGER, AppRole.KITCHEN, AppRole.BARISTA)
   @Patch(':branchId/areas/:areaId/status')
   @ApiOperation({
-    summary: 'Change area status (OWNER, assigned MANAGER, or assigned KITCHEN for kitchen/bar)',
+    summary: 'Change area status (OWNER, assigned MANAGER, or assigned BARISTA for kitchen/bar)',
   })
   @ApiParam({ name: 'branchId', format: 'uuid' })
   @ApiParam({ name: 'areaId', format: 'uuid' })

@@ -41,11 +41,20 @@
 - [`reservation_tables`](#reservation-tables) — Bảng nối cho phép một đặt bàn giữ nhiều bàn liền kề.
 - [`menu_categories`](#menu-categories) — Nhóm món của một chi nhánh.
 - [`menu_items`](#menu-items) — Thông tin món và giá niêm yết.
+- [`menu_option_groups`](#menu-option-groups) —
+- [`menu_options`](#menu-options) —
+- [`menu_item_option_groups`](#menu-item-option-groups) —
+- [`branch_menu_options`](#branch-menu-options) —
 - [`branch_menu_items`](#branch-menu-items) — Khả năng bán và số phần còn lại của món tại chi nhánh.
 - [`orders`](#orders) — Một lần gọi món trong table session; một phiên có thể có nhiều order.
+- [`branch_daily_sequences`](#branch-daily-sequences) —
 - [`order_items`](#order-items) — Snapshot từng món tại thời điểm gọi và trạng thái xử lý bếp/phục vụ.
+- [`order_item_units`](#order-item-units) —
 - [`payments`](#payments) — Một lần thử hoặc hoàn tất thanh toán cho order hoặc table session.
+- [`payment_webhook_events`](#payment-webhook-events) —
 - [`invoices`](#invoices) — Snapshot bill nội bộ bất biến được phát hành sau khi thanh toán đủ.
+- [`print_jobs`](#print-jobs) —
+- [`customer_display_sessions`](#customer-display-sessions) —
 - [`invoice_items`](#invoice-items) — Snapshot từng dòng món tại thời điểm phát hành bill.
 - [`invoice_payments`](#invoice-payments) — Phân bổ các payment thành công vào bill đã phát hành.
 - [`vouchers`](#vouchers) — Khuyến mãi áp dụng toàn chuỗi hoặc một chi nhánh.
@@ -731,6 +740,82 @@ Thông tin món và giá niêm yết.
 
 - `categoryId` → `menu_categories.id` (xóa: `Restrict`).
 
+## `menu_option_groups`
+
+
+
+| Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
+| --- | --- | --- | --- | --- | --- |
+| `id` | `id` | `String` | Không | PK; default: uuid() | Khóa chính UUID. |
+| `chain_id` | `chainId` | `String` | Không | — | Chuỗi nhà hàng sở hữu chi nhánh. |
+| `name` | `name` | `String` | Không | — | Tên hiển thị. |
+| `code` | `code` | `String` | Không | — | Mã nghiệp vụ ngắn, ổn định và dễ tra cứu. |
+| `is_required` | `isRequired` | `Boolean` | Không | default: false | is required của MenuOptionGroup. |
+| `min_selections` | `minSelections` | `Int` | Không | default: 0 | min selections của MenuOptionGroup. |
+| `max_selections` | `maxSelections` | `Int` | Không | default: 1 | max selections của MenuOptionGroup. |
+| `display_order` | `displayOrder` | `Int` | Không | default: 0 | Thứ tự hiển thị trong menu. |
+| `is_active` | `isActive` | `Boolean` | Không | default: true | Cờ bật/tắt nghiệp vụ mà không xóa dữ liệu. |
+| `created_at` | `createdAt` | `DateTime` | Không | default: now() | Thời điểm tạo bản ghi. |
+| `updated_at` | `updatedAt` | `DateTime` | Không | — | Thời điểm cập nhật gần nhất. |
+
+**Quan hệ**
+
+- `chainId` → `restaurant_chains.id` (xóa: `Cascade`).
+
+## `menu_options`
+
+
+
+| Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
+| --- | --- | --- | --- | --- | --- |
+| `id` | `id` | `String` | Không | PK; default: uuid() | Khóa chính UUID. |
+| `group_id` | `groupId` | `String` | Không | — | group id của MenuOption. |
+| `name` | `name` | `String` | Không | — | Tên hiển thị. |
+| `code` | `code` | `String` | Không | — | Mã nghiệp vụ ngắn, ổn định và dễ tra cứu. |
+| `price_delta` | `priceDelta` | `Decimal` | Không | default: 0 | price delta của MenuOption. |
+| `display_order` | `displayOrder` | `Int` | Không | default: 0 | Thứ tự hiển thị trong menu. |
+| `is_active` | `isActive` | `Boolean` | Không | default: true | Cờ bật/tắt nghiệp vụ mà không xóa dữ liệu. |
+| `created_at` | `createdAt` | `DateTime` | Không | default: now() | Thời điểm tạo bản ghi. |
+| `updated_at` | `updatedAt` | `DateTime` | Không | — | Thời điểm cập nhật gần nhất. |
+
+**Quan hệ**
+
+- `groupId` → `menu_option_groups.id` (xóa: `Cascade`).
+
+## `menu_item_option_groups`
+
+
+
+| Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
+| --- | --- | --- | --- | --- | --- |
+| `menu_item_id` | `menuItemId` | `String` | Không | — | Món trong menu liên quan. |
+| `group_id` | `groupId` | `String` | Không | — | group id của MenuItemOptionGroup. |
+| `display_order` | `displayOrder` | `Int` | Không | default: 0 | Thứ tự hiển thị trong menu. |
+
+**Quan hệ**
+
+- `menuItemId` → `menu_items.id` (xóa: `Cascade`).
+- `groupId` → `menu_option_groups.id` (xóa: `Cascade`).
+
+## `branch_menu_options`
+
+
+
+| Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
+| --- | --- | --- | --- | --- | --- |
+| `branch_id` | `branchId` | `String` | Không | — | Chi nhánh sở hữu hoặc xử lý bản ghi. |
+| `option_id` | `optionId` | `String` | Không | — | option id của BranchMenuOption. |
+| `is_available` | `isAvailable` | `Boolean` | Không | default: true | Cho biết món hiện có thể bán hay không. |
+| `updated_by_id` | `updatedById` | `String` | Có | — | Nhân viên cập nhật gần nhất. |
+| `created_at` | `createdAt` | `DateTime` | Không | default: now() | Thời điểm tạo bản ghi. |
+| `updated_at` | `updatedAt` | `DateTime` | Không | — | Thời điểm cập nhật gần nhất. |
+
+**Quan hệ**
+
+- `branchId` → `branches.id` (xóa: `Cascade`).
+- `optionId` → `menu_options.id` (xóa: `Cascade`).
+- `updatedById` → `employees.id` (xóa: `SetNull`).
+
 ## `branch_menu_items`
 
 Khả năng bán và số phần còn lại của món tại chi nhánh.
@@ -766,6 +851,8 @@ Một lần gọi món trong table session; một phiên có thể có nhiều o
 | `waiter_id` | `waiterId` | `String` | Có | — | Waiter phụ trách theo cấu trúc cũ, được giữ để tương thích. |
 | `table_session_id` | `tableSessionId` | `String` | Có | — | Phiên phục vụ tại bàn liên quan. |
 | `created_by_waiter_id` | `createdByWaiterId` | `String` | Có | — | Waiter thực sự ghi nhận lần gọi món. |
+| `created_by_cashier_id` | `createdByCashierId` | `String` | Có | — | created by cashier id của Order. |
+| `delivered_by_id` | `deliveredById` | `String` | Có | — | delivered by id của Order. |
 | `voucher_id` | `voucherId` | `String` | Có | — | Voucher được áp dụng. |
 | `type` | `type` | `OrderType` | Không | default: DINE_IN | Loại nghiệp vụ của bản ghi. |
 | `status` | `status` | `OrderStatus` | Không | default: PENDING | Trạng thái vòng đời hiện tại. |
@@ -779,6 +866,11 @@ Một lần gọi món trong table session; một phiên có thể có nhiều o
 | `placed_at` | `placedAt` | `DateTime` | Không | default: now() | Thời điểm tạo order. |
 | `submitted_at` | `submittedAt` | `DateTime` | Có | — | Thời điểm gửi order xuống bếp. |
 | `completed_at` | `completedAt` | `DateTime` | Có | — | Thời điểm hoàn tất. |
+| `paid_at` | `paidAt` | `DateTime` | Có | — | Thời điểm hệ thống xác nhận đã thanh toán. |
+| `ready_at` | `readyAt` | `DateTime` | Có | — | Thời điểm món sẵn sàng để bưng. |
+| `delivered_at` | `deliveredAt` | `DateTime` | Có | — | delivered at của Order. |
+| `business_date` | `businessDate` | `DateTime` | Có | — | business date của Order. |
+| `call_number` | `callNumber` | `Int` | Có | — | call number của Order. |
 | `cancelled_at` | `cancelledAt` | `DateTime` | Có | — | Thời điểm hủy. |
 | `created_at` | `createdAt` | `DateTime` | Không | default: now() | Thời điểm tạo bản ghi. |
 | `updated_at` | `updatedAt` | `DateTime` | Không | — | Thời điểm cập nhật gần nhất. |
@@ -791,7 +883,24 @@ Một lần gọi món trong table session; một phiên có thể có nhiều o
 - `waiterId` → `employees.id` (xóa: `SetNull`).
 - `tableSessionId` → `table_sessions.id` (xóa: `Restrict`).
 - `createdByWaiterId` → `employees.id` (xóa: `SetNull`).
+- `createdByCashierId` → `employees.id` (xóa: `SetNull`).
+- `deliveredById` → `employees.id` (xóa: `SetNull`).
 - `voucherId` → `vouchers.id` (xóa: `SetNull`).
+
+## `branch_daily_sequences`
+
+
+
+| Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
+| --- | --- | --- | --- | --- | --- |
+| `branch_id` | `branchId` | `String` | Không | — | Chi nhánh sở hữu hoặc xử lý bản ghi. |
+| `business_date` | `businessDate` | `DateTime` | Không | — | business date của BranchDailySequence. |
+| `next_number` | `nextNumber` | `Int` | Không | default: 1 | next number của BranchDailySequence. |
+| `updated_at` | `updatedAt` | `DateTime` | Không | — | Thời điểm cập nhật gần nhất. |
+
+**Quan hệ**
+
+- `branchId` → `branches.id` (xóa: `Cascade`).
 
 ## `order_items`
 
@@ -836,6 +945,29 @@ Snapshot từng món tại thời điểm gọi và trạng thái xử lý bếp
 - `completedByKitchenId` → `employees.id` (xóa: `SetNull`).
 - `cancelledById` → `employees.id` (xóa: `SetNull`).
 
+## `order_item_units`
+
+
+
+| Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
+| --- | --- | --- | --- | --- | --- |
+| `id` | `id` | `String` | Không | PK; default: uuid() | Khóa chính UUID. |
+| `order_item_id` | `orderItemId` | `String` | Không | — | Món trong order liên quan. |
+| `sequence` | `sequence` | `Int` | Không | — | sequence của OrderItemUnit. |
+| `status` | `status` | `OrderItemStatus` | Không | default: PENDING | Trạng thái vòng đời hiện tại. |
+| `started_at` | `startedAt` | `DateTime` | Có | — | Thời điểm Kitchen Staff bắt đầu chế biến. |
+| `completed_at` | `completedAt` | `DateTime` | Có | — | Thời điểm hoàn tất. |
+| `started_by_id` | `startedById` | `String` | Có | — | started by id của OrderItemUnit. |
+| `completed_by_id` | `completedById` | `String` | Có | — | completed by id của OrderItemUnit. |
+| `created_at` | `createdAt` | `DateTime` | Không | default: now() | Thời điểm tạo bản ghi. |
+| `updated_at` | `updatedAt` | `DateTime` | Không | — | Thời điểm cập nhật gần nhất. |
+
+**Quan hệ**
+
+- `orderItemId` → `order_items.id` (xóa: `Cascade`).
+- `startedById` → `employees.id` (xóa: `SetNull`).
+- `completedById` → `employees.id` (xóa: `SetNull`).
+
 ## `payments`
 
 Một lần thử hoặc hoàn tất thanh toán cho order hoặc table session.
@@ -850,7 +982,16 @@ Một lần thử hoặc hoàn tất thanh toán cho order hoặc table session.
 | `method` | `method` | `PaymentMethod` | Không | — | Phương thức thanh toán. |
 | `status` | `status` | `PaymentStatus` | Không | default: PENDING | Trạng thái vòng đời hiện tại. |
 | `amount` | `amount` | `Decimal` | Không | — | Số tiền của giao dịch. |
+| `tendered_amount` | `tenderedAmount` | `Decimal` | Có | — | tendered amount của Payment. |
+| `change_amount` | `changeAmount` | `Decimal` | Có | — | change amount của Payment. |
 | `transaction_ref` | `transactionRef` | `String` | Có | — | Mã tham chiếu từ cổng thanh toán. |
+| `provider` | `provider` | `PaymentProvider` | Không | default: MANUAL | provider của Payment. |
+| `provider_order_code` | `providerOrderCode` | `String` | Có | UNIQUE | provider order code của Payment. |
+| `provider_transaction_id` | `providerTransactionId` | `String` | Có | — | provider transaction id của Payment. |
+| `checkout_url` | `checkoutUrl` | `String` | Có | — | checkout url của Payment. |
+| `qr_code` | `qrCode` | `String` | Có | — | qr code của Payment. |
+| `expires_at` | `expiresAt` | `DateTime` | Có | — | Thời điểm dữ liệu hoặc token hết hiệu lực. |
+| `confirmed_at` | `confirmedAt` | `DateTime` | Có | — | Thời điểm đặt bàn được xác nhận. |
 | `paid_at` | `paidAt` | `DateTime` | Có | — | Thời điểm hệ thống xác nhận đã thanh toán. |
 | `failure_reason` | `failureReason` | `String` | Có | — | Lý do giao dịch thất bại. |
 | `note` | `note` | `String` | Có | — | Ghi chú nghiệp vụ tự do. |
@@ -863,6 +1004,28 @@ Một lần thử hoặc hoàn tất thanh toán cho order hoặc table session.
 - `tableSessionId` → `table_sessions.id` (xóa: `Restrict`).
 - `processedById` → `employees.id` (xóa: `SetNull`).
 
+## `payment_webhook_events`
+
+
+
+| Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
+| --- | --- | --- | --- | --- | --- |
+| `id` | `id` | `String` | Không | PK; default: uuid() | Khóa chính UUID. |
+| `payment_id` | `paymentId` | `String` | Có | — | payment id của PaymentWebhookEvent. |
+| `provider` | `provider` | `PaymentProvider` | Không | — | provider của PaymentWebhookEvent. |
+| `idempotency_key` | `idempotencyKey` | `String` | Không | — | idempotency key của PaymentWebhookEvent. |
+| `provider_order_code` | `providerOrderCode` | `String` | Có | — | provider order code của PaymentWebhookEvent. |
+| `signature_valid` | `signatureValid` | `Boolean` | Không | default: false | signature valid của PaymentWebhookEvent. |
+| `status` | `status` | `WebhookProcessingStatus` | Không | default: RECEIVED | Trạng thái vòng đời hiện tại. |
+| `payload` | `payload` | `Json` | Không | — | payload của PaymentWebhookEvent. |
+| `error_message` | `errorMessage` | `String` | Có | — | error message của PaymentWebhookEvent. |
+| `received_at` | `receivedAt` | `DateTime` | Không | default: now() | received at của PaymentWebhookEvent. |
+| `processed_at` | `processedAt` | `DateTime` | Có | — | processed at của PaymentWebhookEvent. |
+
+**Quan hệ**
+
+- `paymentId` → `payments.id` (xóa: `SetNull`).
+
 ## `invoices`
 
 Snapshot bill nội bộ bất biến được phát hành sau khi thanh toán đủ.
@@ -873,7 +1036,8 @@ Snapshot bill nội bộ bất biến được phát hành sau khi thanh toán �
 | `invoice_number` | `invoiceNumber` | `String` | Không | UNIQUE | invoice number của Invoice. |
 | `chain_id` | `chainId` | `String` | Không | — | Chuỗi nhà hàng sở hữu chi nhánh. |
 | `branch_id` | `branchId` | `String` | Không | — | Chi nhánh sở hữu hoặc xử lý bản ghi. |
-| `table_session_id` | `tableSessionId` | `String` | Không | — | Phiên phục vụ tại bàn liên quan. |
+| `table_session_id` | `tableSessionId` | `String` | Có | — | Phiên phục vụ tại bàn liên quan. |
+| `order_id` | `orderId` | `String` | Có | UNIQUE | Order chứa bản ghi. |
 | `status` | `status` | `InvoiceStatus` | Không | default: ISSUED | Trạng thái vòng đời hiện tại. |
 | `currency` | `currency` | `String` | Không | default: "VND" | Mã tiền tệ ISO dùng cho giá và thanh toán. |
 | `subtotal` | `subtotal` | `Decimal` | Không | — | Tổng tiền trước giảm giá, thuế và phí. |
@@ -906,9 +1070,52 @@ Snapshot bill nội bộ bất biến được phát hành sau khi thanh toán �
 - `chainId` → `restaurant_chains.id` (xóa: `Restrict`).
 - `branchId` → `branches.id` (xóa: `Restrict`).
 - `tableSessionId` → `table_sessions.id` (xóa: `Restrict`).
+- `orderId` → `orders.id` (xóa: `Restrict`).
 - `issuedById` → `employees.id` (xóa: `Restrict`).
 - `cancelledById` → `employees.id` (xóa: `SetNull`).
 - `replacementInvoiceId` → `invoices.id` (xóa: `SetNull`).
+
+## `print_jobs`
+
+
+
+| Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
+| --- | --- | --- | --- | --- | --- |
+| `id` | `id` | `String` | Không | PK; default: uuid() | Khóa chính UUID. |
+| `order_id` | `orderId` | `String` | Không | — | Order chứa bản ghi. |
+| `branch_id` | `branchId` | `String` | Không | — | Chi nhánh sở hữu hoặc xử lý bản ghi. |
+| `type` | `type` | `PrintDocumentType` | Không | — | Loại nghiệp vụ của bản ghi. |
+| `printed_by_id` | `printedById` | `String` | Không | — | printed by id của PrintJob. |
+| `is_reprint` | `isReprint` | `Boolean` | Không | default: false | is reprint của PrintJob. |
+| `reason` | `reason` | `String` | Có | — | reason của PrintJob. |
+| `printed_at` | `printedAt` | `DateTime` | Không | default: now() | printed at của PrintJob. |
+
+**Quan hệ**
+
+- `orderId` → `orders.id` (xóa: `Cascade`).
+- `branchId` → `branches.id` (xóa: `Restrict`).
+- `printedById` → `employees.id` (xóa: `Restrict`).
+
+## `customer_display_sessions`
+
+
+
+| Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
+| --- | --- | --- | --- | --- | --- |
+| `id` | `id` | `String` | Không | PK; default: uuid() | Khóa chính UUID. |
+| `branch_id` | `branchId` | `String` | Không | — | Chi nhánh sở hữu hoặc xử lý bản ghi. |
+| `token_hash` | `tokenHash` | `String` | Không | UNIQUE | token hash của CustomerDisplaySession. |
+| `active_order_id` | `activeOrderId` | `String` | Có | — | active order id của CustomerDisplaySession. |
+| `device_name` | `deviceName` | `String` | Có | — | device name của CustomerDisplaySession. |
+| `expires_at` | `expiresAt` | `DateTime` | Không | — | Thời điểm dữ liệu hoặc token hết hiệu lực. |
+| `revoked_at` | `revokedAt` | `DateTime` | Có | — | Thời điểm phiên đăng nhập bị thu hồi. |
+| `created_at` | `createdAt` | `DateTime` | Không | default: now() | Thời điểm tạo bản ghi. |
+| `updated_at` | `updatedAt` | `DateTime` | Không | — | Thời điểm cập nhật gần nhất. |
+
+**Quan hệ**
+
+- `branchId` → `branches.id` (xóa: `Cascade`).
+- `activeOrderId` → `orders.id` (xóa: `SetNull`).
 
 ## `invoice_items`
 
@@ -1115,4 +1322,3 @@ Task bưng món được tạo khi Kitchen Staff đánh dấu món READY.
 - `guest_count > 0`; `remaining_portions >= 0` hoặc null.
 - Một bàn không được khai báo liền kề với chính nó.
 - `payments` phải trỏ đúng một payable (`order_id` XOR `table_session_id`).
-

@@ -17,10 +17,10 @@ export function configureSwagger(app: INestApplication): void {
       [
         'REST API for the Smart F&B Chain Platform.',
         '',
-        '## Waiter and Kitchen Staff flow',
-        '1. A waiter creates an order, adds items, and submits it.',
-        '2. Kitchen staff process submitted items through the kitchen queue.',
-        '3. Ready items create serving tasks that waiters claim and complete.',
+        '## V8 counter-service flow',
+        '1. A cashier creates and finalizes a counter order.',
+        '2. Cash or a verified payment queues the order and assigns a daily call number.',
+        '3. Baristas prepare individual cups or portions, then hand over the complete order.',
         '',
         'Protected endpoints require the access token returned by `POST /api/v1/auth/login`.',
       ].join('\n'),
@@ -29,6 +29,10 @@ export function configureSwagger(app: INestApplication): void {
     .addTag('Waiter · Orders', 'Table context and the waiter order lifecycle.')
     .addTag('Kitchen · Queue', 'Kitchen queue and food-preparation state transitions.')
     .addTag('Waiter · Serving', 'Ready-item handoff from kitchen staff to waiters.')
+    .addTag('Cashier · Orders', 'Counter POS drafts, menu options, and order finalization.')
+    .addTag('Cashier · Payments', 'Prepaid counter-order payment processing.')
+    .addTag('Barista · Queue', 'Paid preparation queue and per-unit progress.')
+    .addTag('Barista · Availability', 'Branch-level menu item and option availability.')
     .addTag('Tables', 'Branch floor plan, table status, and merge adjacency configuration.')
     .addTag('Payments', 'Branch payment history and table-session payment processing.')
     .addBearerAuth(

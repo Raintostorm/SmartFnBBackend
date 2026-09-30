@@ -20,6 +20,7 @@ const roles = [
   ['WAITER', 'Waiter', 'Nhân viên phục vụ'],
   ['KITCHEN', 'Kitchen Staff', 'Nhân viên bếp'],
   ['CASHIER', 'Cashier', 'Nhân viên thu ngân'],
+  ['BARISTA', 'Barista', 'Nhân viên pha chế'],
 ] as const;
 
 const legacyRoleCodes = [
@@ -158,14 +159,27 @@ async function createDemoOperationsData(): Promise<void> {
     shiftTemplate: '10000000-0000-4000-8000-000000000037',
     waiterShiftAssignment: '10000000-0000-4000-8000-000000000038',
     reservation: '10000000-0000-4000-8000-000000000039',
+    cashierUser: '10000000-0000-4000-8000-000000000040',
+    cashier: '10000000-0000-4000-8000-000000000041',
+    baristaUser: '10000000-0000-4000-8000-000000000042',
+    barista: '10000000-0000-4000-8000-000000000043',
+    sizeGroup: '10000000-0000-4000-8000-000000000044',
+    sizeM: '10000000-0000-4000-8000-000000000045',
+    sizeL: '10000000-0000-4000-8000-000000000046',
+    sugarGroup: '10000000-0000-4000-8000-000000000047',
+    sugarNormal: '10000000-0000-4000-8000-000000000048',
+    sugarLess: '10000000-0000-4000-8000-000000000049',
   } as const;
 
-  const [waiterRole, kitchenRole, ownerRole, managerRole] = await Promise.all([
-    prisma.role.findUniqueOrThrow({ where: { code: 'WAITER' } }),
-    prisma.role.findUniqueOrThrow({ where: { code: 'KITCHEN' } }),
-    prisma.role.findUniqueOrThrow({ where: { code: 'OWNER' } }),
-    prisma.role.findUniqueOrThrow({ where: { code: 'MANAGER' } }),
-  ]);
+  const [waiterRole, kitchenRole, ownerRole, managerRole, cashierRole, baristaRole] =
+    await Promise.all([
+      prisma.role.findUniqueOrThrow({ where: { code: 'WAITER' } }),
+      prisma.role.findUniqueOrThrow({ where: { code: 'KITCHEN' } }),
+      prisma.role.findUniqueOrThrow({ where: { code: 'OWNER' } }),
+      prisma.role.findUniqueOrThrow({ where: { code: 'MANAGER' } }),
+      prisma.role.findUniqueOrThrow({ where: { code: 'CASHIER' } }),
+      prisma.role.findUniqueOrThrow({ where: { code: 'BARISTA' } }),
+    ]);
   const passwordHash = await hash(password, {
     type: argon2id,
     memoryCost: 19_456,
@@ -308,6 +322,30 @@ async function createDemoOperationsData(): Promise<void> {
     lastName: 'Phục vụ',
     jobTitle: 'Waiter',
     roleId: waiterRole.id,
+    branchId: ids.branch,
+    passwordHash,
+  });
+  await upsertDemoEmployee({
+    userId: ids.cashierUser,
+    employeeId: ids.cashier,
+    email: 'cashier.demo@smartfnb.local',
+    employeeCode: 'DEMO-CASHIER-01',
+    firstName: 'Lan',
+    lastName: 'Thu ngân',
+    jobTitle: 'Cashier',
+    roleId: cashierRole.id,
+    branchId: ids.branch,
+    passwordHash,
+  });
+  await upsertDemoEmployee({
+    userId: ids.baristaUser,
+    employeeId: ids.barista,
+    email: 'barista.demo@smartfnb.local',
+    employeeCode: 'DEMO-BARISTA-01',
+    firstName: 'An',
+    lastName: 'Pha chế',
+    jobTitle: 'Barista',
+    roleId: baristaRole.id,
     branchId: ids.branch,
     passwordHash,
   });
@@ -541,6 +579,62 @@ async function createDemoOperationsData(): Promise<void> {
     });
   }
 
+  const sizeGroup = await prisma.menuOptionGroup.upsert({
+    where: { id: ids.sizeGroup },
+    update: { name: 'Kích cỡ', isRequired: true, minSelections: 1, maxSelections: 1 },
+    create: {
+      id: ids.sizeGroup,
+      chainId: ids.chain,
+      code: 'SIZE',
+      name: 'Kích cỡ',
+      isRequired: true,
+      minSelections: 1,
+      maxSelections: 1,
+    },
+  });
+  const sugarGroup = await prisma.menuOptionGroup.upsert({
+    where: { id: ids.sugarGroup },
+    update: { name: 'Mức đường', isRequired: true, minSelections: 1, maxSelections: 1 },
+    create: {
+      id: ids.sugarGroup,
+      chainId: ids.chain,
+      code: 'SUGAR',
+      name: 'Mức đường',
+      isRequired: true,
+      minSelections: 1,
+      maxSelections: 1,
+      displayOrder: 1,
+    },
+  });
+  const optionSeeds = [
+    [ids.sizeM, sizeGroup.id, 'M', 'M', 0, 0],
+    [ids.sizeL, sizeGroup.id, 'L', 'L', 10000, 1],
+    [ids.sugarNormal, sugarGroup.id, '100% đường', 'SUGAR_100', 0, 0],
+    [ids.sugarLess, sugarGroup.id, '50% đường', 'SUGAR_50', 0, 1],
+  ] as const;
+  for (const [id, groupId, name, code, priceDelta, displayOrder] of optionSeeds) {
+    await prisma.menuOption.upsert({
+      where: { id },
+      update: { name, priceDelta, displayOrder, isActive: true },
+      create: { id, groupId, name, code, priceDelta, displayOrder },
+    });
+    await prisma.branchMenuOption.upsert({
+      where: { branchId_optionId: { branchId: ids.branch, optionId: id } },
+      update: { isAvailable: true, updatedById: ids.barista },
+      create: { branchId: ids.branch, optionId: id, isAvailable: true, updatedById: ids.barista },
+    });
+  }
+  for (const [groupId, displayOrder] of [
+    [sizeGroup.id, 0],
+    [sugarGroup.id, 1],
+  ] as const) {
+    await prisma.menuItemOptionGroup.upsert({
+      where: { menuItemId_groupId: { menuItemId: ids.itemDrink, groupId } },
+      update: { displayOrder },
+      create: { menuItemId: ids.itemDrink, groupId, displayOrder },
+    });
+  }
+
   await prisma.tableSession.upsert({
     where: { id: ids.tableSession },
     update: { status: 'SERVING', guestCount: 2 },
@@ -649,6 +743,8 @@ async function createDemoOperationsData(): Promise<void> {
   console.info('Demo operations data seeded.');
   console.info('Waiter: waiter.demo@smartfnb.local');
   console.info('Kitchen Staff: kitchen.demo@smartfnb.local');
+  console.info('Cashier: cashier.demo@smartfnb.local');
+  console.info('Barista: barista.demo@smartfnb.local');
   console.info('Owner: owner.demo@smartfnb.local');
   console.info('Manager: manager.demo@smartfnb.local');
 }
