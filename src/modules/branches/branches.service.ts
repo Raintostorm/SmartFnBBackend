@@ -486,9 +486,10 @@ export class BranchesService {
     if (
       user.role !== AppRole.OWNER &&
       user.role !== AppRole.MANAGER &&
-      user.role !== AppRole.KITCHEN
+      user.role !== AppRole.KITCHEN &&
+      user.role !== AppRole.BARISTA
     ) {
-      throw new ForbiddenException('Only OWNER, MANAGER, or KITCHEN can change area status');
+      throw new ForbiddenException('Only OWNER, MANAGER, or BARISTA can change area status');
     }
 
     if (user.role === AppRole.MANAGER) {
@@ -499,11 +500,11 @@ export class BranchesService {
     const area = await this.ensureAreaInBranch(branchId, areaId);
 
     if (
-      user.role === AppRole.KITCHEN &&
+      (user.role === AppRole.KITCHEN || user.role === AppRole.BARISTA) &&
       area.type !== BranchAreaType.KITCHEN &&
       area.type !== BranchAreaType.BAR
     ) {
-      throw new ForbiddenException('KITCHEN can only change KITCHEN or BAR area status');
+      throw new ForbiddenException('BARISTA can only change KITCHEN or BAR area status');
     }
 
     return this.prisma.branchArea.update({
@@ -773,6 +774,7 @@ export class BranchesService {
       case AppRole.WAITER:
         return [BranchAreaType.DINING, BranchAreaType.PICKUP];
       case AppRole.KITCHEN:
+      case AppRole.BARISTA:
         return [BranchAreaType.KITCHEN, BranchAreaType.BAR];
       case AppRole.CASHIER:
         return [BranchAreaType.CASHIER, BranchAreaType.PICKUP];

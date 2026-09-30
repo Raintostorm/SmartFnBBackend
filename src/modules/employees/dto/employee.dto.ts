@@ -25,7 +25,7 @@ export class ListEmployeesQueryDto {
   @ApiPropertyOptional({ enum: STAFF_ROLES, enumName: 'StaffRole' })
   @IsOptional()
   @IsIn(STAFF_ROLES)
-  role?: AppRole.MANAGER | AppRole.WAITER | AppRole.KITCHEN | AppRole.CASHIER;
+  role?: AppRole.MANAGER | AppRole.WAITER | AppRole.KITCHEN | AppRole.CASHIER | AppRole.BARISTA;
 
   @ApiPropertyOptional({ enum: UserStatus, enumName: 'UserStatus' })
   @IsOptional()
