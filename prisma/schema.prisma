@@ -347,9 +347,24 @@ model RestaurantChain {
   wallet                  BusinessWallet?
   invoices                Invoice[]
   menuOptionGroups        MenuOptionGroup[]
+  payosChannel            PayosChannel?
 
   @@index([status])
   @@map("restaurant_chains")
+}
+
+model PayosChannel {
+  id                String   @id @default(uuid()) @db.Uuid
+  chainId           String   @unique @map("chain_id") @db.Uuid
+  clientIdCipher    String   @map("client_id_cipher") @db.Text
+  apiKeyCipher      String   @map("api_key_cipher") @db.Text
+  checksumKeyCipher String   @map("checksum_key_cipher") @db.Text
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  chain RestaurantChain @relation(fields: [chainId], references: [id], onDelete: Cascade)
+
+  @@map("payos_channels")
 }
 
 model Branch {
@@ -1338,6 +1353,7 @@ model PosStation {
   status            PosStationStatus      @default(ACTIVE)
   printerConnection PrinterConnectionType @default(NONE) @map("printer_connection")
   printerAddress    String?               @map("printer_address") @db.VarChar(255)
+  cartVersion       Int                   @default(0) @map("cart_version")
   createdAt         DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt         DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -1351,12 +1367,13 @@ model PosStation {
 }
 
 model PairingCode {
-  id         String            @id @default(uuid()) @db.Uuid
-  codeHash   String            @unique @map("code_hash") @db.VarChar(64)
-  deviceType DisplayDeviceType @map("device_type")
-  expiresAt  DateTime          @map("expires_at") @db.Timestamptz(6)
-  consumedAt DateTime?         @map("consumed_at") @db.Timestamptz(6)
-  createdAt  DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  id              String            @id @default(uuid()) @db.Uuid
+  codeHash        String            @unique @map("code_hash") @db.VarChar(64)
+  deviceTokenHash String?           @map("device_token_hash") @db.VarChar(64)
+  deviceType      DisplayDeviceType @map("device_type")
+  expiresAt       DateTime          @map("expires_at") @db.Timestamptz(6)
+  consumedAt      DateTime?         @map("consumed_at") @db.Timestamptz(6)
+  createdAt       DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
 
   @@index([expiresAt, consumedAt])
   @@map("pairing_codes")

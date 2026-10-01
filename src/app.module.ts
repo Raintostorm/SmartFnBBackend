@@ -22,6 +22,7 @@ import { InvoicesModule } from './modules/invoices/invoices.module.js';
 import { BrandingModule } from './modules/branding/branding.module.js';
 import { RealtimeModule } from './realtime/realtime.module.js';
 import { CounterOperationsModule } from './modules/counter-operations/counter-operations.module.js';
+import { PayosModule } from './modules/payos/payos.module.js';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { CounterOperationsModule } from './modules/counter-operations/counter-op
     MenuModule,
     OrdersModule,
     CounterOperationsModule,
+    PayosModule,
     PaymentsModule,
     InvoicesModule,
     BrandingModule,

@@ -12,6 +12,8 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { Roles } from '../auth/decorators/roles.decorator.js';
 import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
 import { CounterOperationsService } from './counter-operations.service.js';
+import { CreatePayosPaymentDto } from '../payos/dto/payos-payment.dto.js';
+import { PayosPaymentService } from '../payos/payos-payment.service.js';
 import {
   AddCounterOrderItemDto,
   AvailabilityDto,
@@ -32,6 +34,7 @@ export class CashierController {
   constructor(
     private readonly service: CounterOperationsService,
     private readonly realtime: RealtimePublisher,
+    private readonly payosPayments: PayosPaymentService,
   ) {}
 
   @Get('context')
@@ -47,7 +50,9 @@ export class CashierController {
   }
 
   @Post('checkout')
-  @ApiOperation({ summary: 'Validate a local cart and create one immutable order awaiting payment' })
+  @ApiOperation({
+    summary: 'Validate a local cart and create one immutable order awaiting payment',
+  })
   checkout(@CurrentUser() user: AuthenticatedUser, @Body() dto: CheckoutCounterOrderDto) {
     return this.service.checkout(user, dto);
   }
@@ -60,7 +65,10 @@ export class CashierController {
 
   @Get('orders/:orderId/receipt')
   @ApiOperation({ summary: 'Get immutable receipt and queue-ticket data for browser printing' })
-  receipt(@CurrentUser() user: AuthenticatedUser, @Param('orderId', new ParseUUIDPipe()) id: string) {
+  receipt(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('orderId', new ParseUUIDPipe()) id: string,
+  ) {
     return this.service.receipt(user, id);
   }
 
@@ -107,6 +115,19 @@ export class CashierController {
     return result;
   }
 
+  @Patch('orders/:orderId/items/:itemId')
+  @ApiOperation({ summary: 'Replace an item while the order remains editable' })
+  async updateItem(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('orderId', new ParseUUIDPipe()) orderId: string,
+    @Param('itemId', new ParseUUIDPipe()) itemId: string,
+    @Body() dto: AddCounterOrderItemDto,
+  ) {
+    const result = await this.service.updateItem(user, orderId, itemId, dto);
+    this.publish(user, 'cashier.order.updated', { orderId });
+    return result;
+  }
+
   @Post('orders/:orderId/finalize')
   @ApiOperation({ summary: 'Lock an order for payment' })
   finalize(
@@ -133,6 +154,17 @@ export class CashierController {
       callNumber: result.order.callNumber,
     });
     return result;
+  }
+
+  @Post('orders/:orderId/payments/payos')
+  @ApiTags('Cashier · Payments')
+  @ApiOperation({ summary: 'Create or reuse a PayOS QR payment for a finalized order' })
+  payos(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('orderId', new ParseUUIDPipe()) id: string,
+    @Body() dto: CreatePayosPaymentDto,
+  ) {
+    return this.payosPayments.create(user, id, dto);
   }
 
   @Post('orders/:orderId/cancel')
@@ -164,7 +196,7 @@ export class BaristaController {
   @Get('context')
   @ApiOperation({ summary: 'Load branch menu and availability for the barista station' })
   context(@CurrentUser() user: AuthenticatedUser) {
-    return this.service.cashierContext(user);
+    return this.service.baristaContext(user);
   }
 
   @Get('queue')
@@ -179,15 +211,25 @@ export class BaristaController {
     return this.service.baristaReadyOrders(user);
   }
 
-
   @Post('batches/start')
   @ApiOperation({ summary: 'Atomically claim and start all units in one suggested batch' })
-  async startBatch(
+  async startBatch(@CurrentUser() user: AuthenticatedUser, @Body() dto: StartPreparationBatchDto) {
+    const result = await this.service.startBatch(user, dto.unitIds);
+    this.publish(user, 'preparation.batch.started', { unitIds: dto.unitIds });
+    return result;
+  }
+
+  @Post('batches/complete')
+  @ApiOperation({ summary: 'Complete all units in a batch claimed by the current barista' })
+  async completeBatch(
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: StartPreparationBatchDto,
   ) {
-    const result = await this.service.startBatch(user, dto.unitIds);
-    this.publish(user, 'preparation.batch.started', { unitIds: dto.unitIds });
+    const result = await this.service.completeBatch(user, dto.unitIds);
+    this.publish(user, 'preparation.batch.completed', result);
+    for (const order of result.readyOrders) {
+      this.publishCallingDisplay(user, 'calling.order.ready', order);
+    }
     return result;
   }
 
@@ -210,6 +252,25 @@ export class BaristaController {
   ) {
     const result = await this.service.completeUnit(user, id);
     this.publish(user, 'preparation.item.completed', { unitId: id });
+    if (result.orderItem.order.status === 'READY') {
+      this.publishCallingDisplay(user, 'calling.order.ready', {
+        id: result.orderItem.order.id,
+        orderCode: result.orderItem.order.orderCode,
+        callNumber: result.orderItem.order.callNumber,
+        readyAt: result.orderItem.order.readyAt,
+      });
+    }
+    return result;
+  }
+
+  @Post('units/:unitId/undo')
+  @ApiOperation({ summary: 'Undo a recent preparation status change by the current barista' })
+  async undo(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('unitId', new ParseUUIDPipe()) id: string,
+  ) {
+    const result = await this.service.undoUnit(user, id);
+    this.publish(user, 'preparation.item.undone', { unitId: id, status: result.status });
     return result;
   }
 
@@ -221,6 +282,11 @@ export class BaristaController {
   ) {
     const result = await this.service.deliverOrder(user, id);
     this.publish(user, 'preparation.order.delivered', { orderId: id });
+    this.publishCallingDisplay(user, 'calling.order.delivered', {
+      id: result.id,
+      orderCode: result.orderCode,
+      callNumber: result.callNumber,
+    });
     return result;
   }
 
@@ -233,6 +299,13 @@ export class BaristaController {
   ) {
     const result = await this.service.setMenuItemAvailability(user, id, dto);
     this.publish(user, 'menu.availability.changed', result);
+    if (result.affectedOrderIds.length) {
+      this.publish(user, 'manager.order.attention-required', {
+        reason: 'ITEM_OUT_OF_STOCK',
+        menuItemId: id,
+        orderIds: result.affectedOrderIds,
+      });
+    }
     return result;
   }
 
@@ -245,10 +318,21 @@ export class BaristaController {
   ) {
     const result = await this.service.setOptionAvailability(user, id, dto);
     this.publish(user, 'menu.availability.changed', result);
+    if (result.affectedOrderIds.length) {
+      this.publish(user, 'manager.order.attention-required', {
+        reason: 'OPTION_OUT_OF_STOCK',
+        optionId: id,
+        orderIds: result.affectedOrderIds,
+      });
+    }
     return result;
   }
 
   private publish(user: AuthenticatedUser, type: string, data: unknown) {
     if (user.branchId) this.realtime.branch(user.branchId, type, data);
+  }
+
+  private publishCallingDisplay(user: AuthenticatedUser, type: string, data: unknown) {
+    if (user.branchId) this.realtime.callingDisplay(user.branchId, type, data);
   }
 }

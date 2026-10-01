@@ -1,0 +1,2 @@
+ALTER TABLE "pos_stations"
+ADD COLUMN "cart_version" INTEGER NOT NULL DEFAULT 0;

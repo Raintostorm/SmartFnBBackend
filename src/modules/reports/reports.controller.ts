@@ -35,7 +35,7 @@ export class ReportsController {
     summary: 'Compare revenue across branches over one period',
     description:
       'One row per branch — revenue, orders, average order value, and guests — so the branches ' +
-      'render on a single chart. Revenue counts COMPLETED orders by placedAt.',
+      'render on a single chart. Revenue counts paid orders by paidAt.',
   })
   @ApiOkResponse({ description: 'Per-branch revenue comparison' })
   compareBranches(@CurrentUser() user: AuthenticatedUser, @Query() query: ReportRangeQueryDto) {

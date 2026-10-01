@@ -1,12 +1,14 @@
 import { Module } from '@nestjs/common';
 import { RealtimeModule } from '../../realtime/realtime.module.js';
+import { BranchesModule } from '../branches/branches.module.js';
 import { BaristaController, CashierController } from './counter-operations.controller.js';
 import { CounterOperationsService } from './counter-operations.service.js';
 import { StationsController } from './stations.controller.js';
 import { StationsService } from './stations.service.js';
+import { PayosModule } from '../payos/payos.module.js';
 
 @Module({
-  imports: [RealtimeModule],
+  imports: [RealtimeModule, BranchesModule, PayosModule],
   controllers: [CashierController, BaristaController, StationsController],
   providers: [CounterOperationsService, StationsService],
   exports: [CounterOperationsService],

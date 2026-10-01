@@ -1,0 +1,251 @@
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
+import {
+  OrderItemStatus,
+  OrderPaymentStatus,
+  OrderStatus,
+  OrderType,
+  PaymentMethod,
+  PaymentProvider,
+  PaymentStatus,
+  Prisma,
+  WebhookProcessingStatus,
+} from '../../generated/prisma/client.js';
+import { PrismaService } from '../../database/prisma.service.js';
+import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
+import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
+import { BranchAccessService } from '../branches/branch-access.service.js';
+import type { CreatePayosPaymentDto } from './dto/payos-payment.dto.js';
+import { PayosApiService } from './payos-api.service.js';
+import { PayosCipherService } from './payos-cipher.service.js';
+import { verifyPayosSignature } from './payos-signature.js';
+
+interface PayosWebhook {
+  code?: string;
+  success?: boolean;
+  signature?: string;
+  data?: Record<string, unknown> & {
+    orderCode?: number;
+    amount?: number;
+    reference?: string;
+    paymentLinkId?: string;
+  };
+}
+
+@Injectable()
+export class PayosPaymentService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly branchAccess: BranchAccessService,
+    private readonly cipher: PayosCipherService,
+    private readonly api: PayosApiService,
+    private readonly realtime: RealtimePublisher,
+  ) {}
+
+  async create(user: AuthenticatedUser, orderId: string, dto: CreatePayosPaymentDto) {
+    if (!user.employeeId || !user.branchId)
+      throw new ForbiddenException('An assigned employee profile is required');
+    await this.branchAccess.assertSubscriptionAllowsWrite(user.branchId);
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, branchId: user.branchId, type: OrderType.COUNTER_PICKUP },
+      include: { branch: { select: { chainId: true } }, payments: true },
+    });
+    if (!order) throw new NotFoundException('Counter order was not found in your branch');
+    if (order.status !== OrderStatus.CONFIRMED || order.paymentStatus !== OrderPaymentStatus.UNPAID)
+      throw new ConflictException('Order is not awaiting payment');
+    const pending = order.payments.find(
+      (item) => item.provider === PaymentProvider.PAYOS && item.status === PaymentStatus.PENDING,
+    );
+    if (pending?.checkoutUrl) return pending;
+
+    const channel = await this.prisma.payosChannel.findUnique({
+      where: { chainId: order.branch.chainId },
+    });
+    if (!channel) throw new ConflictException('PayOS has not been configured for this chain');
+    if (!new Prisma.Decimal(order.totalAmount).isInteger())
+      throw new BadRequestException('PayOS payment amount must be a whole VND value');
+
+    const providerOrderCode = Number(`${Date.now()}${Math.floor(Math.random() * 90 + 10)}`);
+    const result = await this.api.createPayment(
+      {
+        clientId: this.cipher.decrypt(channel.clientIdCipher),
+        apiKey: this.cipher.decrypt(channel.apiKeyCipher),
+        checksumKey: this.cipher.decrypt(channel.checksumKeyCipher),
+      },
+      {
+        orderCode: providerOrderCode,
+        amount: new Prisma.Decimal(order.totalAmount).toNumber(),
+        description: `DH ${order.orderCode}`.slice(0, 25),
+        cancelUrl: dto.cancelUrl,
+        returnUrl: dto.returnUrl,
+      },
+    );
+    return this.prisma.payment.create({
+      data: {
+        paymentCode: `PAY-${Date.now()}-${crypto.randomUUID().slice(0, 6).toUpperCase()}`,
+        orderId,
+        processedById: user.employeeId,
+        method: PaymentMethod.BANK_TRANSFER,
+        provider: PaymentProvider.PAYOS,
+        status: PaymentStatus.PENDING,
+        amount: order.totalAmount,
+        providerOrderCode: String(providerOrderCode),
+        transactionRef: result.paymentLinkId,
+        checkoutUrl: result.checkoutUrl,
+        qrCode: result.qrCode,
+      },
+    });
+  }
+
+  async webhook(payload: PayosWebhook) {
+    const data = payload.data;
+    const signature = payload.signature;
+    if (!data?.orderCode || !signature) throw new UnauthorizedException('Invalid PayOS webhook');
+    const payment = await this.prisma.payment.findUnique({
+      where: { providerOrderCode: String(data.orderCode) },
+      include: { order: { include: { branch: { select: { chainId: true } } } } },
+    });
+    if (!payment?.order) throw new NotFoundException('PayOS payment was not found');
+    const channel = await this.prisma.payosChannel.findUniqueOrThrow({
+      where: { chainId: payment.order.branch.chainId },
+    });
+    if (!verifyPayosSignature(data, signature, this.cipher.decrypt(channel.checksumKeyCipher)))
+      throw new UnauthorizedException('Invalid PayOS signature');
+
+    const idempotencyKey = `${data.orderCode}:${data.reference || data.paymentLinkId || signature}`;
+    const result = await this.prisma.$transaction(
+      async (tx) => {
+        const existing = await tx.paymentWebhookEvent.findUnique({
+          where: { provider_idempotencyKey: { provider: PaymentProvider.PAYOS, idempotencyKey } },
+        });
+        if (existing) return { duplicate: true, paid: payment.status === PaymentStatus.SUCCESS };
+        const event = await tx.paymentWebhookEvent.create({
+          data: {
+            paymentId: payment.id,
+            provider: PaymentProvider.PAYOS,
+            idempotencyKey,
+            providerOrderCode: String(data.orderCode),
+            signatureValid: true,
+            payload: payload as Prisma.InputJsonValue,
+          },
+        });
+        if (payload.code !== '00' || payload.success !== true) {
+          await tx.paymentWebhookEvent.update({
+            where: { id: event.id },
+            data: { status: WebhookProcessingStatus.REJECTED, processedAt: new Date() },
+          });
+          return { duplicate: false, paid: false };
+        }
+        if (!new Prisma.Decimal(data.amount ?? -1).equals(payment.amount)) {
+          await tx.paymentWebhookEvent.update({
+            where: { id: event.id },
+            data: {
+              status: WebhookProcessingStatus.REJECTED,
+              errorMessage: 'PayOS amount does not match the order',
+              processedAt: new Date(),
+            },
+          });
+          return { duplicate: false, paid: false };
+        }
+
+        const current = await tx.payment.findUniqueOrThrow({ where: { id: payment.id } });
+        if (current.status === PaymentStatus.SUCCESS) {
+          await tx.paymentWebhookEvent.update({
+            where: { id: event.id },
+            data: { status: WebhookProcessingStatus.PROCESSED, processedAt: new Date() },
+          });
+          return { duplicate: true, paid: true };
+        }
+        const order = await tx.order.findUniqueOrThrow({
+          where: { id: payment.orderId! },
+          include: { items: true, branch: { select: { timezone: true } } },
+        });
+        if (
+          order.paymentStatus !== OrderPaymentStatus.UNPAID ||
+          order.status !== OrderStatus.CONFIRMED
+        )
+          throw new ConflictException('Order is no longer awaiting payment');
+        const now = new Date();
+        const businessDate = this.businessDate(order.branch.timezone);
+        const sequence = await tx.branchDailySequence.upsert({
+          where: { branchId_businessDate: { branchId: order.branchId, businessDate } },
+          create: { branchId: order.branchId, businessDate, nextNumber: 1 },
+          update: { nextNumber: { increment: 1 } },
+        });
+        await tx.payment.update({
+          where: { id: payment.id },
+          data: {
+            status: PaymentStatus.SUCCESS,
+            providerTransactionId: data.reference,
+            confirmedAt: now,
+            paidAt: now,
+          },
+        });
+        for (const item of order.items) {
+          await tx.orderItem.update({
+            where: { id: item.id },
+            data: {
+              status: OrderItemStatus.QUEUED,
+              queuedAt: now,
+              units: {
+                create: Array.from({ length: item.quantity }, (_, index) => ({
+                  sequence: index + 1,
+                  status: OrderItemStatus.QUEUED,
+                })),
+              },
+            },
+          });
+        }
+        await tx.order.update({
+          where: { id: order.id },
+          data: {
+            status: OrderStatus.SUBMITTED,
+            paymentStatus: OrderPaymentStatus.PAID,
+            paidAt: now,
+            submittedAt: now,
+            businessDate,
+            callNumber: sequence.nextNumber,
+          },
+        });
+        await tx.paymentWebhookEvent.update({
+          where: { id: event.id },
+          data: { status: WebhookProcessingStatus.PROCESSED, processedAt: now },
+        });
+        return {
+          duplicate: false,
+          paid: true,
+          branchId: order.branchId,
+          callNumber: sequence.nextNumber,
+        };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+    if ('branchId' in result && result.branchId) {
+      this.realtime.branch(result.branchId, 'payment.confirmed', {
+        orderId: payment.orderId,
+        callNumber: result.callNumber,
+      });
+      this.realtime.branch(result.branchId, 'preparation.order.queued', {
+        orderId: payment.orderId,
+        callNumber: result.callNumber,
+      });
+    }
+    return { success: true };
+  }
+
+  private businessDate(timezone: string) {
+    const date = new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
+    return new Date(`${date}T00:00:00.000Z`);
+  }
+}

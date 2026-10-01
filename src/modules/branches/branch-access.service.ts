@@ -26,10 +26,6 @@ export class BranchAccessService {
           chain: {
             deletedAt: null,
             status: RestaurantChainStatus.ACTIVE,
-            subscription: {
-              status: BusinessSubscriptionStatus.ACTIVE,
-              expiresAt: { gt: new Date() },
-            },
           },
         },
         select: { chainId: true },
@@ -57,6 +53,23 @@ export class BranchAccessService {
         chain: {
           deletedAt: null,
           status: RestaurantChainStatus.ACTIVE,
+        },
+      },
+    });
+    if (activeBranch === 0) {
+      throw new ForbiddenException('The assigned branch is not active');
+    }
+    return [user.branchId];
+  }
+
+  async assertSubscriptionAllowsWrite(branchId: string): Promise<void> {
+    const activeSubscription = await this.prisma.branch.count({
+      where: {
+        id: branchId,
+        deletedAt: null,
+        chain: {
+          deletedAt: null,
+          status: RestaurantChainStatus.ACTIVE,
           subscription: {
             status: BusinessSubscriptionStatus.ACTIVE,
             expiresAt: { gt: new Date() },
@@ -64,10 +77,11 @@ export class BranchAccessService {
         },
       },
     });
-    if (activeBranch === 0) {
-      throw new ForbiddenException('The business subscription is not active');
+    if (!activeSubscription) {
+      throw new ForbiddenException(
+        'The business subscription is read-only; renew it before making this change',
+      );
     }
-    return [user.branchId];
   }
 
   async assertCanAccessBranch(user: AuthenticatedUser, branchId: string): Promise<void> {
@@ -88,22 +102,38 @@ export class BranchAccessService {
     if (user.role !== AppRole.OWNER || !user.ownerId) {
       throw new ForbiddenException('Only an assigned OWNER can manage this chain');
     }
+    await this.assertCanAccessChain(user, chainId);
+    const writableChain = await this.prisma.restaurantChain.count({
+      where: {
+        id: chainId,
+        deletedAt: null,
+        status: RestaurantChainStatus.ACTIVE,
+        subscription: {
+          status: BusinessSubscriptionStatus.ACTIVE,
+          expiresAt: { gt: new Date() },
+        },
+      },
+    });
+    if (!writableChain) {
+      throw new ForbiddenException(
+        'The business subscription is read-only; renew it before making this change',
+      );
+    }
+  }
+
+  async assertCanAccessChain(user: AuthenticatedUser, chainId: string): Promise<void> {
+    if (user.role !== AppRole.OWNER || !user.ownerId) {
+      throw new ForbiddenException('Only an assigned OWNER can access this chain');
+    }
     const assignmentCount = await this.prisma.ownerChainAssignment.count({
       where: {
         ownerId: user.ownerId,
         chainId,
-        chain: {
-          deletedAt: null,
-          status: RestaurantChainStatus.ACTIVE,
-          subscription: {
-            status: BusinessSubscriptionStatus.ACTIVE,
-            expiresAt: { gt: new Date() },
-          },
-        },
+        chain: { deletedAt: null, status: RestaurantChainStatus.ACTIVE },
       },
     });
-    if (assignmentCount === 0) {
-      throw new ForbiddenException('OWNER can only manage an assigned restaurant chain');
+    if (!assignmentCount) {
+      throw new ForbiddenException('OWNER can only access an assigned restaurant chain');
     }
   }
 }

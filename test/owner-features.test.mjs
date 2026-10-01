@@ -417,6 +417,19 @@ describe('Report range validation', () => {
       (error) => error?.getStatus?.() === 403,
     );
   });
+
+  it('counts paid counter orders even before they are delivered', () => {
+    const from = new Date('2026-09-01T00:00:00.000Z');
+    const to = new Date('2026-10-01T00:00:00.000Z');
+    assert.deepEqual(
+      service.completedOrdersWhere({ branchIds: ['branch-id'], from, to }),
+      {
+        branchId: { in: ['branch-id'] },
+        paymentStatus: 'PAID',
+        paidAt: { gte: from, lt: to },
+      },
+    );
+  });
 });
 
 describe('Report chart buckets', () => {

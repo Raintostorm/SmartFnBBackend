@@ -163,11 +163,20 @@ describe('BranchesService role scopes', () => {
 
 describe('BranchAccessService owner and manager scopes', () => {
   it('limits a MANAGER to exactly its Employee.branchId', async () => {
-    const service = new BranchAccessService({ branch: { count: async () => 1 } });
+    let branchFilter;
+    const service = new BranchAccessService({
+      branch: {
+        count: async ({ where }) => {
+          branchFilter = where;
+          return 1;
+        },
+      },
+    });
     const branchIds = await service.getAccessibleBranchIds(
       authenticatedUser(AppRole.MANAGER, 'branch-one'),
     );
     assert.deepEqual(branchIds, ['branch-one']);
+    assert.equal(branchFilter.chain.subscription, undefined);
   });
 
   it('gives an OWNER every branch in its assigned chains', async () => {
@@ -204,6 +213,14 @@ describe('BranchAccessService owner and manager scopes', () => {
     await assert.rejects(
       service.getAccessibleBranchIds(authenticatedUser(AppRole.ADMIN)),
       (error) => error?.getStatus?.() === 403,
+    );
+  });
+
+  it('blocks writes but not reads when the subscription is inactive', async () => {
+    const service = new BranchAccessService({ branch: { count: async () => 0 } });
+    await assert.rejects(
+      service.assertSubscriptionAllowsWrite('branch-one'),
+      (error) => error?.getStatus?.() === 403 && /read-only/.test(error.message),
     );
   });
 });

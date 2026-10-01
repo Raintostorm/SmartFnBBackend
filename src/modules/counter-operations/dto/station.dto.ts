@@ -42,3 +42,16 @@ export class PairCustomerDisplayDto {
   @MaxLength(150)
   deviceName?: string;
 }
+
+export class PairCallingDisplayDto {
+  @ApiProperty({ minLength: 6, maxLength: 6 })
+  @IsString()
+  @Length(6, 6)
+  code!: string;
+
+  @ApiPropertyOptional({ maxLength: 150 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  deviceName?: string;
+}

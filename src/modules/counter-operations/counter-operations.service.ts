@@ -18,6 +18,7 @@ import {
 } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
+import { BranchAccessService } from '../branches/branch-access.service.js';
 import type {
   AddCounterOrderItemDto,
   AvailabilityDto,
@@ -36,7 +37,10 @@ const counterOrderInclude = {
 
 @Injectable()
 export class CounterOperationsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly branchAccess: BranchAccessService,
+  ) {}
 
   private employee(user: AuthenticatedUser) {
     if (!user.employeeId || !user.branchId) {
@@ -96,8 +100,32 @@ export class CounterOperationsService {
     return { branch, menuItems };
   }
 
-  createDraft(user: AuthenticatedUser, dto: CreateCounterOrderDto) {
+  async baristaContext(user: AuthenticatedUser) {
+    const context = await this.cashierContext(user);
+    return {
+      branch: context.branch,
+      menuItems: context.menuItems.map(({ menuItem, ...availability }) => {
+        const { price: _price, costPrice: _costPrice, ...menuItemWithoutPrices } = menuItem;
+        return {
+          ...availability,
+          menuItem: {
+            ...menuItemWithoutPrices,
+            optionGroups: menuItem.optionGroups.map(({ group, ...link }) => ({
+              ...link,
+              group: {
+                ...group,
+                options: group.options.map(({ priceDelta: _priceDelta, ...option }) => option),
+              },
+            })),
+          },
+        };
+      }),
+    };
+  }
+
+  async createDraft(user: AuthenticatedUser, dto: CreateCounterOrderDto) {
     const actor = this.employee(user);
+    await this.branchAccess.assertSubscriptionAllowsWrite(actor.branchId);
     return this.prisma.order.create({
       data: {
         orderCode: `CTR-${Date.now()}-${crypto.randomUUID().slice(0, 6).toUpperCase()}`,
@@ -112,6 +140,7 @@ export class CounterOperationsService {
 
   async checkout(user: AuthenticatedUser, dto: CheckoutCounterOrderDto) {
     const actor = this.employee(user);
+    await this.branchAccess.assertSubscriptionAllowsWrite(actor.branchId);
     if (!dto.items.length) throw new BadRequestException('Cannot checkout an empty cart');
 
     return this.prisma.$transaction(async (tx) => {
@@ -165,6 +194,7 @@ export class CounterOperationsService {
 
   async addItem(user: AuthenticatedUser, orderId: string, dto: AddCounterOrderItemDto) {
     const actor = this.employee(user);
+    await this.branchAccess.assertSubscriptionAllowsWrite(actor.branchId);
     return this.prisma.$transaction(async (tx) => {
       const order = await tx.order.findFirst({
         where: { id: orderId, branchId: actor.branchId, type: OrderType.COUNTER_PICKUP },
@@ -174,79 +204,17 @@ export class CounterOperationsService {
         throw new ConflictException('A finalized or paid order cannot be edited');
       }
 
-      const availability = await tx.branchMenuItem.findUnique({
-        where: { branchId_menuItemId: { branchId: actor.branchId, menuItemId: dto.menuItemId } },
-        include: {
-          menuItem: {
-            include: {
-              optionGroups: { include: { group: { include: { options: true } } } },
-            },
-          },
-        },
-      });
-      if (
-        !availability?.isEnabled ||
-        !availability.isAvailable ||
-        !availability.menuItem.isActive ||
-        !availability.menuItem.isAvailable
-      ) {
-        throw new ConflictException('Menu item is not currently available at this branch');
-      }
-      if (
-        availability.remainingPortions !== null &&
-        availability.remainingPortions < dto.quantity
-      ) {
-        throw new ConflictException('Not enough portions remain for this menu item');
-      }
-
-      const allowedOptions = availability.menuItem.optionGroups.flatMap((link) =>
-        link.group.options.map((option) => ({ ...option, group: link.group })),
-      );
-      const selected = dto.optionIds.map((id) => allowedOptions.find((option) => option.id === id));
-      if (selected.some((option) => !option)) {
-        throw new BadRequestException('One or more options do not belong to this menu item');
-      }
-      const selectedOptions = selected as (typeof allowedOptions)[number][];
-      const unavailableCount = await tx.branchMenuOption.count({
-        where: {
-          branchId: actor.branchId,
-          optionId: { in: dto.optionIds },
-          isAvailable: false,
-        },
-      });
-      if (unavailableCount)
-        throw new ConflictException('One or more selected options are sold out');
-
-      for (const link of availability.menuItem.optionGroups) {
-        const count = selectedOptions.filter((option) => option.groupId === link.groupId).length;
-        if (count < link.group.minSelections || count > link.group.maxSelections) {
-          throw new BadRequestException(
-            `${link.group.name} requires between ${link.group.minSelections} and ${link.group.maxSelections} selections`,
-          );
-        }
-      }
-
-      const optionDelta = selectedOptions.reduce(
-        (sum, option) => sum.add(option.priceDelta),
-        new Prisma.Decimal(0),
-      );
-      const unitPrice = availability.menuItem.price.add(optionDelta);
+      const priced = await this.priceCartItem(tx, actor.branchId, dto);
       const item = await tx.orderItem.create({
         data: {
           orderId,
           menuItemId: dto.menuItemId,
-          itemName: availability.menuItem.name,
-          unitPrice,
+          itemName: priced.itemName,
+          unitPrice: priced.unitPrice,
           quantity: dto.quantity,
-          totalPrice: unitPrice.mul(dto.quantity),
+          totalPrice: priced.unitPrice.mul(dto.quantity),
           specialInstructions: dto.specialInstructions,
-          selectedOptions: selectedOptions.map((option) => ({
-            id: option.id,
-            groupId: option.groupId,
-            groupName: option.group.name,
-            name: option.name,
-            priceDelta: option.priceDelta.toString(),
-          })),
+          selectedOptions: priced.selectedOptions,
         },
       });
       await this.recalculateOrder(tx, orderId);
@@ -254,8 +222,51 @@ export class CounterOperationsService {
     });
   }
 
+  async updateItem(
+    user: AuthenticatedUser,
+    orderId: string,
+    itemId: string,
+    dto: AddCounterOrderItemDto,
+  ) {
+    const actor = this.employee(user);
+    await this.branchAccess.assertSubscriptionAllowsWrite(actor.branchId);
+    return this.prisma.$transaction(async (tx) => {
+      const item = await tx.orderItem.findFirst({
+        where: {
+          id: itemId,
+          orderId,
+          order: {
+            branchId: actor.branchId,
+            type: OrderType.COUNTER_PICKUP,
+            status: OrderStatus.PENDING,
+          },
+        },
+        select: { id: true },
+      });
+      if (!item) throw new NotFoundException('Editable order item was not found');
+
+      const priced = await this.priceCartItem(tx, actor.branchId, dto);
+      const totalPrice = priced.unitPrice.mul(dto.quantity);
+      const updated = await tx.orderItem.update({
+        where: { id: itemId },
+        data: {
+          menuItemId: dto.menuItemId,
+          itemName: priced.itemName,
+          unitPrice: priced.unitPrice,
+          quantity: dto.quantity,
+          totalPrice,
+          specialInstructions: dto.specialInstructions,
+          selectedOptions: priced.selectedOptions,
+        },
+      });
+      await this.recalculateOrder(tx, orderId);
+      return updated;
+    });
+  }
+
   async removeItem(user: AuthenticatedUser, orderId: string, itemId: string) {
     const actor = this.employee(user);
+    await this.branchAccess.assertSubscriptionAllowsWrite(actor.branchId);
     return this.prisma.$transaction(async (tx) => {
       const item = await tx.orderItem.findFirst({
         where: {
@@ -277,23 +288,29 @@ export class CounterOperationsService {
 
   async finalize(user: AuthenticatedUser, orderId: string) {
     const actor = this.employee(user);
-    const order = await this.prisma.order.findFirst({
-      where: { id: orderId, branchId: actor.branchId, type: OrderType.COUNTER_PICKUP },
-      include: { items: true },
-    });
-    if (!order) throw new NotFoundException('Counter order was not found in your branch');
-    if (order.status !== OrderStatus.PENDING)
-      throw new ConflictException('Order is already finalized');
-    if (!order.items.length) throw new BadRequestException('Cannot finalize an empty order');
-    return this.prisma.order.update({
-      where: { id: orderId },
-      data: { status: OrderStatus.CONFIRMED },
-      include: counterOrderInclude,
+    await this.branchAccess.assertSubscriptionAllowsWrite(actor.branchId);
+    return this.prisma.$transaction(async (tx) => {
+      const order = await tx.order.findFirst({
+        where: { id: orderId, branchId: actor.branchId, type: OrderType.COUNTER_PICKUP },
+        include: { items: true },
+      });
+      if (!order) throw new NotFoundException('Counter order was not found in your branch');
+      if (order.status !== OrderStatus.PENDING)
+        throw new ConflictException('Order is already finalized');
+      if (!order.items.length) throw new BadRequestException('Cannot finalize an empty order');
+      await this.assertOrderItemsAvailable(tx, actor.branchId, order.items);
+      const changed = await tx.order.updateMany({
+        where: { id: orderId, status: OrderStatus.PENDING },
+        data: { status: OrderStatus.CONFIRMED },
+      });
+      if (!changed.count) throw new ConflictException('Order is already finalized');
+      return tx.order.findUniqueOrThrow({ where: { id: orderId }, include: counterOrderInclude });
     });
   }
 
   async collectCash(user: AuthenticatedUser, orderId: string, dto: CashPaymentDto) {
     const actor = this.employee(user);
+    await this.branchAccess.assertSubscriptionAllowsWrite(actor.branchId);
     return this.prisma.$transaction(
       async (tx) => {
         const order = await tx.order.findFirst({
@@ -311,37 +328,13 @@ export class CounterOperationsService {
           where: { id: dto.stationId, branchId: actor.branchId, status: 'ACTIVE' },
           select: { id: true },
         });
-        if (!station) throw new NotFoundException('Active POS station was not found in your branch');
+        if (!station)
+          throw new NotFoundException('Active POS station was not found in your branch');
         const tendered = new Prisma.Decimal(dto.tenderedAmount);
         if (tendered.lt(order.totalAmount))
           throw new BadRequestException('Tendered cash is insufficient');
 
-        const quantities = new Map<string, number>();
-        for (const item of order.items) {
-          quantities.set(item.menuItemId, (quantities.get(item.menuItemId) ?? 0) + item.quantity);
-        }
-        for (const [menuItemId, quantity] of quantities) {
-          const availability = await tx.branchMenuItem.findUnique({
-            where: { branchId_menuItemId: { branchId: actor.branchId, menuItemId } },
-            select: { isEnabled: true, isAvailable: true, remainingPortions: true },
-          });
-          if (!availability?.isEnabled || !availability.isAvailable) {
-            throw new ConflictException('A menu item is no longer available');
-          }
-          if (availability.remainingPortions !== null) {
-            const reserved = await tx.branchMenuItem.updateMany({
-              where: {
-                branchId: actor.branchId,
-                menuItemId,
-                isEnabled: true,
-                isAvailable: true,
-                remainingPortions: { gte: quantity },
-              },
-              data: { remainingPortions: { decrement: quantity } },
-            });
-            if (!reserved.count) throw new ConflictException('Not enough portions remain for a menu item');
-          }
-        }
+        await this.assertOrderItemsAvailable(tx, actor.branchId, order.items);
 
         const branch = await tx.branch.findUniqueOrThrow({
           where: { id: actor.branchId },
@@ -434,7 +427,8 @@ export class CounterOperationsService {
 
   async cancelUnpaid(user: AuthenticatedUser, orderId: string, reason: string) {
     const actor = this.employee(user);
-    if (reason.trim().length < 3) throw new BadRequestException('A cancellation reason is required');
+    if (reason.trim().length < 3)
+      throw new BadRequestException('A cancellation reason is required');
     const changed = await this.prisma.order.updateMany({
       where: {
         id: orderId,
@@ -450,7 +444,8 @@ export class CounterOperationsService {
         cancellationReason: reason.trim(),
       },
     });
-    if (!changed.count) throw new ConflictException('Only an unpaid counter order can be cancelled');
+    if (!changed.count)
+      throw new ConflictException('Only an unpaid counter order can be cancelled');
     return { cancelled: true };
   }
 
@@ -465,7 +460,11 @@ export class CounterOperationsService {
       },
       include: {
         items: { orderBy: { createdAt: 'asc' } },
-        payments: { where: { status: PaymentStatus.SUCCESS }, orderBy: { paidAt: 'desc' }, take: 1 },
+        payments: {
+          where: { status: PaymentStatus.SUCCESS },
+          orderBy: { paidAt: 'desc' },
+          take: 1,
+        },
         branch: {
           include: { chain: { include: { branding: true } } },
         },
@@ -484,7 +483,15 @@ export class CounterOperationsService {
         name: branding?.displayName ?? order.branch.chain.name,
         logoUrl: branding?.logoUrl ?? order.branch.chain.logoUrl,
         branchName: order.branch.name,
-        address: [order.branch.addressLine1, order.branch.addressLine2, order.branch.ward, order.branch.district, order.branch.city].filter(Boolean).join(', '),
+        address: [
+          order.branch.addressLine1,
+          order.branch.addressLine2,
+          order.branch.ward,
+          order.branch.district,
+          order.branch.city,
+        ]
+          .filter(Boolean)
+          .join(', '),
         phone: order.branch.phone,
       },
       cashier: order.createdByCashier
@@ -527,7 +534,9 @@ export class CounterOperationsService {
           },
         },
       },
-      include: { orderItem: { include: { order: true, menuItem: { select: { categoryId: true } } } } },
+      include: {
+        orderItem: { include: { order: true, menuItem: { select: { categoryId: true } } } },
+      },
       orderBy: [{ orderItem: { order: { paidAt: 'asc' } } }, { sequence: 'asc' }],
     });
 
@@ -557,7 +566,7 @@ export class CounterOperationsService {
       const headSize = this.sizeOption(headOptions);
       const headTime = head.orderItem.order.paidAt ?? head.createdAt;
       const selected = [head];
-      for (let index = 0; index < pending.length && selected.length < maxBatchSize; ) {
+      for (let index = 0; index < pending.length && selected.length < maxBatchSize;) {
         const candidate = pending[index];
         const candidateOptions = this.optionSnapshots(candidate.orderItem.selectedOptions);
         const candidateSize = this.sizeOption(candidateOptions);
@@ -589,7 +598,9 @@ export class CounterOperationsService {
       });
     }
     const preparingGroups = new Map<string, typeof units>();
-    for (const unit of units.filter((candidate) => candidate.status === OrderItemStatus.PREPARING)) {
+    for (const unit of units.filter(
+      (candidate) => candidate.status === OrderItemStatus.PREPARING,
+    )) {
       const options = this.optionSnapshots(unit.orderItem.selectedOptions);
       const key = `${unit.startedById}:${unit.startedAt?.toISOString()}:${unit.orderItem.menuItemId}:${this.sizeOption(options)}`;
       const group = preparingGroups.get(key) ?? [];
@@ -651,7 +662,8 @@ export class CounterOperationsService {
         },
         include: { orderItem: true },
       });
-      if (units.length !== unitIds.length) throw new NotFoundException('One or more units were not found');
+      if (units.length !== unitIds.length)
+        throw new NotFoundException('One or more units were not found');
       const now = new Date();
       const changed = await tx.orderItemUnit.updateMany({
         where: { id: { in: unitIds }, status: OrderItemStatus.QUEUED },
@@ -660,9 +672,55 @@ export class CounterOperationsService {
       if (changed.count !== unitIds.length)
         throw new ConflictException('This batch was already claimed by another barista');
       for (const itemId of new Set(units.map((unit) => unit.orderItemId))) {
-        await this.syncCounterStatus(tx, units.find((unit) => unit.orderItemId === itemId)!.orderItem.orderId, itemId);
+        await this.syncCounterStatus(
+          tx,
+          units.find((unit) => unit.orderItemId === itemId)!.orderItem.orderId,
+          itemId,
+        );
       }
       return { unitIds, startedAt: now, startedById: actor.employeeId };
+    });
+  }
+
+  async completeBatch(user: AuthenticatedUser, unitIds: string[]) {
+    const actor = this.employee(user);
+    if (!unitIds.length || unitIds.length > 4)
+      throw new BadRequestException('A preparation batch must contain between 1 and 4 units');
+    return this.prisma.$transaction(async (tx) => {
+      const units = await tx.orderItemUnit.findMany({
+        where: {
+          id: { in: unitIds },
+          orderItem: { order: { branchId: actor.branchId, type: OrderType.COUNTER_PICKUP } },
+        },
+        include: { orderItem: true },
+      });
+      if (units.length !== unitIds.length)
+        throw new NotFoundException('One or more units were not found');
+      const now = new Date();
+      const changed = await tx.orderItemUnit.updateMany({
+        where: {
+          id: { in: unitIds },
+          status: OrderItemStatus.PREPARING,
+          startedById: actor.employeeId,
+        },
+        data: { status: OrderItemStatus.READY, completedAt: now, completedById: actor.employeeId },
+      });
+      if (changed.count !== unitIds.length) {
+        throw new ConflictException('Only the barista who claimed this batch can complete it');
+      }
+      const itemIds = new Set(units.map((unit) => unit.orderItemId));
+      for (const itemId of itemIds) {
+        const orderId = units.find((unit) => unit.orderItemId === itemId)!.orderItem.orderId;
+        await this.syncCounterStatus(tx, orderId, itemId);
+      }
+      const readyOrders = await tx.order.findMany({
+        where: {
+          id: { in: [...new Set(units.map((unit) => unit.orderItem.orderId))] },
+          status: OrderStatus.READY,
+        },
+        select: { id: true, orderCode: true, callNumber: true, readyAt: true },
+      });
+      return { unitIds, completedAt: now, completedById: actor.employeeId, readyOrders };
     });
   }
 
@@ -672,6 +730,50 @@ export class CounterOperationsService {
 
   completeUnit(user: AuthenticatedUser, unitId: string) {
     return this.transitionUnit(user, unitId, OrderItemStatus.PREPARING, OrderItemStatus.READY);
+  }
+
+  async undoUnit(user: AuthenticatedUser, unitId: string) {
+    const actor = this.employee(user);
+    return this.prisma.$transaction(async (tx) => {
+      const unit = await tx.orderItemUnit.findFirst({
+        where: {
+          id: unitId,
+          orderItem: { order: { branchId: actor.branchId, type: OrderType.COUNTER_PICKUP } },
+        },
+        include: { orderItem: true },
+      });
+      if (!unit) throw new NotFoundException('Preparation unit was not found in your branch');
+
+      const cutoff = new Date(Date.now() - 10_000);
+      const undoCompleted =
+        unit.status === OrderItemStatus.READY &&
+        unit.completedById === actor.employeeId &&
+        unit.completedAt &&
+        unit.completedAt >= cutoff;
+      const undoStarted =
+        unit.status === OrderItemStatus.PREPARING &&
+        unit.startedById === actor.employeeId &&
+        unit.startedAt &&
+        unit.startedAt >= cutoff;
+      if (!undoCompleted && !undoStarted) {
+        throw new ConflictException('This status change can no longer be undone');
+      }
+
+      const from = undoCompleted ? OrderItemStatus.READY : OrderItemStatus.PREPARING;
+      const to = undoCompleted ? OrderItemStatus.PREPARING : OrderItemStatus.QUEUED;
+      const changed = await tx.orderItemUnit.updateMany({
+        where: { id: unitId, status: from },
+        data: undoCompleted
+          ? { status: to, completedAt: null, completedById: null }
+          : { status: to, startedAt: null, startedById: null },
+      });
+      if (!changed.count) throw new ConflictException('Preparation unit was updated concurrently');
+      await this.syncCounterStatus(tx, unit.orderItem.orderId, unit.orderItemId);
+      return tx.orderItemUnit.findUniqueOrThrow({
+        where: { id: unitId },
+        include: { orderItem: { include: { order: true } } },
+      });
+    });
   }
 
   async deliverOrder(user: AuthenticatedUser, orderId: string) {
@@ -708,31 +810,85 @@ export class CounterOperationsService {
 
   async setMenuItemAvailability(user: AuthenticatedUser, menuItemId: string, dto: AvailabilityDto) {
     const actor = this.employee(user);
-    const result = await this.prisma.branchMenuItem.updateMany({
-      where: { branchId: actor.branchId, menuItemId },
-      data: { isAvailable: dto.isAvailable, updatedById: actor.employeeId },
+    await this.branchAccess.assertSubscriptionAllowsWrite(actor.branchId);
+    return this.prisma.$transaction(async (tx) => {
+      const result = await tx.branchMenuItem.updateMany({
+        where: { branchId: actor.branchId, menuItemId },
+        data: { isAvailable: dto.isAvailable, updatedById: actor.employeeId },
+      });
+      if (!result.count) throw new NotFoundException('Menu item is not configured for your branch');
+      const affectedOrderIds = dto.isAvailable
+        ? []
+        : await this.markPaidItemsOutOfStock(tx, actor, { menuItemId });
+      return { menuItemId, isAvailable: dto.isAvailable, affectedOrderIds };
     });
-    if (!result.count) throw new NotFoundException('Menu item is not configured for your branch');
-    return { menuItemId, isAvailable: dto.isAvailable };
   }
 
   async setOptionAvailability(user: AuthenticatedUser, optionId: string, dto: AvailabilityDto) {
     const actor = this.employee(user);
-    const option = await this.prisma.menuOption.findFirst({
-      where: { id: optionId, group: { chain: { branches: { some: { id: actor.branchId } } } } },
-      select: { id: true },
+    await this.branchAccess.assertSubscriptionAllowsWrite(actor.branchId);
+    return this.prisma.$transaction(async (tx) => {
+      const option = await tx.menuOption.findFirst({
+        where: { id: optionId, group: { chain: { branches: { some: { id: actor.branchId } } } } },
+        select: { id: true },
+      });
+      if (!option) throw new NotFoundException('Menu option was not found for your branch');
+      await tx.branchMenuOption.upsert({
+        where: { branchId_optionId: { branchId: actor.branchId, optionId } },
+        create: {
+          branchId: actor.branchId,
+          optionId,
+          isAvailable: dto.isAvailable,
+          updatedById: actor.employeeId,
+        },
+        update: { isAvailable: dto.isAvailable, updatedById: actor.employeeId },
+      });
+      const affectedOrderIds = dto.isAvailable
+        ? []
+        : await this.markPaidItemsOutOfStock(tx, actor, {
+            selectedOptions: { array_contains: [{ id: optionId }] },
+          });
+      return { optionId, isAvailable: dto.isAvailable, affectedOrderIds };
     });
-    if (!option) throw new NotFoundException('Menu option was not found for your branch');
-    return this.prisma.branchMenuOption.upsert({
-      where: { branchId_optionId: { branchId: actor.branchId, optionId } },
-      create: {
-        branchId: actor.branchId,
-        optionId,
-        isAvailable: dto.isAvailable,
-        updatedById: actor.employeeId,
+  }
+
+  private async markPaidItemsOutOfStock(
+    tx: Prisma.TransactionClient,
+    actor: { employeeId: string; branchId: string },
+    itemFilter: Prisma.OrderItemWhereInput,
+  ) {
+    const items = await tx.orderItem.findMany({
+      where: {
+        ...itemFilter,
+        status: { in: [OrderItemStatus.QUEUED, OrderItemStatus.PREPARING] },
+        order: {
+          branchId: actor.branchId,
+          type: OrderType.COUNTER_PICKUP,
+          paymentStatus: OrderPaymentStatus.PAID,
+        },
       },
-      update: { isAvailable: dto.isAvailable, updatedById: actor.employeeId },
+      select: { id: true, orderId: true },
     });
+    if (!items.length) return [];
+
+    const itemIds = items.map(({ id }) => id);
+    const now = new Date();
+    await tx.orderItemUnit.updateMany({
+      where: {
+        orderItemId: { in: itemIds },
+        status: { in: [OrderItemStatus.QUEUED, OrderItemStatus.PREPARING] },
+      },
+      data: { status: OrderItemStatus.OUT_OF_STOCK },
+    });
+    await tx.orderItem.updateMany({
+      where: { id: { in: itemIds } },
+      data: {
+        status: OrderItemStatus.OUT_OF_STOCK,
+        unavailableAt: now,
+        unavailableById: actor.employeeId,
+      },
+    });
+    return [...new Set(items.map(({ orderId }) => orderId))];
   }
 
   private async transitionUnit(
@@ -762,7 +918,10 @@ export class CounterOperationsService {
       });
       if (!changed.count) throw new ConflictException('Preparation unit was updated concurrently');
       await this.syncCounterStatus(tx, unit.orderItem.orderId, unit.orderItemId);
-      return tx.orderItemUnit.findUniqueOrThrow({ where: { id: unitId } });
+      return tx.orderItemUnit.findUniqueOrThrow({
+        where: { id: unitId },
+        include: { orderItem: { include: { order: true } } },
+      });
     });
   }
 
@@ -826,13 +985,19 @@ export class CounterOperationsService {
         },
       },
     });
-    if (!availability?.isEnabled || !availability.isAvailable || !availability.menuItem.isActive || !availability.menuItem.isAvailable)
+    if (
+      !availability?.isEnabled ||
+      !availability.isAvailable ||
+      !availability.menuItem.isActive ||
+      !availability.menuItem.isAvailable
+    )
       throw new ConflictException('Menu item is not currently available at this branch');
-    if (availability.remainingPortions !== null && availability.remainingPortions < dto.quantity)
-      throw new ConflictException('Not enough portions remain for this menu item');
-
     const allowed = availability.menuItem.optionGroups.flatMap((link) =>
-      link.group.options.filter((option) => option.isActive).map((option) => ({ ...option, group: link.group })),
+      link.group.isActive
+        ? link.group.options
+            .filter((option) => option.isActive)
+            .map((option) => ({ ...option, group: link.group }))
+        : [],
     );
     const selected = dto.optionIds.map((id) => allowed.find((option) => option.id === id));
     if (selected.some((option) => !option))
@@ -842,12 +1007,19 @@ export class CounterOperationsService {
       where: { branchId, optionId: { in: dto.optionIds }, isAvailable: false },
     });
     if (unavailable) throw new ConflictException('One or more selected options are sold out');
-    for (const link of availability.menuItem.optionGroups) {
+    for (const link of availability.menuItem.optionGroups.filter(
+      (candidate) => candidate.group.isActive,
+    )) {
       const count = options.filter((option) => option.groupId === link.groupId).length;
       if (count < link.group.minSelections || count > link.group.maxSelections)
-        throw new BadRequestException(`${link.group.name} requires between ${link.group.minSelections} and ${link.group.maxSelections} selections`);
+        throw new BadRequestException(
+          `${link.group.name} requires between ${link.group.minSelections} and ${link.group.maxSelections} selections`,
+        );
     }
-    const optionDelta = options.reduce((sum, option) => sum.add(option.priceDelta), new Prisma.Decimal(0));
+    const optionDelta = options.reduce(
+      (sum, option) => sum.add(option.priceDelta),
+      new Prisma.Decimal(0),
+    );
     return {
       itemName: availability.menuItem.name,
       unitPrice: availability.menuItem.price.add(optionDelta),
@@ -863,14 +1035,71 @@ export class CounterOperationsService {
     };
   }
 
+  private async assertOrderItemsAvailable(
+    tx: Prisma.TransactionClient,
+    branchId: string,
+    items: Array<{ menuItemId: string; selectedOptions: Prisma.JsonValue | null }>,
+  ) {
+    for (const item of items) {
+      const availability = await tx.branchMenuItem.findUnique({
+        where: { branchId_menuItemId: { branchId, menuItemId: item.menuItemId } },
+        include: {
+          menuItem: {
+            include: {
+              optionGroups: { include: { group: { include: { options: true } } } },
+            },
+          },
+        },
+      });
+      if (
+        !availability?.isEnabled ||
+        !availability.isAvailable ||
+        !availability.menuItem.isActive ||
+        !availability.menuItem.isAvailable ||
+        availability.menuItem.deletedAt
+      ) {
+        throw new ConflictException('A menu item is no longer available');
+      }
+
+      const snapshots = this.optionSnapshots(item.selectedOptions);
+      const selectedIds = snapshots.map((option) => String(option.id ?? '')).filter(Boolean);
+      const activeGroups = availability.menuItem.optionGroups.filter((link) => link.group.isActive);
+      const activeOptions = activeGroups.flatMap((link) =>
+        link.group.options.filter((option) => option.isActive),
+      );
+      if (selectedIds.some((id) => !activeOptions.some((option) => option.id === id))) {
+        throw new ConflictException('An option is no longer available');
+      }
+      if (selectedIds.length) {
+        const unavailableCount = await tx.branchMenuOption.count({
+          where: { branchId, optionId: { in: selectedIds }, isAvailable: false },
+        });
+        if (unavailableCount) throw new ConflictException('An option is no longer available');
+      }
+      for (const link of activeGroups) {
+        const count = selectedIds.filter((id) =>
+          link.group.options.some((option) => option.id === id),
+        ).length;
+        if (count < link.group.minSelections || count > link.group.maxSelections) {
+          throw new ConflictException('The selected options no longer satisfy menu rules');
+        }
+      }
+    }
+  }
+
   private optionSnapshots(value: Prisma.JsonValue | null) {
     if (!Array.isArray(value)) return [];
-    return value.filter((option): option is Record<string, Prisma.JsonValue> => !!option && typeof option === 'object' && !Array.isArray(option));
+    return value.filter(
+      (option): option is Record<string, Prisma.JsonValue> =>
+        !!option && typeof option === 'object' && !Array.isArray(option),
+    );
   }
 
   private sizeOption(options: Record<string, Prisma.JsonValue>[]) {
     const size = options.find((option) =>
-      String(option.groupCode ?? option.groupName ?? '').toLowerCase().includes('size'),
+      String(option.groupCode ?? option.groupName ?? '')
+        .toLowerCase()
+        .includes('size'),
     );
     return size ? String(size.name ?? '') : '';
   }

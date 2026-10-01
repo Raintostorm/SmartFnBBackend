@@ -22,6 +22,7 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
+  const payosMasterKey = String(config.PAYOS_MASTER_KEY ?? '').trim();
 
   if (!validEnvironments.has(nodeEnv)) {
     throw new Error('NODE_ENV must be development, test, or production.');
@@ -85,6 +86,9 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
   if (realtimeCorsOrigins.length === 0) {
     throw new Error('REALTIME_CORS_ORIGINS must contain at least one origin or *.');
   }
+  if (payosMasterKey && Buffer.from(payosMasterKey, 'base64').length !== 32) {
+    throw new Error('PAYOS_MASTER_KEY must be a base64-encoded 32-byte key.');
+  }
 
   return {
     ...config,
@@ -108,5 +112,6 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
     REALTIME_ENABLED: realtimeEnabledValue === 'true',
     REALTIME_PATH: realtimePath,
     REALTIME_CORS_ORIGINS: realtimeCorsOrigins,
+    PAYOS_MASTER_KEY: payosMasterKey,
   };
 }

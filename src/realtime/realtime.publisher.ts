@@ -22,4 +22,21 @@ export class RealtimePublisher {
       data,
     });
   }
+
+  station(stationId: string, type: string, data?: unknown) {
+    this.gateway.emitToStation(stationId, {
+      type,
+      occurredAt: new Date().toISOString(),
+      data,
+    });
+  }
+
+  callingDisplay(branchId: string, type: string, data?: unknown) {
+    this.gateway.emitToCallingDisplay(branchId, {
+      type,
+      branchId,
+      occurredAt: new Date().toISOString(),
+      data,
+    });
+  }
 }

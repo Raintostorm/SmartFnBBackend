@@ -1,7 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
 import {
   OrderItemStatus,
-  OrderStatus,
+  OrderPaymentStatus,
   Prisma,
   TableSessionStatus,
 } from '../../generated/prisma/client.js';
@@ -61,8 +61,7 @@ interface TimeseriesRow {
  * Owner-facing sales reporting. Every figure is comparable across branches on one
  * axis, because comparing branches is the whole reason this exists.
  *
- * Revenue counts orders in status COMPLETED and is placed on the time axis by
- * placedAt, which is indexed and never null. Both the range filter and the
+ * Revenue counts paid orders and is placed on the time axis by paidAt. Both the range filter and the
  * bucketing run in the chain timezone, so an evening order never lands in the
  * next day's bucket. There is no profit reporting: the platform tracks neither
  * stock nor payroll, so it has no cost side.
@@ -143,16 +142,16 @@ export class ReportsService {
       SELECT
         o."branch_id" AS branch_id,
         to_char(
-          date_trunc(${unit}, o."placed_at" AT TIME ZONE ${scope.timezone}),
+          date_trunc(${unit}, o."paid_at" AT TIME ZONE ${scope.timezone}),
           'YYYY-MM-DD'
         ) AS bucket,
         COUNT(*) AS order_count,
         COALESCE(SUM(o."total_amount"), 0)::text AS revenue
       FROM "orders" o
       WHERE o."branch_id" = ANY(${scope.branchIds}::uuid[])
-        AND o."status" = ${OrderStatus.COMPLETED}::"OrderStatus"
-        AND o."placed_at" >= ${scope.from}
-        AND o."placed_at" < ${scope.to}
+        AND o."payment_status" = ${OrderPaymentStatus.PAID}::"OrderPaymentStatus"
+        AND o."paid_at" >= ${scope.from}
+        AND o."paid_at" < ${scope.to}
       GROUP BY 1, 2
       ORDER BY 2 ASC, 1 ASC
     `;
@@ -466,8 +465,8 @@ export class ReportsService {
   private completedOrdersWhere(scope: ReportScope): Prisma.OrderWhereInput {
     return {
       branchId: { in: scope.branchIds },
-      status: OrderStatus.COMPLETED,
-      placedAt: { gte: scope.from, lt: scope.to },
+      paymentStatus: OrderPaymentStatus.PAID,
+      paidAt: { gte: scope.from, lt: scope.to },
     };
   }
 
