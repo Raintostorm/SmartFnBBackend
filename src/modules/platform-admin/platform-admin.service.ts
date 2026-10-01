@@ -43,6 +43,17 @@ const servicePlanSelect = {
   updatedAt: true,
 } satisfies Prisma.ServicePlanSelect;
 
+const publicServicePlanSelect = {
+  id: true,
+  code: true,
+  name: true,
+  description: true,
+  monthlyPrice: true,
+  maxBranches: true,
+  maxAccounts: true,
+  maxTables: true,
+} satisfies Prisma.ServicePlanSelect;
+
 @Injectable()
 export class PlatformAdminService {
   constructor(
@@ -295,6 +306,14 @@ export class PlatformAdminService {
     return this.prisma.servicePlan.findMany({
       select: servicePlanSelect,
       orderBy: [{ isActive: 'desc' }, { monthlyPrice: 'asc' }],
+    });
+  }
+
+  listPublicServicePlans() {
+    return this.prisma.servicePlan.findMany({
+      where: { isActive: true },
+      select: publicServicePlanSelect,
+      orderBy: [{ monthlyPrice: 'asc' }, { name: 'asc' }],
     });
   }
 

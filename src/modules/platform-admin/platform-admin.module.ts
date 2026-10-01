@@ -4,12 +4,14 @@ import { OwnerFinanceController } from './owner-finance.controller.js';
 import { PlatformAdminController } from './platform-admin.controller.js';
 import { PlatformAdminService } from './platform-admin.service.js';
 import { PlatformFinanceService } from './platform-finance.service.js';
+import { PublicServicePlansController } from './public-service-plans.controller.js';
 import { RegistrationApplicationsController } from './registration-applications.controller.js';
 
 @Module({
   imports: [AuthModule],
   controllers: [
     RegistrationApplicationsController,
+    PublicServicePlansController,
     PlatformAdminController,
     OwnerFinanceController,
   ],

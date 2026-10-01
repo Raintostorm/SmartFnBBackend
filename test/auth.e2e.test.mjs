@@ -51,6 +51,9 @@ describe('Platform onboarding authentication and authorization', () => {
 
   after(async () => {
     if (prisma) {
+      await prisma.servicePlan.deleteMany({
+        where: { code: { in: [`PUBLIC-ACTIVE-${suffix}`, `PUBLIC-INACTIVE-${suffix}`] } },
+      });
       if (businessId) {
         const wallet = await prisma.businessWallet.findUnique({ where: { chainId: businessId } });
         if (wallet) {
@@ -77,8 +80,45 @@ describe('Platform onboarding authentication and authorization', () => {
     assert.ok(document.paths['/api/v1/admin/businesses'].get);
     assert.ok(document.paths['/api/v1/admin/withdrawals'].get);
     assert.ok(document.paths['/api/v1/auth/setup-password'].post);
+    assert.ok(document.paths['/api/v1/public/service-plans'].get);
     assert.equal(document.paths['/api/v1/auth/owners'], undefined);
     assert.equal(document.paths['/api/v1/owners/{ownerId}/chains'], undefined);
+  });
+
+  it('lists only active service plans without authentication', async () => {
+    await prisma.servicePlan.createMany({
+      data: [
+        {
+          code: `PUBLIC-ACTIVE-${suffix}`,
+          name: 'Public Active Plan',
+          monthlyPrice: 199000,
+          maxBranches: 2,
+          maxAccounts: 10,
+          maxTables: 50,
+        },
+        {
+          code: `PUBLIC-INACTIVE-${suffix}`,
+          name: 'Public Inactive Plan',
+          monthlyPrice: 99000,
+          maxBranches: 1,
+          maxAccounts: 5,
+          maxTables: 20,
+          isActive: false,
+        },
+      ],
+    });
+
+    const plans = await request('/public/service-plans');
+
+    assert.equal(plans.response.status, 200);
+    assert.ok(plans.body.some((plan) => plan.code === `PUBLIC-ACTIVE-${suffix}`));
+    assert.equal(
+      plans.body.some((plan) => plan.code === `PUBLIC-INACTIVE-${suffix}`),
+      false,
+    );
+    assert.ok(plans.body.every((plan) => plan.isActive === undefined));
+    assert.ok(plans.body.every((plan) => plan.createdAt === undefined));
+    assert.ok(plans.body.every((plan) => plan.updatedAt === undefined));
   });
 
   it('provisions an inactive Owner only after ADMIN approves an application', async () => {
