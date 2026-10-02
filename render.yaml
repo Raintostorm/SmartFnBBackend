@@ -1,0 +1,45 @@
+services:
+  - type: web
+    name: smart-fnb-be
+    runtime: node
+    plan: free
+    region: singapore
+    branch: main
+    buildCommand: pnpm run render:build
+    startCommand: pnpm run render:start
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_VERSION
+        value: 24.21.0
+      - key: NODE_ENV
+        value: production
+      - key: API_PREFIX
+        value: api/v1
+      - key: SWAGGER_ENABLED
+        value: "true"
+      - key: SWAGGER_PATH
+        value: api/docs
+      - key: REALTIME_ENABLED
+        value: "true"
+      - key: REALTIME_PATH
+        value: /socket.io
+      - key: JWT_ACCESS_TTL_SECONDS
+        value: "900"
+      - key: JWT_REFRESH_TTL_SECONDS
+        value: "604800"
+      - key: JWT_ISSUER
+        value: smart-fnb-backend
+      - key: JWT_AUDIENCE
+        value: smart-fnb-client
+      - key: DATABASE_URL
+        sync: false
+      - key: CORS_ORIGIN
+        sync: false
+      - key: REALTIME_CORS_ORIGINS
+        sync: false
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: PAYOS_MASTER_KEY
+        sync: false

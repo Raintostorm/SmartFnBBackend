@@ -7,15 +7,18 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { Roles } from '../auth/decorators/roles.decorator.js';
 import { SavePayosChannelDto } from './dto/payos-channel.dto.js';
 import { PayosChannelService } from './payos-channel.service.js';
+import { ApiAuthenticatedOperation, ApiUuidPath } from '../../common/swagger/swagger.decorators.js';
 
 @ApiTags('PayOS channel')
 @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
+@ApiAuthenticatedOperation()
 @Roles(AppRole.OWNER)
 @Controller('restaurant-chains/:chainId/payos-channel')
 export class PayosChannelController {
   constructor(private readonly service: PayosChannelService) {}
 
   @Get()
+  @ApiUuidPath('chainId', 'Restaurant chain')
   @ApiOperation({ summary: 'Get PayOS connection status without returning credentials' })
   get(
     @Param('chainId', new ParseUUIDPipe()) chainId: string,
@@ -25,6 +28,7 @@ export class PayosChannelController {
   }
 
   @Put()
+  @ApiUuidPath('chainId', 'Restaurant chain')
   @ApiOperation({ summary: 'Encrypt and save PayOS credentials for one restaurant chain' })
   save(
     @Param('chainId', new ParseUUIDPipe()) chainId: string,
@@ -35,6 +39,7 @@ export class PayosChannelController {
   }
 
   @Delete()
+  @ApiUuidPath('chainId', 'Restaurant chain')
   @ApiOperation({ summary: 'Remove the PayOS channel credentials' })
   remove(
     @Param('chainId', new ParseUUIDPipe()) chainId: string,

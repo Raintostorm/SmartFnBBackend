@@ -83,6 +83,7 @@ export class CashierController {
   }
 
   @Get('orders/:orderId')
+  @ApiOperation({ summary: 'Get one counter order in the assigned branch' })
   @ApiUuidPath('orderId', 'Counter order')
   get(@CurrentUser() user: AuthenticatedUser, @Param('orderId', new ParseUUIDPipe()) id: string) {
     return this.service.getOrder(user, id);
@@ -292,6 +293,7 @@ export class BaristaController {
 
   @Patch('menu-items/:menuItemId/availability')
   @ApiTags('Barista · Availability')
+  @ApiOperation({ summary: 'Mark a branch menu item available or sold out' })
   async itemAvailability(
     @CurrentUser() user: AuthenticatedUser,
     @Param('menuItemId', new ParseUUIDPipe()) id: string,
@@ -311,6 +313,7 @@ export class BaristaController {
 
   @Patch('menu-options/:optionId/availability')
   @ApiTags('Barista · Availability')
+  @ApiOperation({ summary: 'Mark a branch menu option available or sold out' })
   async optionAvailability(
     @CurrentUser() user: AuthenticatedUser,
     @Param('optionId', new ParseUUIDPipe()) id: string,
