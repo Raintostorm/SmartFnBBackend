@@ -16,6 +16,8 @@ services:
       SWAGGER_ENABLED: 'true'
     ports:
       - '${PORT:-3100}:3100'
+    volumes:
+      - smart_fnb_uploads:/app/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -41,3 +43,4 @@ services:
 
 volumes:
   smart_fnb_postgres_data:
+  smart_fnb_uploads:

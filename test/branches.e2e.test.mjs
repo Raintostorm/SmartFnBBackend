@@ -195,6 +195,31 @@ describe('Owner branch management and role scopes', () => {
     diningAreaId = area.body.id;
   });
 
+  it('lets OWNER upload a logo file from the local computer', async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const form = new FormData();
+    form.append('file', new Blob([png], { type: 'image/png' }), 'logo.png');
+
+    const response = await fetch(`${baseUrl}/api/v1/restaurant-chains/${chainId}/branding/logo`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ownerAuth.accessToken}` },
+      body: form,
+    });
+    assert.equal(response.status, 200);
+    const branding = await response.json();
+    assert.match(branding.logoUrl, /^\/uploads\/branding\/.+\.png$/);
+
+    const saved = await prisma.restaurantChain.findUniqueOrThrow({ where: { id: chainId } });
+    assert.equal(saved.logoUrl, branding.logoUrl);
+
+    const reset = await request(`/restaurant-chains/${chainId}/branding`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${ownerAuth.accessToken}` },
+    });
+    assert.equal(reset.response.status, 200);
+    assert.equal(reset.body.logoUrl, null);
+  });
+
   it('lets OWNER create only MANAGER accounts, denying Platform ADMIN and waiter roles', async () => {
     const manager = await request('/auth/managers', {
       method: 'POST',

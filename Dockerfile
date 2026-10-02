@@ -47,7 +47,9 @@ COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/src/generated ./src/generated
 COPY --chown=node:node docker-entrypoint.sh ./docker-entrypoint.sh
 
-RUN chmod +x ./docker-entrypoint.sh
+RUN chmod +x ./docker-entrypoint.sh \
+    && mkdir -p /app/uploads \
+    && chown -R node:node /app/uploads
 
 USER node
 

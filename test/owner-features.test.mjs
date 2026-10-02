@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { BranchStatus, UserStatus } from '../dist/generated/prisma/client.js';
 import { AppRole } from '../dist/modules/auth/app-role.enum.js';
 import { BranchesService } from '../dist/modules/branches/branches.service.js';
+import { BrandingService } from '../dist/modules/branding/branding.service.js';
 import { EmployeesService } from '../dist/modules/employees/employees.service.js';
 import { MenuService } from '../dist/modules/menu/menu.service.js';
 import { ReportsService } from '../dist/modules/reports/reports.service.js';
@@ -341,6 +345,69 @@ describe('Owner staff administration', () => {
     await assert.rejects(
       service.listEmployees({ ...owner, role: AppRole.MANAGER }, { page: 1, limit: 20 }),
       (error) => error?.getStatus?.() === 403,
+    );
+  });
+});
+
+describe('Owner branding logo upload', () => {
+  function serviceFor(captured) {
+    const chain = {
+      id: 'chain-one',
+      name: 'Smart F&B',
+      logoUrl: null,
+      branding: null,
+    };
+    const transaction = {
+      businessBranding: {
+        upsert: async ({ create, update }) => {
+          const logoUrl = update.logoUrl ?? create.logoUrl;
+          captured.logoUrl = logoUrl;
+          return { chainId: chain.id, displayName: chain.name, logoUrl };
+        },
+      },
+      restaurantChain: { update: async () => undefined },
+    };
+    return new BrandingService(
+      {
+        restaurantChain: { findFirst: async () => chain },
+        $transaction: async (action) => action(transaction),
+      },
+      { assertCanManageChain: async () => undefined },
+    );
+  }
+
+  it('stores a PNG and updates branding with its public URL', async () => {
+    const previousUploadDirectory = process.env.UPLOAD_DIR;
+    const uploadDirectory = await mkdtemp(join(tmpdir(), 'smart-fnb-branding-'));
+    process.env.UPLOAD_DIR = uploadDirectory;
+    try {
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      const captured = {};
+      const result = await serviceFor(captured).uploadLogo(
+        'chain-one',
+        { buffer: png, mimetype: 'image/png', size: png.length },
+        owner,
+      );
+
+      assert.match(result.logoUrl, /^\/uploads\/branding\/chain-one-.+\.png$/);
+      assert.equal(captured.logoUrl, result.logoUrl);
+      const fileName = result.logoUrl.split('/').at(-1);
+      assert.deepEqual(await readFile(join(uploadDirectory, 'branding', fileName)), png);
+    } finally {
+      if (previousUploadDirectory === undefined) delete process.env.UPLOAD_DIR;
+      else process.env.UPLOAD_DIR = previousUploadDirectory;
+      await rm(uploadDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a file whose content does not match its image MIME type', async () => {
+    await assert.rejects(
+      serviceFor({}).uploadLogo(
+        'chain-one',
+        { buffer: Buffer.from('not-an-image'), mimetype: 'image/png', size: 12 },
+        owner,
+      ),
+      (error) => error?.getStatus?.() === 400,
     );
   });
 });
