@@ -102,6 +102,8 @@ describe('Owner branch management and role scopes', () => {
         maxBranches: 2,
         maxAccounts: 5,
         maxTables: 20,
+        brandingEnabled: true,
+        multiBranchComparisonEnabled: false,
       }),
     });
     assert.equal(plan.response.status, 201);

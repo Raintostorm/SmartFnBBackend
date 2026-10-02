@@ -11,7 +11,6 @@ import {
   RestaurantChainStatus,
   SubscriptionEventType,
   UserStatus,
-  WalletStatus,
 } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { AppRole } from '../auth/app-role.enum.js';
@@ -38,6 +37,8 @@ const servicePlanSelect = {
   maxBranches: true,
   maxAccounts: true,
   maxTables: true,
+  brandingEnabled: true,
+  multiBranchComparisonEnabled: true,
   isActive: true,
   createdAt: true,
   updatedAt: true,
@@ -52,6 +53,8 @@ const publicServicePlanSelect = {
   maxBranches: true,
   maxAccounts: true,
   maxTables: true,
+  brandingEnabled: true,
+  multiBranchComparisonEnabled: true,
 } satisfies Prisma.ServicePlanSelect;
 
 @Injectable()
@@ -135,7 +138,6 @@ export class PlatformAdminService {
             subscription: {
               include: { plan: { select: servicePlanSelect } },
             },
-            wallet: { select: { id: true, currency: true, balance: true, heldBalance: true } },
             branding: true,
           },
         },
@@ -220,7 +222,6 @@ export class PlatformAdminService {
         await transaction.businessBranding.create({
           data: { chainId: chain.id, displayName: application.businessName },
         });
-        await transaction.businessWallet.create({ data: { chainId: chain.id } });
         const subscription = await transaction.businessSubscription.create({
           data: {
             chainId: chain.id,
@@ -283,22 +284,48 @@ export class PlatformAdminService {
   }
 
   async rejectRegistrationApplication(id: string, reason: string, adminUserId: string) {
-    const result = await this.prisma.registrationApplication.updateMany({
-      where: { id, status: 'PENDING' },
-      data: {
-        status: 'REJECTED',
-        rejectionReason: reason.trim(),
-        reviewedById: adminUserId,
-        reviewedAt: new Date(),
-      },
-    });
-    if (result.count === 0) {
-      const exists = await this.prisma.registrationApplication.count({ where: { id } });
-      if (exists === 0) {
-        throw new NotFoundException('Registration application not found');
+    const rejectionReason = reason.trim();
+    await this.prisma.$transaction(async (transaction) => {
+      const result = await transaction.registrationApplication.updateMany({
+        where: { id, status: 'PENDING' },
+        data: {
+          status: 'REJECTED',
+          rejectionReason,
+          reviewedById: adminUserId,
+          reviewedAt: new Date(),
+        },
+      });
+      if (result.count === 0) {
+        const exists = await transaction.registrationApplication.count({ where: { id } });
+        if (exists === 0) {
+          throw new NotFoundException('Registration application not found');
+        }
+        throw new ConflictException('Only a pending application can be rejected');
       }
-      throw new ConflictException('Only a pending application can be rejected');
-    }
+
+      const application = await transaction.registrationApplication.findUniqueOrThrow({
+        where: { id },
+        select: {
+          applicationCode: true,
+          businessName: true,
+          representativeName: true,
+          representativeEmail: true,
+        },
+      });
+      await transaction.emailOutbox.create({
+        data: {
+          recipient: application.representativeEmail,
+          subject: 'Kết quả hồ sơ đăng ký Smart F&B',
+          template: 'REGISTRATION_APPLICATION_REJECTED',
+          payload: {
+            applicationCode: application.applicationCode,
+            businessName: application.businessName,
+            representativeName: application.representativeName,
+            rejectionReason,
+          },
+        },
+      });
+    });
     return this.getRegistrationApplication(id);
   }
 
@@ -473,10 +500,6 @@ export class PlatformAdminService {
         where: { id: businessId },
         data: { status: RestaurantChainStatus.INACTIVE },
       });
-      await transaction.businessWallet.updateMany({
-        where: { chainId: businessId },
-        data: { status: WalletStatus.SUSPENDED },
-      });
       await transaction.authSession.updateMany({
         where: { userId: { in: userIds }, revokedAt: null },
         data: { revokedAt: now },
@@ -512,10 +535,6 @@ export class PlatformAdminService {
       await transaction.restaurantChain.update({
         where: { id: businessId },
         data: { status: RestaurantChainStatus.ACTIVE },
-      });
-      await transaction.businessWallet.updateMany({
-        where: { chainId: businessId },
-        data: { status: WalletStatus.ACTIVE },
       });
       await transaction.businessSubscriptionEvent.create({
         data: {
@@ -600,9 +619,6 @@ export class PlatformAdminService {
           plan: { select: servicePlanSelect },
           events: { orderBy: { effectiveAt: 'desc' as const }, take: 20 },
         },
-      },
-      wallet: {
-        select: { id: true, currency: true, balance: true, heldBalance: true, status: true },
       },
       ownerAssignments: {
         select: {

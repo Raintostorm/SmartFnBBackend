@@ -27,6 +27,12 @@ class PublicServicePlanResponseDto {
 
   @ApiProperty({ example: 100 })
   maxTables!: number;
+
+  @ApiProperty({ example: true })
+  brandingEnabled!: boolean;
+
+  @ApiProperty({ example: false })
+  multiBranchComparisonEnabled!: boolean;
 }
 
 @Public()

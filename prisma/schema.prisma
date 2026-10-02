@@ -229,27 +229,6 @@ enum SubscriptionEventType {
   REACTIVATED
 }
 
-enum WalletStatus {
-  ACTIVE
-  SUSPENDED
-}
-
-enum WalletLedgerEntryType {
-  PAYMENT_CREDIT
-  SERVICE_FEE
-  WITHDRAWAL
-  REFUND
-  ADJUSTMENT
-}
-
-enum WithdrawalRequestStatus {
-  PENDING
-  APPROVED
-  REJECTED
-  TRANSFERRED
-  TRANSFER_FAILED
-}
-
 enum EmailOutboxStatus {
   PENDING
   SENT
@@ -291,10 +270,6 @@ model User {
   reviewedApplications      RegistrationApplication[]   @relation("RegistrationReviewedBy")
   approvedApplications      RegistrationApplication[]   @relation("RegistrationOwnerUser")
   subscriptionEvents        BusinessSubscriptionEvent[] @relation("SubscriptionChangedBy")
-  financeConfigsUpdated     PlatformFinanceConfig[]     @relation("FinanceConfigUpdatedBy")
-  withdrawalRequests        WithdrawalRequest[]         @relation("WithdrawalRequestedBy")
-  withdrawalsReviewed       WithdrawalRequest[]         @relation("WithdrawalReviewedBy")
-  withdrawalsTransferred    WithdrawalRequest[]         @relation("WithdrawalTransferredBy")
   passwordSetupTokens       PasswordSetupToken[]
 
   @@index([roleId])
@@ -344,7 +319,6 @@ model RestaurantChain {
   registrationApplication RegistrationApplication?
   subscription            BusinessSubscription?
   branding                BusinessBranding?
-  wallet                  BusinessWallet?
   invoices                Invoice[]
   menuOptionGroups        MenuOptionGroup[]
   payosChannel            PayosChannel?
@@ -386,31 +360,30 @@ model Branch {
   updatedAt    DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt    DateTime?    @map("deleted_at") @db.Timestamptz(6)
 
-  chain               RestaurantChain          @relation(fields: [chainId], references: [id], onDelete: Restrict)
-  operatingHours      BranchOperatingHour[]
-  specialHours        BranchSpecialHour[]
-  areas               BranchArea[]
-  employees           Employee[]
-  tables              RestaurantTable[]
-  reservations        Reservation[]
-  orders              Order[]
-  vouchers            Voucher[]
-  attendances         Attendance[]
-  workSessions        WorkSession[]
-  shiftTemplates      ShiftTemplate[]
-  shiftAssignments    ShiftAssignment[]
-  tableSessions       TableSession[]
-  tableAdjacencies    TableAdjacency[]
-  branchMenuItems     BranchMenuItem[]
-  servingTasks        ServingTask[]
-  walletLedgerEntries WalletLedgerEntry[]
-  invoices            Invoice[]
-  branchMenuOptions   BranchMenuOption[]
-  customerDisplays    CustomerDisplaySession[]
-  printJobs           PrintJob[]
-  dailySequences      BranchDailySequence[]
-  posStations         PosStation[]
-  displayDevices      DisplayDevice[]
+  chain             RestaurantChain          @relation(fields: [chainId], references: [id], onDelete: Restrict)
+  operatingHours    BranchOperatingHour[]
+  specialHours      BranchSpecialHour[]
+  areas             BranchArea[]
+  employees         Employee[]
+  tables            RestaurantTable[]
+  reservations      Reservation[]
+  orders            Order[]
+  vouchers          Voucher[]
+  attendances       Attendance[]
+  workSessions      WorkSession[]
+  shiftTemplates    ShiftTemplate[]
+  shiftAssignments  ShiftAssignment[]
+  tableSessions     TableSession[]
+  tableAdjacencies  TableAdjacency[]
+  branchMenuItems   BranchMenuItem[]
+  servingTasks      ServingTask[]
+  invoices          Invoice[]
+  branchMenuOptions BranchMenuOption[]
+  customerDisplays  CustomerDisplaySession[]
+  printJobs         PrintJob[]
+  dailySequences    BranchDailySequence[]
+  posStations       PosStation[]
+  displayDevices    DisplayDevice[]
 
   @@index([chainId, status])
   @@index([status])
@@ -517,7 +490,7 @@ model Employee {
   cancelledOrders          Order[]            @relation("OrderCancelledBy")
   updatedBranchMenuOptions BranchMenuOption[] @relation("BranchMenuOptionUpdatedBy")
   printJobs                PrintJob[]         @relation("PrintJobPrintedBy")
-  pairedDisplayDevices     DisplayDevice[]     @relation("DisplayDevicePairedBy")
+  pairedDisplayDevices     DisplayDevice[]    @relation("DisplayDevicePairedBy")
 
   @@index([branchId])
   @@index([status])
@@ -589,17 +562,19 @@ model RegistrationApplication {
 }
 
 model ServicePlan {
-  id           String   @id @default(uuid()) @db.Uuid
-  code         String   @unique @db.VarChar(50)
-  name         String   @db.VarChar(100)
-  description  String?  @db.VarChar(500)
-  monthlyPrice Decimal  @map("monthly_price") @db.Decimal(14, 2)
-  maxBranches  Int      @map("max_branches")
-  maxAccounts  Int      @map("max_accounts")
-  maxTables    Int      @map("max_tables")
-  isActive     Boolean  @default(true) @map("is_active")
-  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id                           String   @id @default(uuid()) @db.Uuid
+  code                         String   @unique @db.VarChar(50)
+  name                         String   @db.VarChar(100)
+  description                  String?  @db.VarChar(500)
+  monthlyPrice                 Decimal  @map("monthly_price") @db.Decimal(14, 2)
+  maxBranches                  Int      @map("max_branches")
+  maxAccounts                  Int      @map("max_accounts")
+  maxTables                    Int      @map("max_tables")
+  brandingEnabled              Boolean  @default(false) @map("branding_enabled")
+  multiBranchComparisonEnabled Boolean  @default(false) @map("multi_branch_comparison_enabled")
+  isActive                     Boolean  @default(true) @map("is_active")
+  createdAt                    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   applications  RegistrationApplication[]
   subscriptions BusinessSubscription[]
@@ -664,88 +639,6 @@ model BusinessBranding {
   chain RestaurantChain @relation(fields: [chainId], references: [id], onDelete: Cascade)
 
   @@map("business_branding")
-}
-
-model BusinessWallet {
-  id          String       @id @default(uuid()) @db.Uuid
-  chainId     String       @unique @map("chain_id") @db.Uuid
-  currency    String       @default("VND") @db.VarChar(3)
-  balance     Decimal      @default(0) @db.Decimal(14, 2)
-  heldBalance Decimal      @default(0) @map("held_balance") @db.Decimal(14, 2)
-  status      WalletStatus @default(ACTIVE)
-  createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt   DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
-
-  chain       RestaurantChain     @relation(fields: [chainId], references: [id], onDelete: Cascade)
-  entries     WalletLedgerEntry[]
-  withdrawals WithdrawalRequest[]
-
-  @@index([status])
-  @@map("business_wallets")
-}
-
-model WalletLedgerEntry {
-  id            String                @id @default(uuid()) @db.Uuid
-  walletId      String                @map("wallet_id") @db.Uuid
-  branchId      String?               @map("branch_id") @db.Uuid
-  type          WalletLedgerEntryType
-  amount        Decimal               @db.Decimal(14, 2)
-  balanceAfter  Decimal               @map("balance_after") @db.Decimal(14, 2)
-  referenceType String?               @map("reference_type") @db.VarChar(50)
-  referenceId   String?               @map("reference_id") @db.VarChar(100)
-  description   String?               @db.VarChar(500)
-  createdAt     DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
-
-  wallet BusinessWallet @relation(fields: [walletId], references: [id], onDelete: Restrict)
-  branch Branch?        @relation(fields: [branchId], references: [id], onDelete: SetNull)
-
-  @@index([walletId, createdAt])
-  @@index([branchId, createdAt])
-  @@index([referenceType, referenceId])
-  @@map("wallet_ledger_entries")
-}
-
-model WithdrawalRequest {
-  id                    String                  @id @default(uuid()) @db.Uuid
-  walletId              String                  @map("wallet_id") @db.Uuid
-  requestedById         String                  @map("requested_by_id") @db.Uuid
-  amount                Decimal                 @db.Decimal(14, 2)
-  status                WithdrawalRequestStatus @default(PENDING)
-  bankName              String                  @map("bank_name") @db.VarChar(150)
-  bankAccountName       String                  @map("bank_account_name") @db.VarChar(150)
-  bankAccountNumber     String                  @map("bank_account_number") @db.VarChar(50)
-  rejectionReason       String?                 @map("rejection_reason") @db.VarChar(1000)
-  reviewedById          String?                 @map("reviewed_by_id") @db.Uuid
-  reviewedAt            DateTime?               @map("reviewed_at") @db.Timestamptz(6)
-  bankTransactionCode   String?                 @map("bank_transaction_code") @db.VarChar(100)
-  transferFailureReason String?                 @map("transfer_failure_reason") @db.VarChar(1000)
-  transferredById       String?                 @map("transferred_by_id") @db.Uuid
-  transferredAt         DateTime?               @map("transferred_at") @db.Timestamptz(6)
-  createdAt             DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt             DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
-
-  wallet        BusinessWallet @relation(fields: [walletId], references: [id], onDelete: Restrict)
-  requestedBy   User           @relation("WithdrawalRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
-  reviewedBy    User?          @relation("WithdrawalReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
-  transferredBy User?          @relation("WithdrawalTransferredBy", fields: [transferredById], references: [id], onDelete: SetNull)
-
-  @@index([status, createdAt])
-  @@index([walletId, createdAt])
-  @@index([requestedById])
-  @@map("withdrawal_requests")
-}
-
-model PlatformFinanceConfig {
-  id                      String   @id @db.VarChar(30)
-  paymentFeeRate          Decimal  @map("payment_fee_rate") @db.Decimal(7, 6)
-  holdingPeriodDays       Int      @map("holding_period_days")
-  minimumWithdrawalAmount Decimal  @map("minimum_withdrawal_amount") @db.Decimal(14, 2)
-  updatedById             String?  @map("updated_by_id") @db.Uuid
-  updatedAt               DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
-
-  updatedBy User? @relation("FinanceConfigUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
-
-  @@map("platform_finance_configs")
 }
 
 model PasswordSetupToken {
@@ -1324,21 +1217,21 @@ model Invoice {
 }
 
 model PrintJob {
-  id          String            @id @default(uuid()) @db.Uuid
-  orderId     String            @map("order_id") @db.Uuid
-  branchId    String            @map("branch_id") @db.Uuid
-  type        PrintDocumentType
-  printedById String            @map("printed_by_id") @db.Uuid
-  isReprint   Boolean           @default(false) @map("is_reprint")
-  reason      String?           @db.VarChar(500)
-  printedAt   DateTime?         @map("printed_at") @db.Timestamptz(6)
-  stationId   String?           @map("station_id") @db.Uuid
-  status      PrintJobStatus    @default(PENDING)
-  errorMessage String?          @map("error_message") @db.VarChar(500)
+  id           String            @id @default(uuid()) @db.Uuid
+  orderId      String            @map("order_id") @db.Uuid
+  branchId     String            @map("branch_id") @db.Uuid
+  type         PrintDocumentType
+  printedById  String            @map("printed_by_id") @db.Uuid
+  isReprint    Boolean           @default(false) @map("is_reprint")
+  reason       String?           @db.VarChar(500)
+  printedAt    DateTime?         @map("printed_at") @db.Timestamptz(6)
+  stationId    String?           @map("station_id") @db.Uuid
+  status       PrintJobStatus    @default(PENDING)
+  errorMessage String?           @map("error_message") @db.VarChar(500)
 
-  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  branch    Branch   @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  printedBy Employee @relation("PrintJobPrintedBy", fields: [printedById], references: [id], onDelete: Restrict)
+  order     Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  branch    Branch      @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  printedBy Employee    @relation("PrintJobPrintedBy", fields: [printedById], references: [id], onDelete: Restrict)
   station   PosStation? @relation(fields: [stationId], references: [id], onDelete: SetNull)
 
   @@index([orderId, printedAt])

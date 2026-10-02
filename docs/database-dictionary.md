@@ -15,6 +15,7 @@
 - [`users`](#users) — Tài khoản đăng nhập chung cho mọi người dùng nội bộ.
 - [`auth_sessions`](#auth-sessions) — Refresh token và vòng đời phiên đăng nhập.
 - [`restaurant_chains`](#restaurant-chains) — Thông tin cấp chuỗi/thương hiệu.
+- [`payos_channels`](#payos-channels) — Thông tin kết nối PayOS được mã hóa riêng cho từng chuỗi.
 - [`branches`](#branches) — Chi nhánh vận hành cụ thể của một chuỗi.
 - [`branch_operating_hours`](#branch-operating-hours) — Lịch mở cửa lặp lại theo thứ trong tuần.
 - [`branch_special_hours`](#branch-special-hours) — Ngoại lệ giờ mở cửa cho một ngày cụ thể.
@@ -27,10 +28,6 @@
 - [`business_subscriptions`](#business-subscriptions) — Gói dịch vụ đang áp dụng và thời hạn của một chuỗi.
 - [`business_subscription_events`](#business-subscription-events) — Lịch sử thay đổi trạng thái/gói thuê bao để audit.
 - [`business_branding`](#business-branding) — Tên, logo và bảng màu nhận diện dùng nhất quán trên các ứng dụng.
-- [`business_wallets`](#business-wallets) — Số dư ví đối soát của chuỗi.
-- [`wallet_ledger_entries`](#wallet-ledger-entries) — Sổ cái bất biến ghi từng biến động số dư ví.
-- [`withdrawal_requests`](#withdrawal-requests) — Yêu cầu rút tiền và trạng thái xử lý của Platform Admin.
-- [`platform_finance_configs`](#platform-finance-configs) — Cấu hình tài chính áp dụng ở cấp nền tảng.
 - [`password_setup_tokens`](#password-setup-tokens) — Token dùng một lần cho quy trình thiết lập mật khẩu an toàn.
 - [`email_outbox`](#email-outbox) — Hàng đợi email bền vững để gửi lại khi provider lỗi.
 - [`restaurant_tables`](#restaurant-tables) — Bàn vật lý và tọa độ để dựng sơ đồ bàn cho Waiter.
@@ -41,20 +38,23 @@
 - [`reservation_tables`](#reservation-tables) — Bảng nối cho phép một đặt bàn giữ nhiều bàn liền kề.
 - [`menu_categories`](#menu-categories) — Nhóm món của một chi nhánh.
 - [`menu_items`](#menu-items) — Thông tin món và giá niêm yết.
-- [`menu_option_groups`](#menu-option-groups) —
-- [`menu_options`](#menu-options) —
-- [`menu_item_option_groups`](#menu-item-option-groups) —
-- [`branch_menu_options`](#branch-menu-options) —
+- [`menu_option_groups`](#menu-option-groups) — Nhóm lựa chọn như kích cỡ hoặc mức đường.
+- [`menu_options`](#menu-options) — Một lựa chọn cụ thể trong nhóm tùy chọn.
+- [`menu_item_option_groups`](#menu-item-option-groups) — Liên kết món với nhóm tùy chọn áp dụng.
+- [`branch_menu_options`](#branch-menu-options) — Tình trạng bán của tùy chọn tại từng chi nhánh.
 - [`branch_menu_items`](#branch-menu-items) — Khả năng bán và số phần còn lại của món tại chi nhánh.
 - [`orders`](#orders) — Một lần gọi món trong table session; một phiên có thể có nhiều order.
-- [`branch_daily_sequences`](#branch-daily-sequences) —
+- [`branch_daily_sequences`](#branch-daily-sequences) — Bộ đếm số gọi món theo ngày của từng chi nhánh.
 - [`order_items`](#order-items) — Snapshot từng món tại thời điểm gọi và trạng thái xử lý bếp/phục vụ.
-- [`order_item_units`](#order-item-units) —
+- [`order_item_units`](#order-item-units) — Đơn vị chế biến riêng lẻ khi một dòng món có nhiều số lượng.
 - [`payments`](#payments) — Một lần thử hoặc hoàn tất thanh toán cho order hoặc table session.
-- [`payment_webhook_events`](#payment-webhook-events) —
+- [`payment_webhook_events`](#payment-webhook-events) — Sự kiện webhook thanh toán đã tiếp nhận để chống xử lý trùng.
 - [`invoices`](#invoices) — Snapshot bill nội bộ bất biến được phát hành sau khi thanh toán đủ.
-- [`print_jobs`](#print-jobs) —
-- [`customer_display_sessions`](#customer-display-sessions) —
+- [`print_jobs`](#print-jobs) — Yêu cầu in hóa đơn hoặc phiếu bếp và trạng thái thực thi.
+- [`pos_stations`](#pos-stations) — Thiết bị quầy thu ngân thuộc một chi nhánh.
+- [`pairing_codes`](#pairing-codes) — Mã ghép nối dùng một lần để cấp quyền cho màn hình.
+- [`display_devices`](#display-devices) — Màn hình khách hàng hoặc màn hình gọi món đã ghép nối.
+- [`customer_display_sessions`](#customer-display-sessions) — Phiên hiển thị giỏ hàng của khách tại quầy.
 - [`invoice_items`](#invoice-items) — Snapshot từng dòng món tại thời điểm phát hành bill.
 - [`invoice_payments`](#invoice-payments) — Phân bổ các payment thành công vào bill đã phát hành.
 - [`vouchers`](#vouchers) — Khuyến mãi áp dụng toàn chuỗi hoặc một chi nhánh.
@@ -150,6 +150,24 @@ Thông tin cấp chuỗi/thương hiệu.
 **Quan hệ**
 
 - Không có khóa ngoại trực tiếp.
+
+## `payos_channels`
+
+Thông tin kết nối PayOS được mã hóa riêng cho từng chuỗi.
+
+| Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
+| --- | --- | --- | --- | --- | --- |
+| `id` | `id` | `String` | Không | PK; default: uuid() | Khóa chính UUID. |
+| `chain_id` | `chainId` | `String` | Không | UNIQUE | Chuỗi nhà hàng sở hữu chi nhánh. |
+| `client_id_cipher` | `clientIdCipher` | `String` | Không | — | client id cipher của PayosChannel. |
+| `api_key_cipher` | `apiKeyCipher` | `String` | Không | — | api key cipher của PayosChannel. |
+| `checksum_key_cipher` | `checksumKeyCipher` | `String` | Không | — | checksum key cipher của PayosChannel. |
+| `created_at` | `createdAt` | `DateTime` | Không | default: now() | Thời điểm tạo bản ghi. |
+| `updated_at` | `updatedAt` | `DateTime` | Không | — | Thời điểm cập nhật gần nhất. |
+
+**Quan hệ**
+
+- `chainId` → `restaurant_chains.id` (xóa: `Cascade`).
 
 ## `branches`
 
@@ -347,6 +365,8 @@ Gói dịch vụ và các giới hạn tài nguyên được bán cho chuỗi.
 | `max_branches` | `maxBranches` | `Int` | Không | — | max branches của ServicePlan. |
 | `max_accounts` | `maxAccounts` | `Int` | Không | — | max accounts của ServicePlan. |
 | `max_tables` | `maxTables` | `Int` | Không | — | max tables của ServicePlan. |
+| `branding_enabled` | `brandingEnabled` | `Boolean` | Không | default: false | branding enabled của ServicePlan. |
+| `multi_branch_comparison_enabled` | `multiBranchComparisonEnabled` | `Boolean` | Không | default: false | multi branch comparison enabled của ServicePlan. |
 | `is_active` | `isActive` | `Boolean` | Không | default: true | Cờ bật/tắt nghiệp vụ mà không xóa dữ liệu. |
 | `created_at` | `createdAt` | `DateTime` | Không | default: now() | Thời điểm tạo bản ghi. |
 | `updated_at` | `updatedAt` | `DateTime` | Không | — | Thời điểm cập nhật gần nhất. |
@@ -418,95 +438,6 @@ Tên, logo và bảng màu nhận diện dùng nhất quán trên các ứng d�
 **Quan hệ**
 
 - `chainId` → `restaurant_chains.id` (xóa: `Cascade`).
-
-## `business_wallets`
-
-Số dư ví đối soát của chuỗi.
-
-| Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
-| --- | --- | --- | --- | --- | --- |
-| `id` | `id` | `String` | Không | PK; default: uuid() | Khóa chính UUID. |
-| `chain_id` | `chainId` | `String` | Không | UNIQUE | Chuỗi nhà hàng sở hữu chi nhánh. |
-| `currency` | `currency` | `String` | Không | default: "VND" | Mã tiền tệ ISO dùng cho giá và thanh toán. |
-| `balance` | `balance` | `Decimal` | Không | default: 0 | balance của BusinessWallet. |
-| `held_balance` | `heldBalance` | `Decimal` | Không | default: 0 | held balance của BusinessWallet. |
-| `status` | `status` | `WalletStatus` | Không | default: ACTIVE | Trạng thái vòng đời hiện tại. |
-| `created_at` | `createdAt` | `DateTime` | Không | default: now() | Thời điểm tạo bản ghi. |
-| `updated_at` | `updatedAt` | `DateTime` | Không | — | Thời điểm cập nhật gần nhất. |
-
-**Quan hệ**
-
-- `chainId` → `restaurant_chains.id` (xóa: `Cascade`).
-
-## `wallet_ledger_entries`
-
-Sổ cái bất biến ghi từng biến động số dư ví.
-
-| Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
-| --- | --- | --- | --- | --- | --- |
-| `id` | `id` | `String` | Không | PK; default: uuid() | Khóa chính UUID. |
-| `wallet_id` | `walletId` | `String` | Không | — | wallet id của WalletLedgerEntry. |
-| `branch_id` | `branchId` | `String` | Có | — | Chi nhánh sở hữu hoặc xử lý bản ghi. |
-| `type` | `type` | `WalletLedgerEntryType` | Không | — | Loại nghiệp vụ của bản ghi. |
-| `amount` | `amount` | `Decimal` | Không | — | Số tiền của giao dịch. |
-| `balance_after` | `balanceAfter` | `Decimal` | Không | — | balance after của WalletLedgerEntry. |
-| `reference_type` | `referenceType` | `String` | Có | — | reference type của WalletLedgerEntry. |
-| `reference_id` | `referenceId` | `String` | Có | — | reference id của WalletLedgerEntry. |
-| `description` | `description` | `String` | Có | — | Mô tả bổ sung. |
-| `created_at` | `createdAt` | `DateTime` | Không | default: now() | Thời điểm tạo bản ghi. |
-
-**Quan hệ**
-
-- `walletId` → `business_wallets.id` (xóa: `Restrict`).
-- `branchId` → `branches.id` (xóa: `SetNull`).
-
-## `withdrawal_requests`
-
-Yêu cầu rút tiền và trạng thái xử lý của Platform Admin.
-
-| Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
-| --- | --- | --- | --- | --- | --- |
-| `id` | `id` | `String` | Không | PK; default: uuid() | Khóa chính UUID. |
-| `wallet_id` | `walletId` | `String` | Không | — | wallet id của WithdrawalRequest. |
-| `requested_by_id` | `requestedById` | `String` | Không | — | requested by id của WithdrawalRequest. |
-| `amount` | `amount` | `Decimal` | Không | — | Số tiền của giao dịch. |
-| `status` | `status` | `WithdrawalRequestStatus` | Không | default: PENDING | Trạng thái vòng đời hiện tại. |
-| `bank_name` | `bankName` | `String` | Không | — | bank name của WithdrawalRequest. |
-| `bank_account_name` | `bankAccountName` | `String` | Không | — | bank account name của WithdrawalRequest. |
-| `bank_account_number` | `bankAccountNumber` | `String` | Không | — | bank account number của WithdrawalRequest. |
-| `rejection_reason` | `rejectionReason` | `String` | Có | — | rejection reason của WithdrawalRequest. |
-| `reviewed_by_id` | `reviewedById` | `String` | Có | — | reviewed by id của WithdrawalRequest. |
-| `reviewed_at` | `reviewedAt` | `DateTime` | Có | — | reviewed at của WithdrawalRequest. |
-| `bank_transaction_code` | `bankTransactionCode` | `String` | Có | — | bank transaction code của WithdrawalRequest. |
-| `transfer_failure_reason` | `transferFailureReason` | `String` | Có | — | transfer failure reason của WithdrawalRequest. |
-| `transferred_by_id` | `transferredById` | `String` | Có | — | transferred by id của WithdrawalRequest. |
-| `transferred_at` | `transferredAt` | `DateTime` | Có | — | transferred at của WithdrawalRequest. |
-| `created_at` | `createdAt` | `DateTime` | Không | default: now() | Thời điểm tạo bản ghi. |
-| `updated_at` | `updatedAt` | `DateTime` | Không | — | Thời điểm cập nhật gần nhất. |
-
-**Quan hệ**
-
-- `walletId` → `business_wallets.id` (xóa: `Restrict`).
-- `requestedById` → `users.id` (xóa: `Restrict`).
-- `reviewedById` → `users.id` (xóa: `SetNull`).
-- `transferredById` → `users.id` (xóa: `SetNull`).
-
-## `platform_finance_configs`
-
-Cấu hình tài chính áp dụng ở cấp nền tảng.
-
-| Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
-| --- | --- | --- | --- | --- | --- |
-| `id` | `id` | `String` | Không | PK | Khóa chính UUID. |
-| `payment_fee_rate` | `paymentFeeRate` | `Decimal` | Không | — | payment fee rate của PlatformFinanceConfig. |
-| `holding_period_days` | `holdingPeriodDays` | `Int` | Không | — | holding period days của PlatformFinanceConfig. |
-| `minimum_withdrawal_amount` | `minimumWithdrawalAmount` | `Decimal` | Không | — | minimum withdrawal amount của PlatformFinanceConfig. |
-| `updated_by_id` | `updatedById` | `String` | Có | — | Nhân viên cập nhật gần nhất. |
-| `updated_at` | `updatedAt` | `DateTime` | Không | — | Thời điểm cập nhật gần nhất. |
-
-**Quan hệ**
-
-- `updatedById` → `users.id` (xóa: `SetNull`).
 
 ## `password_setup_tokens`
 
@@ -742,7 +673,7 @@ Thông tin món và giá niêm yết.
 
 ## `menu_option_groups`
 
-
+Nhóm lựa chọn như kích cỡ hoặc mức đường.
 
 | Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
 | --- | --- | --- | --- | --- | --- |
@@ -764,7 +695,7 @@ Thông tin món và giá niêm yết.
 
 ## `menu_options`
 
-
+Một lựa chọn cụ thể trong nhóm tùy chọn.
 
 | Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
 | --- | --- | --- | --- | --- | --- |
@@ -784,7 +715,7 @@ Thông tin món và giá niêm yết.
 
 ## `menu_item_option_groups`
 
-
+Liên kết món với nhóm tùy chọn áp dụng.
 
 | Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
 | --- | --- | --- | --- | --- | --- |
@@ -799,7 +730,7 @@ Thông tin món và giá niêm yết.
 
 ## `branch_menu_options`
 
-
+Tình trạng bán của tùy chọn tại từng chi nhánh.
 
 | Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
 | --- | --- | --- | --- | --- | --- |
@@ -853,6 +784,7 @@ Một lần gọi món trong table session; một phiên có thể có nhiều o
 | `created_by_waiter_id` | `createdByWaiterId` | `String` | Có | — | Waiter thực sự ghi nhận lần gọi món. |
 | `created_by_cashier_id` | `createdByCashierId` | `String` | Có | — | created by cashier id của Order. |
 | `delivered_by_id` | `deliveredById` | `String` | Có | — | delivered by id của Order. |
+| `cancelled_by_id` | `cancelledById` | `String` | Có | — | Nhân viên thực hiện hủy. |
 | `voucher_id` | `voucherId` | `String` | Có | — | Voucher được áp dụng. |
 | `type` | `type` | `OrderType` | Không | default: DINE_IN | Loại nghiệp vụ của bản ghi. |
 | `status` | `status` | `OrderStatus` | Không | default: PENDING | Trạng thái vòng đời hiện tại. |
@@ -872,6 +804,7 @@ Một lần gọi món trong table session; một phiên có thể có nhiều o
 | `business_date` | `businessDate` | `DateTime` | Có | — | business date của Order. |
 | `call_number` | `callNumber` | `Int` | Có | — | call number của Order. |
 | `cancelled_at` | `cancelledAt` | `DateTime` | Có | — | Thời điểm hủy. |
+| `cancellation_reason` | `cancellationReason` | `String` | Có | — | Lý do hủy để truy vết. |
 | `created_at` | `createdAt` | `DateTime` | Không | default: now() | Thời điểm tạo bản ghi. |
 | `updated_at` | `updatedAt` | `DateTime` | Không | — | Thời điểm cập nhật gần nhất. |
 
@@ -885,11 +818,12 @@ Một lần gọi món trong table session; một phiên có thể có nhiều o
 - `createdByWaiterId` → `employees.id` (xóa: `SetNull`).
 - `createdByCashierId` → `employees.id` (xóa: `SetNull`).
 - `deliveredById` → `employees.id` (xóa: `SetNull`).
+- `cancelledById` → `employees.id` (xóa: `SetNull`).
 - `voucherId` → `vouchers.id` (xóa: `SetNull`).
 
 ## `branch_daily_sequences`
 
-
+Bộ đếm số gọi món theo ngày của từng chi nhánh.
 
 | Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
 | --- | --- | --- | --- | --- | --- |
@@ -947,7 +881,7 @@ Snapshot từng món tại thời điểm gọi và trạng thái xử lý bếp
 
 ## `order_item_units`
 
-
+Đơn vị chế biến riêng lẻ khi một dòng món có nhiều số lượng.
 
 | Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
 | --- | --- | --- | --- | --- | --- |
@@ -1006,7 +940,7 @@ Một lần thử hoặc hoàn tất thanh toán cho order hoặc table session.
 
 ## `payment_webhook_events`
 
-
+Sự kiện webhook thanh toán đã tiếp nhận để chống xử lý trùng.
 
 | Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
 | --- | --- | --- | --- | --- | --- |
@@ -1077,7 +1011,7 @@ Snapshot bill nội bộ bất biến được phát hành sau khi thanh toán �
 
 ## `print_jobs`
 
-
+Yêu cầu in hóa đơn hoặc phiếu bếp và trạng thái thực thi.
 
 | Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
 | --- | --- | --- | --- | --- | --- |
@@ -1088,17 +1022,84 @@ Snapshot bill nội bộ bất biến được phát hành sau khi thanh toán �
 | `printed_by_id` | `printedById` | `String` | Không | — | printed by id của PrintJob. |
 | `is_reprint` | `isReprint` | `Boolean` | Không | default: false | is reprint của PrintJob. |
 | `reason` | `reason` | `String` | Có | — | reason của PrintJob. |
-| `printed_at` | `printedAt` | `DateTime` | Không | default: now() | printed at của PrintJob. |
+| `printed_at` | `printedAt` | `DateTime` | Có | — | printed at của PrintJob. |
+| `station_id` | `stationId` | `String` | Có | — | station id của PrintJob. |
+| `status` | `status` | `PrintJobStatus` | Không | default: PENDING | Trạng thái vòng đời hiện tại. |
+| `error_message` | `errorMessage` | `String` | Có | — | error message của PrintJob. |
 
 **Quan hệ**
 
 - `orderId` → `orders.id` (xóa: `Cascade`).
 - `branchId` → `branches.id` (xóa: `Restrict`).
 - `printedById` → `employees.id` (xóa: `Restrict`).
+- `stationId` → `pos_stations.id` (xóa: `SetNull`).
+
+## `pos_stations`
+
+Thiết bị quầy thu ngân thuộc một chi nhánh.
+
+| Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
+| --- | --- | --- | --- | --- | --- |
+| `id` | `id` | `String` | Không | PK; default: uuid() | Khóa chính UUID. |
+| `branch_id` | `branchId` | `String` | Không | — | Chi nhánh sở hữu hoặc xử lý bản ghi. |
+| `name` | `name` | `String` | Không | — | Tên hiển thị. |
+| `status` | `status` | `PosStationStatus` | Không | default: ACTIVE | Trạng thái vòng đời hiện tại. |
+| `printer_connection` | `printerConnection` | `PrinterConnectionType` | Không | default: NONE | printer connection của PosStation. |
+| `printer_address` | `printerAddress` | `String` | Có | — | printer address của PosStation. |
+| `cart_version` | `cartVersion` | `Int` | Không | default: 0 | cart version của PosStation. |
+| `created_at` | `createdAt` | `DateTime` | Không | default: now() | Thời điểm tạo bản ghi. |
+| `updated_at` | `updatedAt` | `DateTime` | Không | — | Thời điểm cập nhật gần nhất. |
+
+**Quan hệ**
+
+- `branchId` → `branches.id` (xóa: `Cascade`).
+
+## `pairing_codes`
+
+Mã ghép nối dùng một lần để cấp quyền cho màn hình.
+
+| Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
+| --- | --- | --- | --- | --- | --- |
+| `id` | `id` | `String` | Không | PK; default: uuid() | Khóa chính UUID. |
+| `code_hash` | `codeHash` | `String` | Không | UNIQUE | code hash của PairingCode. |
+| `device_token_hash` | `deviceTokenHash` | `String` | Có | — | device token hash của PairingCode. |
+| `device_type` | `deviceType` | `DisplayDeviceType` | Không | — | device type của PairingCode. |
+| `expires_at` | `expiresAt` | `DateTime` | Không | — | Thời điểm dữ liệu hoặc token hết hiệu lực. |
+| `consumed_at` | `consumedAt` | `DateTime` | Có | — | consumed at của PairingCode. |
+| `created_at` | `createdAt` | `DateTime` | Không | default: now() | Thời điểm tạo bản ghi. |
+
+**Quan hệ**
+
+- Không có khóa ngoại trực tiếp.
+
+## `display_devices`
+
+Màn hình khách hàng hoặc màn hình gọi món đã ghép nối.
+
+| Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
+| --- | --- | --- | --- | --- | --- |
+| `id` | `id` | `String` | Không | PK; default: uuid() | Khóa chính UUID. |
+| `type` | `type` | `DisplayDeviceType` | Không | — | Loại nghiệp vụ của bản ghi. |
+| `branch_id` | `branchId` | `String` | Không | — | Chi nhánh sở hữu hoặc xử lý bản ghi. |
+| `station_id` | `stationId` | `String` | Có | — | station id của DisplayDevice. |
+| `token_hash` | `tokenHash` | `String` | Không | UNIQUE | token hash của DisplayDevice. |
+| `name` | `name` | `String` | Có | — | Tên hiển thị. |
+| `paired_by_id` | `pairedById` | `String` | Không | — | paired by id của DisplayDevice. |
+| `paired_at` | `pairedAt` | `DateTime` | Không | default: now() | paired at của DisplayDevice. |
+| `last_seen_at` | `lastSeenAt` | `DateTime` | Có | — | last seen at của DisplayDevice. |
+| `revoked_at` | `revokedAt` | `DateTime` | Có | — | Thời điểm phiên đăng nhập bị thu hồi. |
+| `created_at` | `createdAt` | `DateTime` | Không | default: now() | Thời điểm tạo bản ghi. |
+| `updated_at` | `updatedAt` | `DateTime` | Không | — | Thời điểm cập nhật gần nhất. |
+
+**Quan hệ**
+
+- `branchId` → `branches.id` (xóa: `Cascade`).
+- `stationId` → `pos_stations.id` (xóa: `Cascade`).
+- `pairedById` → `employees.id` (xóa: `Restrict`).
 
 ## `customer_display_sessions`
 
-
+Phiên hiển thị giỏ hàng của khách tại quầy.
 
 | Cột PostgreSQL | Prisma | Kiểu | Null | Ràng buộc | Nội dung / lý do tồn tại |
 | --- | --- | --- | --- | --- | --- |

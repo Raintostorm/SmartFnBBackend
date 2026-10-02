@@ -7,7 +7,6 @@ import {
   IsInt,
   IsNumber,
   IsOptional,
-  IsPositive,
   IsString,
   IsUUID,
   Matches,
@@ -16,10 +15,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
-import {
-  RegistrationApplicationStatus,
-  WithdrawalRequestStatus,
-} from '../../../generated/prisma/client.js';
+import { RegistrationApplicationStatus } from '../../../generated/prisma/client.js';
 
 export class SubmitRegistrationApplicationDto {
   @ApiProperty({ example: 'Smart F&B Company', maxLength: 150 })
@@ -160,6 +156,20 @@ export class CreateServicePlanDto {
   @IsInt()
   @Min(1)
   maxTables!: number;
+
+  @ApiProperty({
+    example: true,
+    description: 'Allows the business to customize its branding',
+  })
+  @IsBoolean()
+  brandingEnabled!: boolean;
+
+  @ApiProperty({
+    example: false,
+    description: 'Allows cross-branch comparison reports',
+  })
+  @IsBoolean()
+  multiBranchComparisonEnabled!: boolean;
 }
 
 export class UpdateServicePlanDto extends PartialType(CreateServicePlanDto) {
@@ -211,79 +221,4 @@ export class SubscriptionStatusReasonDto {
   @IsString()
   @MaxLength(1000)
   reason?: string;
-}
-
-export class UpdatePlatformFinanceConfigDto {
-  @ApiProperty({ example: 0.02, minimum: 0, maximum: 1 })
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 6 })
-  @Min(0)
-  @Max(1)
-  paymentFeeRate!: number;
-
-  @ApiProperty({ example: 3, minimum: 0, maximum: 365 })
-  @Type(() => Number)
-  @IsInt()
-  @Min(0)
-  @Max(365)
-  holdingPeriodDays!: number;
-
-  @ApiProperty({ example: 100000, minimum: 1 })
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @IsPositive()
-  minimumWithdrawalAmount!: number;
-}
-
-export class ListWithdrawalRequestsQueryDto extends PaginationQueryDto {
-  @ApiPropertyOptional({ enum: WithdrawalRequestStatus })
-  @IsOptional()
-  @IsEnum(WithdrawalRequestStatus)
-  status?: WithdrawalRequestStatus;
-}
-
-export class WithdrawalReasonDto {
-  @ApiProperty({ maxLength: 1000 })
-  @IsString()
-  @MinLength(3)
-  @MaxLength(1000)
-  reason!: string;
-}
-
-export class ConfirmWithdrawalTransferDto {
-  @ApiProperty({ example: 'BANK-TXN-20260918-001', maxLength: 100 })
-  @IsString()
-  @MinLength(3)
-  @MaxLength(100)
-  bankTransactionCode!: string;
-}
-
-export class CreateWithdrawalRequestDto {
-  @ApiProperty({ format: 'uuid', description: 'RestaurantChain/business ID' })
-  @IsUUID()
-  businessId!: string;
-
-  @ApiProperty({ example: 500000, minimum: 1 })
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @IsPositive()
-  amount!: number;
-
-  @ApiProperty({ example: 'Vietcombank', maxLength: 150 })
-  @IsString()
-  @MinLength(2)
-  @MaxLength(150)
-  bankName!: string;
-
-  @ApiProperty({ example: 'NGUYEN VAN AN', maxLength: 150 })
-  @IsString()
-  @MinLength(2)
-  @MaxLength(150)
-  bankAccountName!: string;
-
-  @ApiProperty({ example: '0123456789', maxLength: 50 })
-  @IsString()
-  @MinLength(4)
-  @MaxLength(50)
-  bankAccountNumber!: string;
 }

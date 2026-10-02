@@ -28,20 +28,15 @@ import { Roles } from '../auth/decorators/roles.decorator.js';
 import {
   ApproveRegistrationApplicationDto,
   ChangeSubscriptionPlanDto,
-  ConfirmWithdrawalTransferDto,
   CreateServicePlanDto,
   ListRegistrationApplicationsQueryDto,
-  ListWithdrawalRequestsQueryDto,
   PaginationQueryDto,
   RejectRegistrationApplicationDto,
   RenewSubscriptionDto,
   SubscriptionStatusReasonDto,
-  UpdatePlatformFinanceConfigDto,
   UpdateServicePlanDto,
-  WithdrawalReasonDto,
 } from './dto/platform-admin.dto.js';
 import { PlatformAdminService } from './platform-admin.service.js';
-import { PlatformFinanceService } from './platform-finance.service.js';
 
 @Roles(AppRole.ADMIN)
 @ApiTags('Platform administration')
@@ -50,10 +45,7 @@ import { PlatformFinanceService } from './platform-finance.service.js';
 @ApiForbiddenResponse({ description: 'Only a platform ADMIN can use this endpoint' })
 @Controller('admin')
 export class PlatformAdminController {
-  constructor(
-    private readonly platformAdminService: PlatformAdminService,
-    private readonly platformFinanceService: PlatformFinanceService,
-  ) {}
+  constructor(private readonly platformAdminService: PlatformAdminService) {}
 
   @Get('registration-applications')
   @ApiOperation({ summary: 'List and search business registration applications' })
@@ -70,7 +62,7 @@ export class PlatformAdminController {
   @Post('registration-applications/:id/approve')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Approve an application and provision business, wallet, branding, and Owner',
+    summary: 'Approve an application and provision business, branding, and Owner',
     description: 'Queues the Owner setup email in the transactional email outbox.',
   })
   @ApiConflictResponse({ description: 'Application already reviewed or Owner identity conflicts' })
@@ -84,7 +76,10 @@ export class PlatformAdminController {
 
   @Post('registration-applications/:id/reject')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Reject a pending registration application with a reason' })
+  @ApiOperation({
+    summary: 'Reject a pending registration application with a reason',
+    description: 'Queues a rejection email in the transactional email outbox.',
+  })
   rejectApplication(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: RejectRegistrationApplicationDto,
@@ -100,7 +95,7 @@ export class PlatformAdminController {
   }
 
   @Post('service-plans')
-  @ApiOperation({ summary: 'Define a service plan and its resource limits' })
+  @ApiOperation({ summary: 'Define a service plan, resource limits, and enabled features' })
   createPlan(@Body() dto: CreateServicePlanDto) {
     return this.platformAdminService.createServicePlan(dto);
   }
@@ -178,84 +173,5 @@ export class PlatformAdminController {
     @CurrentUser() admin: AuthenticatedUser,
   ) {
     return this.platformAdminService.resetOwnerPassword(ownerId, admin.id);
-  }
-
-  @Get('finance/config')
-  @ApiOperation({ summary: 'View payment fee, holding period, and minimum withdrawal settings' })
-  getFinanceConfig() {
-    return this.platformFinanceService.getFinanceConfig();
-  }
-
-  @Patch('finance/config')
-  @ApiOperation({ summary: 'Update platform finance settings' })
-  updateFinanceConfig(
-    @Body() dto: UpdatePlatformFinanceConfigDto,
-    @CurrentUser() admin: AuthenticatedUser,
-  ) {
-    return this.platformFinanceService.updateFinanceConfig(dto, admin.id);
-  }
-
-  @Get('businesses/:id/wallet')
-  @ApiOperation({ summary: 'View a business wallet balance and immutable ledger' })
-  getBusinessWallet(
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Query() query: PaginationQueryDto,
-  ) {
-    return this.platformFinanceService.getBusinessWallet(id, query);
-  }
-
-  @Get('withdrawals')
-  @ApiOperation({ summary: 'List and search withdrawal requests' })
-  listWithdrawals(@Query() query: ListWithdrawalRequestsQueryDto) {
-    return this.platformFinanceService.listWithdrawalRequests(query);
-  }
-
-  @Get('withdrawals/:id')
-  @ApiOperation({ summary: 'View a withdrawal request' })
-  getWithdrawal(@Param('id', new ParseUUIDPipe()) id: string) {
-    return this.platformFinanceService.getWithdrawalRequest(id);
-  }
-
-  @Post('withdrawals/:id/approve')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Approve a pending withdrawal request' })
-  approveWithdrawal(
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @CurrentUser() admin: AuthenticatedUser,
-  ) {
-    return this.platformFinanceService.approveWithdrawalRequest(id, admin.id);
-  }
-
-  @Post('withdrawals/:id/reject')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Reject a pending withdrawal request and release held funds' })
-  rejectWithdrawal(
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Body() dto: WithdrawalReasonDto,
-    @CurrentUser() admin: AuthenticatedUser,
-  ) {
-    return this.platformFinanceService.rejectWithdrawalRequest(id, dto.reason, admin.id);
-  }
-
-  @Post('withdrawals/:id/confirm-transfer')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Confirm a real bank transfer and record its transaction code' })
-  confirmWithdrawalTransfer(
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Body() dto: ConfirmWithdrawalTransferDto,
-    @CurrentUser() admin: AuthenticatedUser,
-  ) {
-    return this.platformFinanceService.confirmWithdrawalTransfer(id, dto, admin.id);
-  }
-
-  @Post('withdrawals/:id/transfer-failed')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Mark an approved transfer as failed and release held funds' })
-  markWithdrawalFailed(
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Body() dto: WithdrawalReasonDto,
-    @CurrentUser() admin: AuthenticatedUser,
-  ) {
-    return this.platformFinanceService.markWithdrawalTransferFailed(id, dto.reason, admin.id);
   }
 }

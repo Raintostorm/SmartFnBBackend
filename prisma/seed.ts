@@ -150,7 +150,6 @@ async function createDemoOperationsData(): Promise<void> {
     servicePlan: '10000000-0000-4000-8000-000000000028',
     subscription: '10000000-0000-4000-8000-000000000029',
     branding: '10000000-0000-4000-8000-000000000030',
-    wallet: '10000000-0000-4000-8000-000000000031',
     ownerUser: '10000000-0000-4000-8000-000000000032',
     owner: '10000000-0000-4000-8000-000000000033',
     ownerAssignment: '10000000-0000-4000-8000-000000000034',
@@ -206,6 +205,8 @@ async function createDemoOperationsData(): Promise<void> {
       maxBranches: 5,
       maxAccounts: 20,
       maxTables: 100,
+      brandingEnabled: true,
+      multiBranchComparisonEnabled: true,
       isActive: true,
     },
     create: {
@@ -217,6 +218,8 @@ async function createDemoOperationsData(): Promise<void> {
       maxBranches: 5,
       maxAccounts: 20,
       maxTables: 100,
+      brandingEnabled: true,
+      multiBranchComparisonEnabled: true,
     },
   });
 
@@ -248,15 +251,6 @@ async function createDemoOperationsData(): Promise<void> {
         id: ids.branding,
         chainId: ids.chain,
         displayName: 'Smart F&B Demo Chain',
-      },
-    }),
-    prisma.businessWallet.upsert({
-      where: { chainId: ids.chain },
-      update: { currency: 'VND', status: 'ACTIVE' },
-      create: {
-        id: ids.wallet,
-        chainId: ids.chain,
-        currency: 'VND',
       },
     }),
   ]);

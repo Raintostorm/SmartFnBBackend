@@ -20,6 +20,8 @@ const planSelect = {
   maxBranches: true,
   maxAccounts: true,
   maxTables: true,
+  brandingEnabled: true,
+  multiBranchComparisonEnabled: true,
 } satisfies Prisma.ServicePlanSelect;
 
 type PlanSummary = Prisma.ServicePlanGetPayload<{ select: typeof planSelect }>;
