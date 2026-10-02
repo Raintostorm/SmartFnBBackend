@@ -11,12 +11,17 @@ import { BranchAccessService } from '../branches/branch-access.service.js';
 import type {
   CreateMenuCategoryDto,
   CreateMenuItemDto,
+  CreateMenuOptionDto,
+  CreateMenuOptionGroupDto,
   ListMenuItemsQueryDto,
   SetMenuItemActiveDto,
   SetMenuItemBranchesDto,
+  SetMenuItemOptionGroupsDto,
   UpdateBranchMenuItemDto,
   UpdateMenuCategoryDto,
   UpdateMenuItemDto,
+  UpdateMenuOptionDto,
+  UpdateMenuOptionGroupDto,
 } from './dto/menu.dto.js';
 
 const categorySelect = {
@@ -45,6 +50,36 @@ const itemSelect = {
   updatedAt: true,
   category: { select: { id: true, name: true, chainId: true, isActive: true } },
 } satisfies Prisma.MenuItemSelect;
+
+const optionSelect = {
+  id: true,
+  groupId: true,
+  code: true,
+  name: true,
+  priceDelta: true,
+  displayOrder: true,
+  isActive: true,
+  createdAt: true,
+  updatedAt: true,
+} satisfies Prisma.MenuOptionSelect;
+
+const optionGroupSelect = {
+  id: true,
+  chainId: true,
+  code: true,
+  name: true,
+  isRequired: true,
+  minSelections: true,
+  maxSelections: true,
+  displayOrder: true,
+  isActive: true,
+  createdAt: true,
+  updatedAt: true,
+  options: {
+    select: optionSelect,
+    orderBy: [{ displayOrder: 'asc' as const }, { name: 'asc' as const }],
+  },
+} satisfies Prisma.MenuOptionGroupSelect;
 
 /**
  * The menu lives on the chain: one catalogue, one price. Which branch actually
@@ -116,6 +151,116 @@ export class MenuService {
       data: { deletedAt: new Date(), isActive: false },
     });
     return { message: 'Menu category deleted successfully' };
+  }
+
+  // --- Option groups and options ------------------------------------------
+
+  async listOptionGroups(chainId: string, user: AuthenticatedUser) {
+    await this.branchAccess.assertCanManageChain(user, chainId);
+    return this.prisma.menuOptionGroup.findMany({
+      where: { chainId },
+      select: {
+        ...optionGroupSelect,
+        _count: { select: { menuItems: true } },
+      },
+      orderBy: [{ displayOrder: 'asc' }, { name: 'asc' }],
+    });
+  }
+
+  async createOptionGroup(chainId: string, dto: CreateMenuOptionGroupDto, user: AuthenticatedUser) {
+    await this.branchAccess.assertCanManageChain(user, chainId);
+    const minSelections = dto.minSelections ?? (dto.isRequired ? 1 : 0);
+    const isRequired = dto.isRequired ?? minSelections > 0;
+    const maxSelections = dto.maxSelections ?? 1;
+    this.assertOptionGroupRules(isRequired, minSelections, maxSelections);
+
+    return this.withUniqueConflict(
+      'An option group with this code already exists in the chain',
+      () =>
+        this.prisma.menuOptionGroup.create({
+          data: { ...dto, chainId, isRequired, minSelections, maxSelections },
+          select: optionGroupSelect,
+        }),
+    );
+  }
+
+  async updateOptionGroup(
+    chainId: string,
+    groupId: string,
+    dto: UpdateMenuOptionGroupDto,
+    user: AuthenticatedUser,
+  ) {
+    await this.branchAccess.assertCanManageChain(user, chainId);
+    const group = await this.getOptionGroupOrFail(chainId, groupId);
+    let minSelections = dto.minSelections ?? group.minSelections;
+    if (dto.isRequired === true && dto.minSelections === undefined && minSelections === 0) {
+      minSelections = 1;
+    }
+    if (dto.isRequired === false && dto.minSelections === undefined) {
+      minSelections = 0;
+    }
+    const isRequired =
+      dto.isRequired ?? (dto.minSelections !== undefined ? minSelections > 0 : group.isRequired);
+    const maxSelections = dto.maxSelections ?? group.maxSelections;
+    this.assertOptionGroupRules(isRequired, minSelections, maxSelections);
+
+    return this.withUniqueConflict(
+      'An option group with this code already exists in the chain',
+      () =>
+        this.prisma.menuOptionGroup.update({
+          where: { id: groupId },
+          data: { ...dto, isRequired, minSelections, maxSelections },
+          select: optionGroupSelect,
+        }),
+    );
+  }
+
+  async deleteOptionGroup(chainId: string, groupId: string, user: AuthenticatedUser) {
+    await this.branchAccess.assertCanManageChain(user, chainId);
+    await this.getOptionGroupOrFail(chainId, groupId);
+    await this.prisma.menuOptionGroup.delete({ where: { id: groupId } });
+    return { message: 'Menu option group deleted successfully' };
+  }
+
+  async createOption(
+    chainId: string,
+    groupId: string,
+    dto: CreateMenuOptionDto,
+    user: AuthenticatedUser,
+  ) {
+    await this.branchAccess.assertCanManageChain(user, chainId);
+    await this.getOptionGroupOrFail(chainId, groupId);
+    return this.withUniqueConflict('An option with this code already exists in the group', () =>
+      this.prisma.menuOption.create({
+        data: { ...dto, groupId },
+        select: optionSelect,
+      }),
+    );
+  }
+
+  async updateOption(
+    chainId: string,
+    groupId: string,
+    optionId: string,
+    dto: UpdateMenuOptionDto,
+    user: AuthenticatedUser,
+  ) {
+    await this.branchAccess.assertCanManageChain(user, chainId);
+    await this.getOptionOrFail(chainId, groupId, optionId);
+    return this.withUniqueConflict('An option with this code already exists in the group', () =>
+      this.prisma.menuOption.update({
+        where: { id: optionId },
+        data: dto,
+        select: optionSelect,
+      }),
+    );
+  }
+
+  async deleteOption(chainId: string, groupId: string, optionId: string, user: AuthenticatedUser) {
+    await this.branchAccess.assertCanManageChain(user, chainId);
+    await this.getOptionOrFail(chainId, groupId, optionId);
+    await this.prisma.menuOption.delete({ where: { id: optionId } });
+    return { message: 'Menu option deleted successfully' };
   }
 
   // --- Items ----------------------------------------------------------------
@@ -302,6 +447,46 @@ export class MenuService {
     return this.listItemBranches(chainId, itemId, user);
   }
 
+  async listItemOptionGroups(chainId: string, itemId: string, user: AuthenticatedUser) {
+    await this.branchAccess.assertCanManageChain(user, chainId);
+    await this.getItemOrFail(chainId, itemId);
+    const links = await this.prisma.menuItemOptionGroup.findMany({
+      where: { menuItemId: itemId, group: { chainId } },
+      select: {
+        displayOrder: true,
+        group: { select: optionGroupSelect },
+      },
+      orderBy: { displayOrder: 'asc' },
+    });
+    return links.map(({ displayOrder, group }) => ({ ...group, displayOrder }));
+  }
+
+  async setItemOptionGroups(
+    chainId: string,
+    itemId: string,
+    dto: SetMenuItemOptionGroupsDto,
+    user: AuthenticatedUser,
+  ) {
+    await this.branchAccess.assertCanManageChain(user, chainId);
+    await this.getItemOrFail(chainId, itemId);
+    const selectedIds = await this.assertOptionGroupsInChain(chainId, dto.optionGroupIds);
+
+    await this.prisma.$transaction(async (transaction) => {
+      await transaction.menuItemOptionGroup.deleteMany({
+        where: { menuItemId: itemId, groupId: { notIn: selectedIds } },
+      });
+      for (const [displayOrder, groupId] of selectedIds.entries()) {
+        await transaction.menuItemOptionGroup.upsert({
+          where: { menuItemId_groupId: { menuItemId: itemId, groupId } },
+          create: { menuItemId: itemId, groupId, displayOrder },
+          update: { displayOrder },
+        });
+      }
+    });
+
+    return this.listItemOptionGroups(chainId, itemId, user);
+  }
+
   // --- Branch view ----------------------------------------------------------
 
   /** The menu as one branch actually sells it, after both switches are applied. */
@@ -392,6 +577,61 @@ export class MenuService {
   }
 
   // --- Helpers --------------------------------------------------------------
+
+  private assertOptionGroupRules(
+    isRequired: boolean,
+    minSelections: number,
+    maxSelections: number,
+  ) {
+    if (minSelections > maxSelections) {
+      throw new BadRequestException('minSelections cannot exceed maxSelections');
+    }
+    if (isRequired !== minSelections > 0) {
+      throw new BadRequestException(
+        'isRequired must be true exactly when minSelections is greater than zero',
+      );
+    }
+  }
+
+  private async getOptionGroupOrFail(chainId: string, groupId: string) {
+    const group = await this.prisma.menuOptionGroup.findFirst({
+      where: { id: groupId, chainId },
+      select: optionGroupSelect,
+    });
+    if (!group) {
+      throw new NotFoundException('Menu option group not found in this chain');
+    }
+    return group;
+  }
+
+  private async getOptionOrFail(chainId: string, groupId: string, optionId: string) {
+    const option = await this.prisma.menuOption.findFirst({
+      where: { id: optionId, groupId, group: { chainId } },
+      select: optionSelect,
+    });
+    if (!option) {
+      throw new NotFoundException('Menu option not found in this chain and group');
+    }
+    return option;
+  }
+
+  private async assertOptionGroupsInChain(chainId: string, groupIds: string[]): Promise<string[]> {
+    if (groupIds.length === 0) {
+      return [];
+    }
+    const groups = await this.prisma.menuOptionGroup.findMany({
+      where: { id: { in: groupIds }, chainId },
+      select: { id: true },
+    });
+    if (groups.length !== groupIds.length) {
+      const found = new Set(groups.map(({ id }) => id));
+      const missing = groupIds.filter((id) => !found.has(id));
+      throw new BadRequestException(
+        `These option groups do not belong to this chain: ${missing.join(', ')}`,
+      );
+    }
+    return groupIds;
+  }
 
   private async getCategoryOrFail(chainId: string, categoryId: string) {
     const category = await this.prisma.menuCategory.findFirst({

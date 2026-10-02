@@ -232,3 +232,123 @@ export class ListMenuItemsQueryDto {
   @IsBoolean()
   isActive?: boolean;
 }
+
+export class CreateMenuOptionGroupDto {
+  @ApiProperty({ example: 'SIZE', maxLength: 50 })
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim().toUpperCase() : value,
+  )
+  @IsString()
+  @MinLength(1)
+  @MaxLength(50)
+  @Matches(/^[A-Z0-9_-]+$/, {
+    message: 'code may only contain uppercase letters, numbers, underscores, and hyphens',
+  })
+  code!: string;
+
+  @ApiProperty({ example: 'Kích cỡ', maxLength: 100 })
+  @Transform(trim)
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
+  name!: string;
+
+  @ApiPropertyOptional({ example: true, default: false })
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  isRequired?: boolean;
+
+  @ApiPropertyOptional({ example: 1, default: 0, minimum: 0 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(100)
+  minSelections?: number;
+
+  @ApiPropertyOptional({ example: 1, default: 1, minimum: 1 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  maxSelections?: number;
+
+  @ApiPropertyOptional({ example: 1, default: 0 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(9999)
+  displayOrder?: number;
+}
+
+export class UpdateMenuOptionGroupDto extends PartialType(CreateMenuOptionGroupDto) {
+  @ApiPropertyOptional({ description: 'Hide this option group across every branch' })
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  isActive?: boolean;
+}
+
+export class CreateMenuOptionDto {
+  @ApiProperty({ example: 'L', maxLength: 50 })
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim().toUpperCase() : value,
+  )
+  @IsString()
+  @MinLength(1)
+  @MaxLength(50)
+  @Matches(/^[A-Z0-9_-]+$/, {
+    message: 'code may only contain uppercase letters, numbers, underscores, and hyphens',
+  })
+  code!: string;
+
+  @ApiProperty({ example: 'Size L', maxLength: 100 })
+  @Transform(trim)
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
+  name!: string;
+
+  @ApiPropertyOptional({
+    example: 10000,
+    default: 0,
+    description: 'Chain-wide price added to the base menu-item price',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(99_999_999_999)
+  priceDelta?: number;
+
+  @ApiPropertyOptional({ example: 1, default: 0 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(9999)
+  displayOrder?: number;
+}
+
+export class UpdateMenuOptionDto extends PartialType(CreateMenuOptionDto) {
+  @ApiPropertyOptional({ description: 'Hide this option across every branch' })
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  isActive?: boolean;
+}
+
+export class SetMenuItemOptionGroupsDto {
+  @ApiProperty({
+    type: [String],
+    format: 'uuid',
+    description: 'Exact ordered set of option groups attached to the menu item',
+  })
+  @IsArray()
+  @ArrayUnique()
+  @IsUUID('4', { each: true })
+  optionGroupIds!: string[];
+}

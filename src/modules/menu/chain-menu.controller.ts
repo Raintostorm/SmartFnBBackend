@@ -33,11 +33,16 @@ import { Roles } from '../auth/decorators/roles.decorator.js';
 import {
   CreateMenuCategoryDto,
   CreateMenuItemDto,
+  CreateMenuOptionDto,
+  CreateMenuOptionGroupDto,
   ListMenuItemsQueryDto,
   SetMenuItemActiveDto,
   SetMenuItemBranchesDto,
+  SetMenuItemOptionGroupsDto,
   UpdateMenuCategoryDto,
   UpdateMenuItemDto,
+  UpdateMenuOptionDto,
+  UpdateMenuOptionGroupDto,
 } from './dto/menu.dto.js';
 import { MenuService } from './menu.service.js';
 
@@ -102,6 +107,109 @@ export class ChainMenuController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.menuService.deleteCategory(chainId, categoryId, user);
+  }
+
+  // --- Option groups and options ------------------------------------------
+
+  @Get('option-groups')
+  @ApiOperation({ summary: 'List chain-wide option groups and their options' })
+  @ApiOkResponse({ description: 'Option groups with selection rules and chain-wide prices' })
+  listOptionGroups(
+    @Param('chainId', new ParseUUIDPipe()) chainId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.menuService.listOptionGroups(chainId, user);
+  }
+
+  @Post('option-groups')
+  @ApiOperation({ summary: 'Create a chain-wide option group' })
+  @ApiCreatedResponse({ description: 'Option group created' })
+  @ApiBadRequestResponse({ description: 'Selection rules are inconsistent' })
+  @ApiConflictResponse({ description: 'An option group with this code already exists' })
+  createOptionGroup(
+    @Param('chainId', new ParseUUIDPipe()) chainId: string,
+    @Body() dto: CreateMenuOptionGroupDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.menuService.createOptionGroup(chainId, dto, user);
+  }
+
+  @Patch('option-groups/:groupId')
+  @ApiOperation({ summary: 'Update selection rules or switch an option group chain-wide' })
+  @ApiParam({ name: 'groupId', format: 'uuid' })
+  @ApiOkResponse({ description: 'Option group updated' })
+  @ApiBadRequestResponse({ description: 'Selection rules are inconsistent' })
+  @ApiConflictResponse({ description: 'An option group with this code already exists' })
+  @ApiNotFoundResponse({ description: 'Option group not found in this chain' })
+  updateOptionGroup(
+    @Param('chainId', new ParseUUIDPipe()) chainId: string,
+    @Param('groupId', new ParseUUIDPipe()) groupId: string,
+    @Body() dto: UpdateMenuOptionGroupDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.menuService.updateOptionGroup(chainId, groupId, dto, user);
+  }
+
+  @Delete('option-groups/:groupId')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Delete an option group and detach it from every menu item' })
+  @ApiParam({ name: 'groupId', format: 'uuid' })
+  @ApiOkResponse({ description: 'Option group deleted' })
+  @ApiNotFoundResponse({ description: 'Option group not found in this chain' })
+  deleteOptionGroup(
+    @Param('chainId', new ParseUUIDPipe()) chainId: string,
+    @Param('groupId', new ParseUUIDPipe()) groupId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.menuService.deleteOptionGroup(chainId, groupId, user);
+  }
+
+  @Post('option-groups/:groupId/options')
+  @ApiOperation({ summary: 'Create an option with one chain-wide additional price' })
+  @ApiParam({ name: 'groupId', format: 'uuid' })
+  @ApiCreatedResponse({ description: 'Option created' })
+  @ApiConflictResponse({ description: 'An option with this code already exists in the group' })
+  @ApiNotFoundResponse({ description: 'Option group not found in this chain' })
+  createOption(
+    @Param('chainId', new ParseUUIDPipe()) chainId: string,
+    @Param('groupId', new ParseUUIDPipe()) groupId: string,
+    @Body() dto: CreateMenuOptionDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.menuService.createOption(chainId, groupId, dto, user);
+  }
+
+  @Patch('option-groups/:groupId/options/:optionId')
+  @ApiOperation({ summary: 'Update an option, its price, or its chain-wide active state' })
+  @ApiParam({ name: 'groupId', format: 'uuid' })
+  @ApiParam({ name: 'optionId', format: 'uuid' })
+  @ApiOkResponse({ description: 'Option updated' })
+  @ApiConflictResponse({ description: 'An option with this code already exists in the group' })
+  @ApiNotFoundResponse({ description: 'Option not found in this chain and group' })
+  updateOption(
+    @Param('chainId', new ParseUUIDPipe()) chainId: string,
+    @Param('groupId', new ParseUUIDPipe()) groupId: string,
+    @Param('optionId', new ParseUUIDPipe()) optionId: string,
+    @Body() dto: UpdateMenuOptionDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.menuService.updateOption(chainId, groupId, optionId, dto, user);
+  }
+
+  @Delete('option-groups/:groupId/options/:optionId')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Delete an option from a chain-wide option group' })
+  @ApiParam({ name: 'groupId', format: 'uuid' })
+  @ApiParam({ name: 'optionId', format: 'uuid' })
+  @ApiOkResponse({ description: 'Option deleted' })
+  @ApiNotFoundResponse({ description: 'Option not found in this chain and group' })
+  deleteOption(
+    @Param('chainId', new ParseUUIDPipe()) chainId: string,
+    @Param('groupId', new ParseUUIDPipe()) groupId: string,
+    @Param('optionId', new ParseUUIDPipe()) optionId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.menuService.deleteOption(chainId, groupId, optionId, user);
   }
 
   // --- Items ----------------------------------------------------------------
@@ -216,5 +324,33 @@ export class ChainMenuController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.menuService.setItemBranches(chainId, itemId, dto, user);
+  }
+
+  @Get('items/:itemId/option-groups')
+  @ApiOperation({ summary: 'List option groups attached to a menu item' })
+  @ApiParam({ name: 'itemId', format: 'uuid' })
+  @ApiOkResponse({ description: 'Attached option groups in display order' })
+  @ApiNotFoundResponse({ description: 'Menu item not found in this chain' })
+  listItemOptionGroups(
+    @Param('chainId', new ParseUUIDPipe()) chainId: string,
+    @Param('itemId', new ParseUUIDPipe()) itemId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.menuService.listItemOptionGroups(chainId, itemId, user);
+  }
+
+  @Put('items/:itemId/option-groups')
+  @ApiOperation({ summary: 'Replace the ordered option groups attached to a menu item' })
+  @ApiParam({ name: 'itemId', format: 'uuid' })
+  @ApiOkResponse({ description: 'Option-group attachments saved' })
+  @ApiBadRequestResponse({ description: 'An option group does not belong to this chain' })
+  @ApiNotFoundResponse({ description: 'Menu item not found in this chain' })
+  setItemOptionGroups(
+    @Param('chainId', new ParseUUIDPipe()) chainId: string,
+    @Param('itemId', new ParseUUIDPipe()) itemId: string,
+    @Body() dto: SetMenuItemOptionGroupsDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.menuService.setItemOptionGroups(chainId, itemId, dto, user);
   }
 }

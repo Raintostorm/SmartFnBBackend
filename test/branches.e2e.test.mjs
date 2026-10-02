@@ -80,6 +80,9 @@ describe('Owner branch management and role scopes', () => {
       }
       await prisma.user.deleteMany({ where: { email: { in: Object.values(emails) } } });
       if (chainId) {
+        await prisma.menuItem.deleteMany({ where: { category: { chainId } } });
+        await prisma.menuCategory.deleteMany({ where: { chainId } });
+        await prisma.menuOptionGroup.deleteMany({ where: { chainId } });
         await prisma.branch.deleteMany({ where: { chainId } });
         await prisma.restaurantChain.deleteMany({ where: { id: chainId } });
       }
@@ -257,6 +260,84 @@ describe('Owner branch management and role scopes', () => {
 
     managerAuth = await login(emails.manager);
     waiterAuth = await login(emails.waiter);
+  });
+
+  it('lets OWNER manage option groups, prices, global state, and item attachments', async () => {
+    const category = await request(`/restaurant-chains/${chainId}/menu/categories`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ownerAuth.accessToken}` },
+      body: JSON.stringify({ name: `Drinks ${suffix}`.slice(0, 150) }),
+    });
+    assert.equal(category.response.status, 201);
+
+    const item = await request(`/restaurant-chains/${chainId}/menu/items`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ownerAuth.accessToken}` },
+      body: JSON.stringify({
+        categoryId: category.body.id,
+        sku: `TEA_${suffix}`.slice(0, 50),
+        name: 'Milk Tea',
+        price: 45000,
+      }),
+    });
+    assert.equal(item.response.status, 201);
+
+    const group = await request(`/restaurant-chains/${chainId}/menu/option-groups`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ownerAuth.accessToken}` },
+      body: JSON.stringify({
+        code: `SIZE_${suffix}`.slice(0, 50),
+        name: 'Kích cỡ',
+        isRequired: true,
+        minSelections: 1,
+        maxSelections: 1,
+      }),
+    });
+    assert.equal(group.response.status, 201);
+
+    const option = await request(
+      `/restaurant-chains/${chainId}/menu/option-groups/${group.body.id}/options`,
+      {
+        method: 'POST',
+        headers: { authorization: `Bearer ${ownerAuth.accessToken}` },
+        body: JSON.stringify({ code: 'L', name: 'Size L', priceDelta: 10000 }),
+      },
+    );
+    assert.equal(option.response.status, 201);
+    assert.equal(Number(option.body.priceDelta), 10000);
+
+    const attached = await request(
+      `/restaurant-chains/${chainId}/menu/items/${item.body.id}/option-groups`,
+      {
+        method: 'PUT',
+        headers: { authorization: `Bearer ${ownerAuth.accessToken}` },
+        body: JSON.stringify({ optionGroupIds: [group.body.id] }),
+      },
+    );
+    assert.equal(attached.response.status, 200);
+    assert.deepEqual(
+      attached.body.map(({ id }) => id),
+      [group.body.id],
+    );
+
+    const switchedOff = await request(
+      `/restaurant-chains/${chainId}/menu/option-groups/${group.body.id}/options/${option.body.id}`,
+      {
+        method: 'PATCH',
+        headers: { authorization: `Bearer ${ownerAuth.accessToken}` },
+        body: JSON.stringify({ isActive: false }),
+      },
+    );
+    assert.equal(switchedOff.response.status, 200);
+    assert.equal(switchedOff.body.isActive, false);
+
+    const groups = await request(`/restaurant-chains/${chainId}/menu/option-groups`, {
+      headers: { authorization: `Bearer ${ownerAuth.accessToken}` },
+    });
+    assert.equal(groups.response.status, 200);
+    const savedGroup = groups.body.find(({ id }) => id === group.body.id);
+    assert.equal(savedGroup.options[0].isActive, false);
+    assert.equal(Number(savedGroup.options[0].priceDelta), 10000);
   });
 
   it('keeps MANAGER and WAITER within their one assigned branch', async () => {

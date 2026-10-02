@@ -246,30 +246,35 @@ describe('Service plan quota', () => {
     };
     const service = quotaService({ maxBranches: 3, branchCount: 3, upgradePlans: [upgrade] });
 
-    await assert.rejects(
-      service.assertWithinQuota('chain-one', 'branches'),
-      (error) => {
-        const body = error.getResponse();
-        assert.equal(error.getStatus(), 409);
-        assert.equal(body.error, 'PLAN_LIMIT_REACHED');
-        assert.deepEqual(body.quota, {
-          resource: 'branches',
-          used: 3,
-          limit: 3,
-          remaining: 0,
-        });
-        assert.equal(body.suggestedPlans.length, 1);
-        assert.equal(body.suggestedPlans[0].code, 'PRO');
-        return true;
-      },
-    );
+    await assert.rejects(service.assertWithinQuota('chain-one', 'branches'), (error) => {
+      const body = error.getResponse();
+      assert.equal(error.getStatus(), 409);
+      assert.equal(body.error, 'PLAN_LIMIT_REACHED');
+      assert.deepEqual(body.quota, {
+        resource: 'branches',
+        used: 3,
+        limit: 3,
+        remaining: 0,
+      });
+      assert.equal(body.suggestedPlans.length, 1);
+      assert.equal(body.suggestedPlans[0].code, 'PRO');
+      return true;
+    });
   });
 
   it('counts owners and employees together against the account limit', async () => {
     const service = new PlanQuotaService({
       businessSubscription: {
         findFirst: async () => ({
-          plan: { id: 'p', code: 'B', name: 'B', monthlyPrice: {}, maxBranches: 5, maxAccounts: 4, maxTables: 20 },
+          plan: {
+            id: 'p',
+            code: 'B',
+            name: 'B',
+            monthlyPrice: {},
+            maxBranches: 5,
+            maxAccounts: 4,
+            maxTables: 20,
+          },
         }),
       },
       branch: { count: async () => 1 },
@@ -321,7 +326,10 @@ describe('Owner staff administration', () => {
   });
 
   it('rejects a branch filter outside the owner scope', async () => {
-    const service = new EmployeesService({}, { getAccessibleBranchIds: async () => ['branch-one'] });
+    const service = new EmployeesService(
+      {},
+      { getAccessibleBranchIds: async () => ['branch-one'] },
+    );
     await assert.rejects(
       service.listEmployees(owner, { branchId: 'branch-other', page: 1, limit: 20 }),
       (error) => error?.getStatus?.() === 403,
@@ -338,6 +346,91 @@ describe('Owner staff administration', () => {
 });
 
 describe('Chain menu boundaries', () => {
+  it('creates a required option group with normalized selection rules', async () => {
+    const captured = {};
+    const service = new MenuService(
+      {
+        menuOptionGroup: {
+          create: async (args) => {
+            captured.args = args;
+            return { id: 'size-group', ...args.data, options: [] };
+          },
+        },
+      },
+      { assertCanManageChain: async () => undefined },
+    );
+
+    await service.createOptionGroup(
+      'chain-one',
+      { code: 'SIZE', name: 'Kích cỡ', isRequired: true },
+      owner,
+    );
+
+    assert.equal(captured.args.data.chainId, 'chain-one');
+    assert.equal(captured.args.data.isRequired, true);
+    assert.equal(captured.args.data.minSelections, 1);
+    assert.equal(captured.args.data.maxSelections, 1);
+  });
+
+  it('rejects inconsistent option-group selection rules', async () => {
+    const service = new MenuService({}, { assertCanManageChain: async () => undefined });
+    await assert.rejects(
+      service.createOptionGroup(
+        'chain-one',
+        {
+          code: 'TOPPING',
+          name: 'Topping',
+          isRequired: true,
+          minSelections: 2,
+          maxSelections: 1,
+        },
+        owner,
+      ),
+      (error) => error?.getStatus?.() === 400,
+    );
+  });
+
+  it('replaces item option groups and preserves the submitted order', async () => {
+    const operations = [];
+    const transaction = {
+      menuItemOptionGroup: {
+        deleteMany: async (args) => operations.push({ type: 'deleteMany', args }),
+        upsert: async (args) => operations.push({ type: 'upsert', args }),
+      },
+    };
+    const service = new MenuService(
+      {
+        menuItem: { findFirst: async () => ({ id: 'item-one' }) },
+        menuOptionGroup: {
+          findMany: async () => [{ id: 'sugar-group' }, { id: 'size-group' }],
+        },
+        menuItemOptionGroup: { findMany: async () => [] },
+        $transaction: async (action) => action(transaction),
+      },
+      { assertCanManageChain: async () => undefined },
+    );
+
+    await service.setItemOptionGroups(
+      'chain-one',
+      'item-one',
+      { optionGroupIds: ['size-group', 'sugar-group'] },
+      owner,
+    );
+
+    assert.deepEqual(
+      operations
+        .filter(({ type }) => type === 'upsert')
+        .map(({ args }) => ({
+          groupId: args.create.groupId,
+          displayOrder: args.create.displayOrder,
+        })),
+      [
+        { groupId: 'size-group', displayOrder: 0 },
+        { groupId: 'sugar-group', displayOrder: 1 },
+      ],
+    );
+  });
+
   it('rejects branches that belong to another chain', async () => {
     const service = new MenuService(
       {
@@ -421,14 +514,11 @@ describe('Report range validation', () => {
   it('counts paid counter orders even before they are delivered', () => {
     const from = new Date('2026-09-01T00:00:00.000Z');
     const to = new Date('2026-10-01T00:00:00.000Z');
-    assert.deepEqual(
-      service.completedOrdersWhere({ branchIds: ['branch-id'], from, to }),
-      {
-        branchId: { in: ['branch-id'] },
-        paymentStatus: 'PAID',
-        paidAt: { gte: from, lt: to },
-      },
-    );
+    assert.deepEqual(service.completedOrdersWhere({ branchIds: ['branch-id'], from, to }), {
+      branchId: { in: ['branch-id'] },
+      paymentStatus: 'PAID',
+      paidAt: { gte: from, lt: to },
+    });
   });
 });
 
@@ -438,13 +528,7 @@ describe('Report chart buckets', () => {
 
   it('fills every day in the range, including days with no sales', () => {
     const keys = service.buildBucketKeys(scope('2026-09-01', '2026-09-05'), 'day');
-    assert.deepEqual(keys, [
-      '2026-09-01',
-      '2026-09-02',
-      '2026-09-03',
-      '2026-09-04',
-      '2026-09-05',
-    ]);
+    assert.deepEqual(keys, ['2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04', '2026-09-05']);
   });
 
   it('starts weekly buckets on Monday, matching Postgres date_trunc', () => {
