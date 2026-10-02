@@ -7,7 +7,8 @@ TypeScript, Prisma ORM và PostgreSQL.
 
 - Node.js 24.15+
 - pnpm 11+
-- Docker Desktop / Docker Engine có Docker Compose
+- PostgreSQL 14+
+- Docker Desktop / Docker Engine có Docker Compose (không bắt buộc)
 
 ## Chạy lần đầu
 
@@ -28,7 +29,19 @@ lại dùng `pnpm prisma:migrate:deploy` sau khi pull.
 
 API kiểm tra trạng thái: `GET http://localhost:3100/api/v1/health`
 
-## Chạy đồng nhất bằng Docker
+## Chạy bằng PostgreSQL local
+
+Nếu máy đã cài PostgreSQL, chỉ cần sửa `DATABASE_URL` trong `.env`, sau đó chạy:
+
+```bash
+pnpm install
+pnpm prisma:generate
+pnpm prisma:migrate:deploy
+pnpm prisma:seed
+pnpm start:dev
+```
+
+## Chạy đồng nhất bằng Docker (tùy chọn)
 
 ```bash
 cp .env.example .env # PowerShell: Copy-Item .env.example .env
@@ -39,9 +52,33 @@ Lệnh này build NestJS bằng Node.js 24, khởi động cả API và PostgreS
 migration/seed tự động rồi mở API tại `http://localhost:3100`. Xem log API bằng
 `pnpm docker:logs`.
 
-Khi deploy Render/Railway, dùng `Dockerfile` cho service BE và dùng PostgreSQL
-managed (ví dụ Neon) làm database riêng. Đặt `DATABASE_URL` của BE bằng connection
-string PostgreSQL; không dùng địa chỉ `127.0.0.1` trên môi trường deploy.
+Docker chỉ là một lựa chọn cho môi trường local; deploy Render không cần Docker.
+
+## Deploy Render bằng Native Node
+
+Repository có [`render.yaml`](render.yaml) cho Render Blueprint với Node.js 24 và
+pnpm. Render sẽ chạy:
+
+- Build: `pnpm run render:build`
+- Start: `pnpm run render:start`
+- Migration: `prisma migrate deploy` trước khi mở API
+- Health check: `/api/v1/health`
+
+Tạo **Blueprint** từ repository hoặc đổi Runtime của web service hiện tại sang
+**Node** rồi dùng hai lệnh trên. Không chọn Docker runtime.
+
+Các biến bắt buộc phải nhập trên Render Dashboard:
+
+| Biến | Giá trị |
+| --- | --- |
+| `DATABASE_URL` | PostgreSQL managed URL; không dùng `127.0.0.1` |
+| `CORS_ORIGIN` | Domain FE Web, nhiều domain phân cách bằng dấu phẩy |
+| `REALTIME_CORS_ORIGINS` | Domain Web/Mobile dùng Socket.IO |
+| `PAYOS_MASTER_KEY` | Cùng khóa base64 32 byte đã dùng để mã hóa PayOS trong database |
+
+`JWT_ACCESS_SECRET` và `JWT_REFRESH_SECRET` được Blueprint sinh độc lập. Không chạy
+`prisma db seed` tự động ở production; chỉ seed thủ công khi chủ động tạo dữ liệu mẫu.
+Render tự cấp biến `PORT`, Backend đã lắng nghe `0.0.0.0` nên không cần cấu hình thêm.
 
 ## Swagger / OpenAPI
 
