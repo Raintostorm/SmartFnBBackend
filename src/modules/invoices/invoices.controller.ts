@@ -89,7 +89,7 @@ export class InvoicesController {
     return this.service.get(invoiceId, user);
   }
 
-  @Roles(AppRole.MANAGER, AppRole.CASHIER)
+  @Roles(AppRole.MANAGER)
   @Post('invoices/:invoiceId/cancel')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Cancel an issued invoice while preserving its snapshot' })

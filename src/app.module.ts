@@ -23,6 +23,7 @@ import { BrandingModule } from './modules/branding/branding.module.js';
 import { RealtimeModule } from './realtime/realtime.module.js';
 import { CounterOperationsModule } from './modules/counter-operations/counter-operations.module.js';
 import { PayosModule } from './modules/payos/payos.module.js';
+import { BranchManagerModule } from './modules/branch-manager/branch-manager.module.js';
 
 @Module({
   imports: [
@@ -51,6 +52,7 @@ import { PayosModule } from './modules/payos/payos.module.js';
     AttendanceModule,
     PlatformAdminModule,
     ReportsModule,
+    BranchManagerModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -17,6 +17,10 @@ export const SWAGGER_TAGS = [
   ['Employees - OWNER', 'OWNER quản lý tài khoản nhân viên theo phạm vi chuỗi.'],
   ['Menu - chain wide (OWNER)', 'OWNER quản lý danh mục, món và tùy chọn dùng chung.'],
   ['Reports - OWNER', 'Báo cáo doanh thu và vận hành của OWNER.'],
+  [
+    'Branch Manager',
+    'Quản lý Cashier/Barista, tùy chọn, báo cáo, tra cứu đơn và audit trong chi nhánh được gán.',
+  ],
   ['Restaurant branding', 'Cấu hình thương hiệu của chuỗi.'],
   ['PayOS channel', 'OWNER cấu hình kênh PayOS; khóa bí mật không được trả lại.'],
   ['Branches - internal', 'Quản lý chi nhánh, giờ mở cửa và khu vực phục vụ.'],

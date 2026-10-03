@@ -1,4 +1,4 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsDateString,
@@ -9,6 +9,7 @@ import {
   Max,
   MaxLength,
   Min,
+  MinLength,
 } from 'class-validator';
 
 export class IssueInvoiceDto {
@@ -44,7 +45,9 @@ export class IssueInvoiceDto {
 }
 
 export class CancelInvoiceDto {
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
+  @MinLength(3)
   @MaxLength(500)
   reason!: string;
 }

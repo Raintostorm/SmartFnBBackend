@@ -1,4 +1,4 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsDateString,
@@ -10,6 +10,7 @@ import {
   Max,
   MaxLength,
   Min,
+  MinLength,
 } from 'class-validator';
 import { PaymentMethod, PaymentStatus } from '../../../generated/prisma/client.js';
 
@@ -38,6 +39,31 @@ export class CreateTableSessionPaymentDto {
 }
 
 export class ConfirmPaymentDto {
+  @ApiPropertyOptional({
+    minLength: 3,
+    maxLength: 500,
+    description: 'Required for non-cash manual confirmation by MANAGER',
+  })
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @MinLength(3)
+  @MaxLength(500)
+  reason?: string;
+
+  @ApiPropertyOptional({
+    type: Number,
+    minimum: 0.01,
+    description:
+      'Required for non-cash. Actual amount verified by Manager; any variance from amount is preserved in audit.',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  @Max(999999999999.99)
+  receivedAmount?: number;
+
   @ApiPropertyOptional({ maxLength: 255 })
   @IsOptional()
   @IsString()
@@ -76,6 +102,18 @@ export class PaymentListQueryDto {
 }
 
 export class PaymentResponseDto {
+  @ApiPropertyOptional({ description: 'Manager reason for manual confirmation' })
+  confirmationReason!: string | null;
+
+  @ApiPropertyOptional({
+    type: String,
+    description: 'Actual amount received, stored separately from the settled amount',
+  })
+  receivedAmount!: string | null;
+
+  @ApiPropertyOptional({ format: 'date-time' })
+  confirmedAt!: Date | null;
+
   @ApiProperty({ format: 'uuid' })
   id!: string;
 

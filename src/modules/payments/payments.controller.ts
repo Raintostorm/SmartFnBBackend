@@ -92,9 +92,11 @@ export class PaymentsController {
   @Post('payments/:paymentId/confirm')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Confirm a pending payment and synchronize paid states',
+    summary: 'Confirm cash or MANAGER-only manual non-cash payment',
     description:
-      'Atomically records the processor and synchronizes the payment state of the session and its orders.',
+      'CASHIER can only confirm CASH. MANAGER must supply reason and receivedAmount for non-cash. ' +
+      'An amount mismatch settles the expected payment amount under Manager responsibility; the actual receipt and variance remain audited. ' +
+      'Confirmation, actor, time, audit and counter preparation queue are committed together.',
   })
   @ApiUuidPath('paymentId', 'Pending payment to confirm')
   @ApiOkResponse({ type: PaymentResponseDto })
@@ -106,8 +108,11 @@ export class PaymentsController {
   ) {
     const result = await this.service.confirm(paymentId, dto, user);
     const branchId = result.tableSession?.branchId ?? result.order?.branchId;
-    if (branchId)
+    if (branchId) {
       this.realtime.branch(branchId, 'payment.confirmed', { id: result.id, status: result.status });
+      if (result.order?.type === 'COUNTER_PICKUP')
+        this.realtime.branch(branchId, 'preparation.order.queued', { orderId: result.orderId });
+    }
     return result;
   }
 

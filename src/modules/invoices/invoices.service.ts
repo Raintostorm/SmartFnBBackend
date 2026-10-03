@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -13,6 +14,7 @@ import {
   TableSessionStatus,
 } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
+import { managerActor, writeBranchAudit } from '../branch-manager/manager-scope.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
 import type { CancelInvoiceDto, InvoiceListQueryDto, IssueInvoiceDto } from './dto/invoice.dto.js';
@@ -167,25 +169,42 @@ export class InvoicesService {
   }
 
   async cancel(invoiceId: string, dto: CancelInvoiceDto, user: AuthenticatedUser) {
-    const actor = this.employee(user);
-    const invoice = await this.prisma.invoice.findUnique({ where: { id: invoiceId } });
-    if (!invoice) throw new NotFoundException('Invoice not found');
-    if (invoice.branchId !== actor.branchId) {
-      throw new ForbiddenException('Invoice does not belong to your assigned branch');
-    }
-    if (invoice.status !== InvoiceStatus.ISSUED) {
-      throw new ConflictException('Only an issued invoice can be cancelled');
-    }
-    return this.prisma.invoice.update({
-      where: { id: invoiceId },
-      data: {
-        status: InvoiceStatus.CANCELLED,
-        cancelledAt: new Date(),
-        cancelledById: actor.employeeId,
-        cancellationReason: dto.reason,
+    const actor = managerActor(user);
+    if (!dto.reason || dto.reason.trim().length < 3 || dto.reason.trim().length > 500)
+      throw new BadRequestException('A cancellation reason of 3 to 500 characters is required');
+    await this.branchAccess.assertCanAccessBranch(user, actor.branchId);
+    return this.prisma.$transaction(
+      async (tx) => {
+        const invoice = await tx.invoice.findUnique({ where: { id: invoiceId } });
+        if (!invoice) throw new NotFoundException('Invoice not found');
+        if (invoice.branchId !== actor.branchId) {
+          throw new ForbiddenException('Invoice does not belong to your assigned branch');
+        }
+        if (invoice.status !== InvoiceStatus.ISSUED) {
+          throw new ConflictException('Only an issued invoice can be cancelled');
+        }
+        const updated = await tx.invoice.update({
+          where: { id: invoiceId, status: InvoiceStatus.ISSUED },
+          data: {
+            status: InvoiceStatus.CANCELLED,
+            cancelledAt: new Date(),
+            cancelledById: actor.employeeId,
+            cancellationReason: dto.reason.trim(),
+          },
+          include: invoiceInclude,
+        });
+        await writeBranchAudit(tx, user, {
+          action: 'INVOICE_CANCELLED',
+          entityType: 'INVOICE',
+          entityId: invoiceId,
+          reason: dto.reason.trim(),
+          before: { status: invoice.status },
+          after: { status: 'CANCELLED' },
+        });
+        return updated;
       },
-      include: invoiceInclude,
-    });
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
   }
 
   private employee(user: AuthenticatedUser) {
