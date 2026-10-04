@@ -16,10 +16,11 @@ async function controllerFiles(directory) {
   return nested.flat();
 }
 
-describe('Swagger V9 contract', () => {
+describe('Swagger V9.1 contract', () => {
   it('removes the old V8 introduction and documents the current counter flow', () => {
-    assert.match(SWAGGER_DESCRIPTION, /Smart F&B API V9/);
+    assert.match(SWAGGER_DESCRIPTION, /Smart F&B API V9\.1/);
     assert.match(SWAGGER_DESCRIPTION, /Cashier → Barista/);
+    assert.match(SWAGGER_DESCRIPTION, /QR PayOS có hạn 10 phút/);
     assert.doesNotMatch(SWAGGER_DESCRIPTION, /V8/);
     assert.equal(SWAGGER_DEVICE_TOKEN, 'display-device-token');
   });

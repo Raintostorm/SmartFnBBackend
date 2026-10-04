@@ -13,12 +13,19 @@ export interface PayosPaymentRequest {
   description: string;
   cancelUrl: string;
   returnUrl: string;
+  expiredAt?: number;
 }
 
 @Injectable()
 export class PayosApiService {
   async createPayment(credentials: PayosCredentials, request: PayosPaymentRequest) {
-    const signable = { ...request } as Record<string, unknown>;
+    const signable = {
+      amount: request.amount,
+      cancelUrl: request.cancelUrl,
+      description: request.description,
+      orderCode: request.orderCode,
+      returnUrl: request.returnUrl,
+    };
     const body = { ...request, signature: payosSignature(signable, credentials.checksumKey) };
     let response: Response;
     try {

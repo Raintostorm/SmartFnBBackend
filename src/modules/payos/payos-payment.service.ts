@@ -60,7 +60,10 @@ export class PayosPaymentService {
     if (order.status !== OrderStatus.CONFIRMED || order.paymentStatus !== OrderPaymentStatus.UNPAID)
       throw new ConflictException('Order is not awaiting payment');
     const pending = order.payments.find(
-      (item) => item.provider === PaymentProvider.PAYOS && item.status === PaymentStatus.PENDING,
+      (item) =>
+        item.provider === PaymentProvider.PAYOS &&
+        item.status === PaymentStatus.PENDING &&
+        (!item.expiresAt || item.expiresAt > new Date()),
     );
     if (pending?.checkoutUrl) return pending;
 
@@ -72,6 +75,7 @@ export class PayosPaymentService {
       throw new BadRequestException('PayOS payment amount must be a whole VND value');
 
     const providerOrderCode = Number(`${Date.now()}${Math.floor(Math.random() * 90 + 10)}`);
+    const expiresAt = new Date(Date.now() + 10 * 60_000);
     const result = await this.api.createPayment(
       {
         clientId: this.cipher.decrypt(channel.clientIdCipher),
@@ -84,6 +88,7 @@ export class PayosPaymentService {
         description: `DH ${order.orderCode}`.slice(0, 25),
         cancelUrl: dto.cancelUrl,
         returnUrl: dto.returnUrl,
+        expiredAt: Math.floor(expiresAt.getTime() / 1000),
       },
     );
     return this.prisma.payment.create({
@@ -99,6 +104,7 @@ export class PayosPaymentService {
         transactionRef: result.paymentLinkId,
         checkoutUrl: result.checkoutUrl,
         qrCode: result.qrCode,
+        expiresAt,
       },
     });
   }

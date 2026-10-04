@@ -601,16 +601,16 @@ async function createDemoOperationsData(): Promise<void> {
     },
   });
   const optionSeeds = [
-    [ids.sizeM, sizeGroup.id, 'M', 'M', 0, 0],
-    [ids.sizeL, sizeGroup.id, 'L', 'L', 10000, 1],
-    [ids.sugarNormal, sugarGroup.id, '100% đường', 'SUGAR_100', 0, 0],
-    [ids.sugarLess, sugarGroup.id, '50% đường', 'SUGAR_50', 0, 1],
+    [ids.sizeM, sizeGroup.id, 'M', 'M', 0, 0, true],
+    [ids.sizeL, sizeGroup.id, 'L', 'L', 10000, 1, false],
+    [ids.sugarNormal, sugarGroup.id, '100% đường', 'SUGAR_100', 0, 0, true],
+    [ids.sugarLess, sugarGroup.id, '50% đường', 'SUGAR_50', 0, 1, false],
   ] as const;
-  for (const [id, groupId, name, code, priceDelta, displayOrder] of optionSeeds) {
+  for (const [id, groupId, name, code, priceDelta, displayOrder, isDefault] of optionSeeds) {
     await prisma.menuOption.upsert({
       where: { id },
-      update: { name, priceDelta, displayOrder, isActive: true },
-      create: { id, groupId, name, code, priceDelta, displayOrder },
+      update: { name, priceDelta, displayOrder, isDefault, isActive: true },
+      create: { id, groupId, name, code, priceDelta, displayOrder, isDefault },
     });
     await prisma.branchMenuOption.upsert({
       where: { branchId_optionId: { branchId: ids.branch, optionId: id } },

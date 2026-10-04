@@ -44,6 +44,7 @@ const itemSelect = {
   price: true,
   imageUrl: true,
   preparationMinutes: true,
+  allowBatching: true,
   isActive: true,
   isAvailable: true,
   createdAt: true,
