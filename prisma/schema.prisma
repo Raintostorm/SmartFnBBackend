@@ -1271,6 +1271,7 @@ model PosStation {
   printerConnection PrinterConnectionType @default(NONE) @map("printer_connection")
   printerAddress    String?               @map("printer_address") @db.VarChar(255)
   cartVersion       Int                   @default(0) @map("cart_version")
+  cartSnapshot      Json?                 @map("cart_snapshot")
   createdAt         DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt         DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
 

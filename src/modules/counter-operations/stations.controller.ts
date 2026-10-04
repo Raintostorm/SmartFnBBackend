@@ -36,6 +36,14 @@ export class StationsController {
     return this.stations.callingDisplayReadyOrders(authorization);
   }
 
+  @Public()
+  @Get('public/customer-display/context')
+  @ApiSecurity(SWAGGER_DEVICE_TOKEN)
+  @ApiOperation({ summary: 'Get the paired station and latest customer-display state' })
+  customerDisplayContext(@Headers('authorization') authorization?: string) {
+    return this.stations.customerDisplayContext(authorization);
+  }
+
   @Get('stations')
   @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
   @ApiAuthenticatedOperation()

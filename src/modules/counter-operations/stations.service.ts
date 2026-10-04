@@ -100,6 +100,68 @@ export class StationsService {
     });
   }
 
+  async customerDisplayContext(authorization?: string) {
+    const device = await this.authenticateDisplayDevice(
+      authorization,
+      DisplayDeviceType.CUSTOMER_DISPLAY,
+    );
+    if (!device.stationId)
+      throw new ForbiddenException('Customer display is not assigned to a station');
+
+    const station = await this.prisma.posStation.findFirst({
+      where: {
+        id: device.stationId,
+        branchId: device.branchId,
+        status: PosStationStatus.ACTIVE,
+      },
+      select: {
+        id: true,
+        name: true,
+        cartVersion: true,
+        cartSnapshot: true,
+        branch: {
+          select: {
+            id: true,
+            name: true,
+            chain: {
+              select: {
+                name: true,
+                logoUrl: true,
+                currency: true,
+                branding: {
+                  select: {
+                    displayName: true,
+                    logoUrl: true,
+                    primaryColor: true,
+                    secondaryColor: true,
+                    accentColor: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!station) throw new NotFoundException('Active station was not found');
+
+    const branding = station.branch.chain.branding;
+    return {
+      station: { id: station.id, name: station.name },
+      branch: { id: station.branch.id, name: station.branch.name },
+      currency: station.branch.chain.currency,
+      branding: {
+        displayName: branding?.displayName ?? station.branch.chain.name,
+        logoUrl: branding?.logoUrl ?? station.branch.chain.logoUrl,
+        primaryColor: branding?.primaryColor ?? '#0F172A',
+        secondaryColor: branding?.secondaryColor ?? '#FFFFFF',
+        accentColor: branding?.accentColor ?? '#22C55E',
+      },
+      version: station.cartVersion,
+      snapshot: station.cartSnapshot ?? { state: 'IDLE', items: [], totalAmount: 0 },
+    };
+  }
+
   async pairCustomerDisplay(
     user: AuthenticatedUser,
     stationId: string,
