@@ -17,6 +17,12 @@ export class JwtAuthGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
+    // Guard này là APP_GUARD nên cũng chạy trên @SubscribeMessage của gateway. Socket không có
+    // `headers`; WebSocket đã được xác thực ở RealtimeGateway.handleConnection (user hoặc token thiết bị).
+    if (context.getType() !== 'http') {
+      return true;
+    }
+
     const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
       context.getHandler(),
       context.getClass(),
