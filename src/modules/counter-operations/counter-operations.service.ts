@@ -507,11 +507,16 @@ export class CounterOperationsService {
       where: { id: actor.branchId },
       select: { timezone: true },
     });
+    const { start, end } = this.branchDayRange(branch.timezone);
     return this.prisma.order.findMany({
       where: {
         branchId: actor.branchId,
         type: OrderType.COUNTER_PICKUP,
-        businessDate: this.businessDate(branch.timezone),
+        // businessDate is only stamped on payment, so unpaid orders cancelled today are matched by cancelledAt.
+        OR: [
+          { businessDate: this.businessDate(branch.timezone) },
+          { status: OrderStatus.CANCELLED, cancelledAt: { gte: start, lt: end } },
+        ],
       },
       include: counterOrderInclude,
       orderBy: { createdAt: 'desc' },
@@ -1269,5 +1274,36 @@ export class CounterOperationsService {
     }).formatToParts(new Date());
     const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
     return new Date(`${value.year}-${value.month}-${value.day}T00:00:00.000Z`);
+  }
+
+  /** [start, end) of the current calendar day in the branch timezone, as UTC instants. */
+  private branchDayRange(timezone: string) {
+    const now = new Date();
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat('en-CA', {
+        timeZone: timezone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23',
+      })
+        .formatToParts(now)
+        .map((part) => [part.type, part.value]),
+    );
+    const localAsUtc = Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour),
+      Number(parts.minute),
+      Number(parts.second),
+    );
+    const offsetMs = localAsUtc - Math.floor(now.getTime() / 1000) * 1000;
+    const startLocal = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day));
+    const start = new Date(startLocal - offsetMs);
+    return { start, end: new Date(start.getTime() + 24 * 60 * 60 * 1000) };
   }
 }

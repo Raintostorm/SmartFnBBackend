@@ -58,7 +58,7 @@ export class CashierController {
   }
 
   @Get('orders')
-  @ApiOperation({ summary: 'List today counter orders for the assigned branch' })
+  @ApiOperation({ summary: 'List today paid and cancelled counter orders for the assigned branch' })
   history(@CurrentUser() user: AuthenticatedUser) {
     return this.service.cashierHistory(user);
   }
