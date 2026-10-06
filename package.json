@@ -20,6 +20,7 @@
     "render:start": "pnpm prisma:migrate:deploy && pnpm start:prod",
     "typecheck": "tsc --noEmit",
     "test": "pnpm build && node --test test/app.controller.test.mjs test/roles.guard.test.mjs test/jwt-auth.guard.test.mjs test/branches.service.test.mjs test/order-state-machine.test.mjs test/owner-features.test.mjs test/tables-payments.service.test.mjs test/counter-operations.service.test.mjs test/stations.service.test.mjs test/realtime.gateway.test.mjs test/payos-channel.test.mjs test/swagger.setup.test.mjs",
+    "test:subscription-payos": "pnpm build && node --test test/branches.service.test.mjs test/owner-features.test.mjs test/payos-channel.test.mjs && pnpm prisma:validate",
     "test:e2e": "pnpm build && node --test test/auth.e2e.test.mjs test/branches.e2e.test.mjs test/orders.e2e.test.mjs",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",

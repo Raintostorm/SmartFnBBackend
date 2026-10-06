@@ -220,6 +220,11 @@ enum BusinessSubscriptionStatus {
   EXPIRED
 }
 
+enum PayosChannelStatus {
+  LINKED
+  ERROR
+}
+
 enum SubscriptionEventType {
   CREATED
   RENEWED
@@ -322,6 +327,7 @@ model RestaurantChain {
   invoices                Invoice[]
   menuOptionGroups        MenuOptionGroup[]
   payosChannel            PayosChannel?
+  payosChannelAuditLogs   PayosChannelAuditLog[]
 
   @@index([status])
   @@map("restaurant_chains")
@@ -333,12 +339,36 @@ model PayosChannel {
   clientIdCipher    String   @map("client_id_cipher") @db.Text
   apiKeyCipher      String   @map("api_key_cipher") @db.Text
   checksumKeyCipher String   @map("checksum_key_cipher") @db.Text
+  clientIdLast4     String?  @map("client_id_last4") @db.VarChar(4)
+  apiKeyLast4       String?  @map("api_key_last4") @db.VarChar(4)
+  status            PayosChannelStatus @default(LINKED)
+  lastError         String?  @map("last_error") @db.VarChar(1000)
+  lastVerifiedAt    DateTime? @map("last_verified_at") @db.Timestamptz(6)
+  webhookCode       String   @unique @default(uuid()) @map("webhook_code") @db.Uuid
   createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   chain RestaurantChain @relation(fields: [chainId], references: [id], onDelete: Cascade)
 
   @@map("payos_channels")
+}
+
+model PayosChannelAuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  chainId     String   @map("chain_id") @db.Uuid
+  channelId   String?  @map("channel_id") @db.Uuid
+  actorUserId String   @map("actor_user_id") @db.Uuid
+  action      String   @db.VarChar(80)
+  before      Json?
+  after       Json?
+  error       String?  @db.VarChar(1000)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  chain RestaurantChain @relation(fields: [chainId], references: [id], onDelete: Cascade)
+
+  @@index([chainId, createdAt])
+  @@index([channelId])
+  @@map("payos_channel_audit_logs")
 }
 
 model Branch {

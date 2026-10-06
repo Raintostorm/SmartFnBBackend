@@ -208,6 +208,26 @@ describe('BranchAccessService owner and manager scopes', () => {
     );
   });
 
+  it('allows a MANAGER to read only the subscription of the assigned branch chain', async () => {
+    const seen = [];
+    const service = new BranchAccessService({
+      branch: {
+        count: async ({ where }) => {
+          seen.push(where);
+          return where.chainId === 'chain-one' ? 1 : 0;
+        },
+      },
+    });
+    const manager = authenticatedUser(AppRole.MANAGER, 'branch-one');
+    await service.assertCanReadChain(manager, 'chain-one');
+    await assert.rejects(
+      service.assertCanReadChain(manager, 'chain-two'),
+      (error) => error?.getStatus?.() === 403,
+    );
+    assert.equal(seen[0].id, 'branch-one');
+    assert.equal(seen[0].chainId, 'chain-one');
+  });
+
   it('rejects Platform ADMIN from restaurant branch access', async () => {
     const service = new BranchAccessService({});
     await assert.rejects(

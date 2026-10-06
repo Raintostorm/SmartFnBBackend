@@ -11,6 +11,13 @@ export interface QuotaUsage {
   remaining: number;
 }
 
+export interface SubscriptionSnapshot {
+  status: BusinessSubscriptionStatus;
+  expiresAt: Date;
+  plan: PlanSummary;
+  quotas: QuotaUsage[];
+}
+
 const planSelect = {
   id: true,
   code: true,
@@ -91,6 +98,31 @@ export class PlanQuotaService {
     return {
       plan,
       quotas: resources.map((resource) => this.toUsage(resource, usage[resource], plan)),
+    };
+  }
+
+  /** Read-only subscription view. Unlike quota enforcement, expired and suspended plans remain visible. */
+  async getSubscriptionSnapshot(chainId: string): Promise<SubscriptionSnapshot | null> {
+    const subscription = await this.prisma.businessSubscription.findUnique({
+      where: { chainId },
+      select: { status: true, expiresAt: true, plan: { select: planSelect } },
+    });
+    if (!subscription) return null;
+
+    const usage = await this.getUsage(chainId);
+    const resources = Object.keys(limitFieldByResource) as QuotaResource[];
+    const status =
+      subscription.status === BusinessSubscriptionStatus.ACTIVE &&
+      subscription.expiresAt <= new Date()
+        ? BusinessSubscriptionStatus.EXPIRED
+        : subscription.status;
+    return {
+      status,
+      expiresAt: subscription.expiresAt,
+      plan: subscription.plan,
+      quotas: resources.map((resource) =>
+        this.toUsage(resource, usage[resource], subscription.plan),
+      ),
     };
   }
 

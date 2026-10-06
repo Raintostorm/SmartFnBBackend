@@ -14,6 +14,7 @@ export const SWAGGER_TAGS = [
   ['Platform administration', 'Quản trị đăng ký doanh nghiệp, gói dịch vụ và thuê bao.'],
   ['Users', 'Quản lý trạng thái tài khoản.'],
   ['Restaurant chains - OWNER', 'OWNER quản lý chuỗi nhà hàng của mình.'],
+  ['Restaurant chain subscription', 'OWNER và MANAGER xem trạng thái, hạn dùng và hạn mức gói.'],
   ['Employees - OWNER', 'OWNER quản lý tài khoản nhân viên theo phạm vi chuỗi.'],
   ['Menu - chain wide (OWNER)', 'OWNER quản lý danh mục, món và tùy chọn dùng chung.'],
   ['Reports - OWNER', 'Báo cáo doanh thu và vận hành của OWNER.'],

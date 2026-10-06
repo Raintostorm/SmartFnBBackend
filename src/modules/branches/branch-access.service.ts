@@ -136,4 +136,24 @@ export class BranchAccessService {
       throw new ForbiddenException('OWNER can only access an assigned restaurant chain');
     }
   }
+
+  async assertCanReadChain(user: AuthenticatedUser, chainId: string): Promise<void> {
+    if (user.role === AppRole.OWNER) {
+      await this.assertCanAccessChain(user, chainId);
+      return;
+    }
+    if (user.role !== AppRole.MANAGER || !user.branchId) {
+      throw new ForbiddenException('Only an assigned OWNER or MANAGER can access this chain');
+    }
+    const assigned = await this.prisma.branch.count({
+      where: {
+        id: user.branchId,
+        chainId,
+        deletedAt: null,
+        chain: { deletedAt: null, status: RestaurantChainStatus.ACTIVE },
+      },
+    });
+    if (!assigned)
+      throw new ForbiddenException('MANAGER can only access the assigned branch chain');
+  }
 }

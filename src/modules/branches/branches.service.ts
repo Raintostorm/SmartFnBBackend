@@ -200,7 +200,7 @@ export class BranchesService {
     return Promise.all(
       chains.map(async (chain) => ({
         ...chain,
-        subscription: await this.planQuota.getQuotaSnapshot(chain.id).catch(() => null),
+        subscription: await this.planQuota.getSubscriptionSnapshot(chain.id),
       })),
     );
   }
@@ -240,7 +240,7 @@ export class BranchesService {
         },
         orderBy: [{ city: 'asc' }, { name: 'asc' }],
       }),
-      this.planQuota.getQuotaSnapshot(chainId).catch(() => null),
+      this.planQuota.getSubscriptionSnapshot(chainId),
     ]);
 
     const items = branches.map(({ specialHours, operatingHours, ...branch }) => ({

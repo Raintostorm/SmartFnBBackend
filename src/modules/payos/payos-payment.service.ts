@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  BadGatewayException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -14,6 +15,7 @@ import {
   PaymentMethod,
   PaymentProvider,
   PaymentStatus,
+  PayosChannelStatus,
   Prisma,
   WebhookProcessingStatus,
 } from '../../generated/prisma/client.js';
@@ -22,9 +24,10 @@ import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
 import type { CreatePayosPaymentDto } from './dto/payos-payment.dto.js';
-import { PayosApiService } from './payos-api.service.js';
+import { PayosApiError, PayosApiService } from './payos-api.service.js';
 import { PayosCipherService } from './payos-cipher.service.js';
 import { verifyPayosSignature } from './payos-signature.js';
+import { PayosVerificationStore } from './payos-verification.store.js';
 
 interface PayosWebhook {
   code?: string;
@@ -46,6 +49,7 @@ export class PayosPaymentService {
     private readonly cipher: PayosCipherService,
     private readonly api: PayosApiService,
     private readonly realtime: RealtimePublisher,
+    private readonly verification: PayosVerificationStore,
   ) {}
 
   async create(user: AuthenticatedUser, orderId: string, dto: CreatePayosPaymentDto) {
@@ -76,21 +80,38 @@ export class PayosPaymentService {
 
     const providerOrderCode = Number(`${Date.now()}${Math.floor(Math.random() * 90 + 10)}`);
     const expiresAt = new Date(Date.now() + 10 * 60_000);
-    const result = await this.api.createPayment(
-      {
-        clientId: this.cipher.decrypt(channel.clientIdCipher),
-        apiKey: this.cipher.decrypt(channel.apiKeyCipher),
-        checksumKey: this.cipher.decrypt(channel.checksumKeyCipher),
-      },
-      {
+    const credentials = {
+      clientId: this.cipher.decrypt(channel.clientIdCipher),
+      apiKey: this.cipher.decrypt(channel.apiKeyCipher),
+      checksumKey: this.cipher.decrypt(channel.checksumKeyCipher),
+    };
+    let result;
+    try {
+      result = await this.api.createPayment(credentials, {
         orderCode: providerOrderCode,
         amount: new Prisma.Decimal(order.totalAmount).toNumber(),
         description: `DH ${order.orderCode}`.slice(0, 25),
         cancelUrl: dto.cancelUrl,
         returnUrl: dto.returnUrl,
         expiredAt: Math.floor(expiresAt.getTime() / 1000),
-      },
-    );
+      });
+      await this.prisma.payosChannel.update({
+        where: { id: channel.id },
+        data: { status: PayosChannelStatus.LINKED, lastError: null, lastVerifiedAt: new Date() },
+      });
+    } catch (error) {
+      if (error instanceof PayosApiError && !error.temporary) {
+        await this.prisma.payosChannel.update({
+          where: { id: channel.id },
+          data: { status: PayosChannelStatus.ERROR, lastError: error.message.slice(0, 1000) },
+        });
+      }
+      if (error instanceof PayosApiError) {
+        if (error.temporary) throw new BadGatewayException(error.message);
+        throw new BadRequestException(error.message);
+      }
+      throw error;
+    }
     return this.prisma.payment.create({
       data: {
         paymentCode: `PAY-${Date.now()}-${crypto.randomUUID().slice(0, 6).toUpperCase()}`,
@@ -109,20 +130,30 @@ export class PayosPaymentService {
     });
   }
 
-  async webhook(payload: PayosWebhook) {
+  async webhook(webhookCode: string, payload: PayosWebhook) {
     const data = payload.data;
     const signature = payload.signature;
     if (!data?.orderCode || !signature) throw new UnauthorizedException('Invalid PayOS webhook');
+    const pendingVerification = this.verification.get(webhookCode);
+    if (pendingVerification) {
+      if (!verifyPayosSignature(data, signature, pendingVerification.checksumKey))
+        throw new UnauthorizedException('Invalid PayOS signature');
+      return { success: true };
+    }
+
+    const channel = await this.prisma.payosChannel.findUnique({ where: { webhookCode } });
+    if (!channel) throw new NotFoundException('PayOS channel was not found');
+    if (!verifyPayosSignature(data, signature, this.cipher.decrypt(channel.checksumKeyCipher)))
+      throw new UnauthorizedException('Invalid PayOS signature');
+
     const payment = await this.prisma.payment.findUnique({
       where: { providerOrderCode: String(data.orderCode) },
       include: { order: { include: { branch: { select: { chainId: true } } } } },
     });
-    if (!payment?.order) throw new NotFoundException('PayOS payment was not found');
-    const channel = await this.prisma.payosChannel.findUniqueOrThrow({
-      where: { chainId: payment.order.branch.chainId },
-    });
-    if (!verifyPayosSignature(data, signature, this.cipher.decrypt(channel.checksumKeyCipher)))
-      throw new UnauthorizedException('Invalid PayOS signature');
+    // PayOS sends a signed sample while confirming a webhook. Accept it without mutating an order.
+    if (!payment?.order) return { success: true };
+    if (payment.order.branch.chainId !== channel.chainId)
+      throw new UnauthorizedException('PayOS channel does not match the payment chain');
 
     const idempotencyKey = `${data.orderCode}:${data.reference || data.paymentLinkId || signature}`;
     const result = await this.prisma.$transaction(

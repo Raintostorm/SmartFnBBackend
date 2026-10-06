@@ -23,6 +23,9 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
     .map((origin) => origin.trim())
     .filter(Boolean);
   const payosMasterKey = String(config.PAYOS_MASTER_KEY ?? '').trim();
+  const payosWebhookBaseUrl = String(config.PAYOS_WEBHOOK_BASE_URL ?? '')
+    .trim()
+    .replace(/\/+$/, '');
 
   if (!validEnvironments.has(nodeEnv)) {
     throw new Error('NODE_ENV must be development, test, or production.');
@@ -89,6 +92,9 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
   if (payosMasterKey && Buffer.from(payosMasterKey, 'base64').length !== 32) {
     throw new Error('PAYOS_MASTER_KEY must be a base64-encoded 32-byte key.');
   }
+  if (payosWebhookBaseUrl && !/^https?:\/\//.test(payosWebhookBaseUrl)) {
+    throw new Error('PAYOS_WEBHOOK_BASE_URL must be an absolute HTTP(S) URL.');
+  }
 
   return {
     ...config,
@@ -113,5 +119,6 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
     REALTIME_PATH: realtimePath,
     REALTIME_CORS_ORIGINS: realtimeCorsOrigins,
     PAYOS_MASTER_KEY: payosMasterKey,
+    PAYOS_WEBHOOK_BASE_URL: payosWebhookBaseUrl,
   };
 }

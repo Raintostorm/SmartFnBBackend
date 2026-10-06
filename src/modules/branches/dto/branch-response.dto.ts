@@ -4,7 +4,37 @@ import {
   BranchAreaType,
   BranchStatus,
   RestaurantChainStatus,
+  BusinessSubscriptionStatus,
 } from '../../../generated/prisma/client.js';
+
+export class SubscriptionPlanResponseDto {
+  @ApiProperty({ format: 'uuid' }) id!: string;
+  @ApiProperty() code!: string;
+  @ApiProperty() name!: string;
+  @ApiProperty() brandingEnabled!: boolean;
+  @ApiProperty() multiBranchComparisonEnabled!: boolean;
+}
+
+export class SubscriptionQuotaResponseDto {
+  @ApiProperty({ enum: ['branches', 'accounts', 'tables'] }) resource!: string;
+  @ApiProperty() used!: number;
+  @ApiProperty() limit!: number;
+  @ApiProperty() remaining!: number;
+}
+
+export class SubscriptionSnapshotResponseDto {
+  @ApiProperty({ enum: BusinessSubscriptionStatus, enumName: 'BusinessSubscriptionStatus' })
+  status!: BusinessSubscriptionStatus;
+  @ApiProperty({ format: 'date-time' }) expiresAt!: Date;
+  @ApiProperty({ type: SubscriptionPlanResponseDto }) plan!: SubscriptionPlanResponseDto;
+  @ApiProperty({ type: SubscriptionQuotaResponseDto, isArray: true })
+  quotas!: SubscriptionQuotaResponseDto[];
+}
+
+export class ChainSubscriptionResponseDto {
+  @ApiPropertyOptional({ type: SubscriptionSnapshotResponseDto, nullable: true })
+  subscription!: SubscriptionSnapshotResponseDto | null;
+}
 
 export class ChainReferenceResponseDto {
   @ApiProperty({ format: 'uuid' })
@@ -187,8 +217,13 @@ export class RestaurantChainResponseDto {
   @ApiProperty({ enum: RestaurantChainStatus, enumName: 'RestaurantChainStatus' })
   status!: RestaurantChainStatus;
 
-  @ApiPropertyOptional({ type: Object, description: 'Current plan limits and usage snapshot' })
-  subscription?: object | null;
+  @ApiPropertyOptional({
+    type: SubscriptionSnapshotResponseDto,
+    nullable: true,
+    description:
+      'Plan status, expiration, features, and current usage; remains present when read-only',
+  })
+  subscription?: SubscriptionSnapshotResponseDto | null;
 
   @ApiProperty({ format: 'date-time' })
   createdAt!: Date;

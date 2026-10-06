@@ -56,6 +56,7 @@ REALTIME_PATH=/socket.io
 REALTIME_CORS_ORIGINS=http://localhost:8443,http://localhost:5173,http://localhost:8081
 
 PAYOS_MASTER_KEY=THAY_BANG_KHOA_BASE64_32_BYTE
+PAYOS_WEBHOOK_BASE_URL=http://localhost:3100/api/v1
 ```
 
 Tạo các secret local bằng Node.js:
@@ -77,11 +78,14 @@ Các biến bắt buộc cần kiểm tra:
 - `DATABASE_URL`: URL PostgreSQL của môi trường Render.
 - `JWT_ACCESS_SECRET` và `JWT_REFRESH_SECRET`: hai secret khác nhau.
 - `PAYOS_MASTER_KEY`: khóa base64 32 byte; phải giữ nguyên khi deploy lại để đọc được thông tin PayOS đã mã hóa.
+- `PAYOS_WEBHOOK_BASE_URL=https://smart-fnb-be.onrender.com/api/v1`: prefix API công khai để PayOS xác nhận webhook theo từng kênh.
 - `CORS_ORIGIN` và `REALTIME_CORS_ORIGINS`: thêm domain Web thực tế, phân cách bằng dấu phẩy.
 - `REALTIME_ENABLED=true` và `REALTIME_PATH=/socket.io`.
 - `SWAGGER_ENABLED=true` nếu cần dùng `/api/docs`; production có thể tắt sau khi kiểm thử.
 
 Không đặt Client ID, API Key hoặc Checksum Key của PayOS trực tiếp trong `.env` Backend. Các khóa kênh PayOS được Owner gửi qua API và Backend mã hóa bằng `PAYOS_MASTER_KEY`.
+
+`PAYOS_WEBHOOK_BASE_URL` local chỉ dùng cho test tự động. PayOS thật không gọi được `localhost`; kiểm thử thật phải dùng URL HTTPS công khai như Render.
 
 ## 2. Web
 
@@ -181,6 +185,15 @@ pnpm expo start --clear
 3. Web và Mobile phải dùng cùng một Backend để ghép quầy và đồng bộ màn hình khách.
 4. `VITE_REALTIME_PATH`, `EXPO_PUBLIC_REALTIME_PATH` và `REALTIME_PATH` phải cùng là `/socket.io`.
 5. Nếu HTTP gọi được nhưng màn hình khách không cập nhật, kiểm tra `REALTIME_ENABLED`, CORS realtime và WebSocket của môi trường deploy.
+
+### Test local #38 và #40 không gọi PayOS thật
+
+```bash
+cd SmartFnBBackend
+pnpm test:subscription-payos
+```
+
+Lệnh này build Backend, kiểm tra quyền đọc gói của Owner/Manager, trạng thái hết hạn/tạm ngưng, xác nhận webhook PayOS giả lập, trạng thái `LINKED/ERROR`, Last4, audit log và Prisma schema. Không cần Client ID, API Key, Checksum Key hoặc URL public.
 
 ## 5. Quy tắc bảo mật
 
