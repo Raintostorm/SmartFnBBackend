@@ -138,6 +138,51 @@ describe('V9 realtime device authentication', () => {
     );
   });
 
+  it('syncs the latest persisted station snapshot to its paired customer display', async () => {
+    const emitted = [];
+    const gateway = new RealtimeGateway(
+      {},
+      {},
+      {
+        posStation: {
+          findFirst: async ({ where }) => {
+            assert.deepEqual(where, { id: 'station-a', branchId: 'branch-a', status: 'ACTIVE' });
+            return {
+              id: 'station-a',
+              cartVersion: 12,
+              cartSnapshot: { state: 'CART', items: [{ name: 'Cà phê' }], totalAmount: 25000 },
+            };
+          },
+        },
+      },
+    );
+    const result = await gateway.syncStation({
+      data: {
+        device: {
+          id: 'display-a',
+          type: 'CUSTOMER_DISPLAY',
+          branchId: 'branch-a',
+          stationId: 'station-a',
+        },
+      },
+      emit: (event, data) => emitted.push({ event, data }),
+    });
+
+    assert.equal(emitted[0].event, 'operations.updated');
+    assert.equal(emitted[0].data.type, 'station.sync');
+    assert.equal(emitted[0].data.data.version, 12);
+    assert.equal(emitted[0].data.data.totalAmount, 25000);
+    assert.equal(result.event, 'station.synced');
+  });
+
+  it('rejects station sync from a signed-in user instead of a customer display', async () => {
+    const gateway = new RealtimeGateway({}, {}, {});
+    await assert.rejects(
+      gateway.syncStation({ data: { user: { role: 'CASHIER' } }, emit: () => undefined }),
+      /Only a paired customer display/,
+    );
+  });
+
   it('sanitizes and publishes payment state only from a cashier', async () => {
     let saved;
     let published;

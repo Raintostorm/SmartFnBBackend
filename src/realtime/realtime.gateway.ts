@@ -117,6 +117,37 @@ export class RealtimeGateway implements OnGatewayConnection {
     return this.publishDisplay(client, data);
   }
 
+  @SubscribeMessage('station:sync')
+  async syncStation(@ConnectedSocket() client: AuthenticatedSocket) {
+    const device = client.data.device;
+    if (device?.type !== DisplayDeviceType.CUSTOMER_DISPLAY || !device.stationId) {
+      throw new WsException('Only a paired customer display can sync its station');
+    }
+
+    const station = await this.prisma.posStation.findFirst({
+      where: {
+        id: device.stationId,
+        branchId: device.branchId,
+        status: PosStationStatus.ACTIVE,
+      },
+      select: { id: true, cartVersion: true, cartSnapshot: true },
+    });
+    if (!station) throw new WsException('Active POS station was not found');
+
+    const snapshot =
+      station.cartSnapshot && typeof station.cartSnapshot === 'object'
+        ? station.cartSnapshot
+        : { state: 'IDLE', items: [], totalAmount: 0 };
+    const event: OperationsEvent = {
+      type: 'station.sync',
+      branchId: device.branchId,
+      occurredAt: new Date().toISOString(),
+      data: { stationId: station.id, version: station.cartVersion, ...snapshot },
+    };
+    client.emit('operations.updated', event);
+    return { event: 'station.synced', data: event.data };
+  }
+
   emitToBranch(branchId: string, event: OperationsEvent) {
     this.server?.to(this.branchRoom(branchId)).emit('operations.updated', event);
   }
