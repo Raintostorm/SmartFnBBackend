@@ -8,9 +8,10 @@ import { PayosPaymentService } from './payos-payment.service.js';
 import { PayosWebhookController } from './payos-webhook.controller.js';
 import { RealtimeModule } from '../../realtime/realtime.module.js';
 import { PayosVerificationStore } from './payos-verification.store.js';
+import { OrderTrackingModule } from '../order-tracking/order-tracking.module.js';
 
 @Module({
-  imports: [BranchesModule, RealtimeModule],
+  imports: [BranchesModule, RealtimeModule, OrderTrackingModule],
   controllers: [PayosChannelController, PayosWebhookController],
   providers: [
     PayosChannelService,

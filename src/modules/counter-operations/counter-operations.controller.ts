@@ -154,6 +154,14 @@ export class CashierController {
       orderId: id,
       callNumber: result.order.callNumber,
     });
+    if (user.branchId) {
+      this.realtime.callingDisplay(user.branchId, 'calling.order.queued', {
+        id: result.order.id,
+        callNumber: result.order.callNumber,
+        status: result.order.status,
+        submittedAt: result.order.submittedAt,
+      });
+    }
     return result;
   }
 
@@ -217,6 +225,9 @@ export class BaristaController {
   async startBatch(@CurrentUser() user: AuthenticatedUser, @Body() dto: StartPreparationBatchDto) {
     const result = await this.service.startBatch(user, dto.unitIds);
     this.publish(user, 'preparation.batch.started', { unitIds: dto.unitIds });
+    for (const order of result.preparingOrders) {
+      this.publishCallingDisplay(user, 'calling.order.preparing', order);
+    }
     return result;
   }
 
@@ -242,6 +253,13 @@ export class BaristaController {
   ) {
     const result = await this.service.startUnit(user, id);
     this.publish(user, 'preparation.item.started', { unitId: id });
+    this.publishCallingDisplay(user, 'calling.order.preparing', {
+      id: result.orderItem.order.id,
+      orderCode: result.orderItem.order.orderCode,
+      callNumber: result.orderItem.order.callNumber,
+      status: result.orderItem.order.status,
+      submittedAt: result.orderItem.order.submittedAt,
+    });
     return result;
   }
 
@@ -272,6 +290,13 @@ export class BaristaController {
   ) {
     const result = await this.service.undoUnit(user, id);
     this.publish(user, 'preparation.item.undone', { unitId: id, status: result.status });
+    this.publishCallingDisplay(user, 'calling.order.preparing', {
+      id: result.orderItem.order.id,
+      orderCode: result.orderItem.order.orderCode,
+      callNumber: result.orderItem.order.callNumber,
+      status: result.orderItem.order.status,
+      submittedAt: result.orderItem.order.submittedAt,
+    });
     return result;
   }
 

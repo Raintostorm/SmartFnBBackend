@@ -160,6 +160,44 @@ describe('V9 POS stations and display pairing', () => {
     assert.equal(orderFilter.status, 'READY');
   });
 
+  it('returns separate current-day preparing and ready columns with branding', async () => {
+    const queries = [];
+    const service = stationsService({
+      displayDevice: {
+        findFirst: async () => ({ id: 'device-id', branchId: 'branch-a', stationId: null }),
+        update: async () => ({}),
+      },
+      branch: {
+        findUniqueOrThrow: async () => ({
+          name: 'Q1',
+          timezone: 'Asia/Ho_Chi_Minh',
+          chain: {
+            name: 'Smart Cafe',
+            logoUrl: null,
+            branding: { displayName: 'Cafe', logoUrl: null, primaryColor: '#111111' },
+          },
+        }),
+      },
+      order: {
+        findMany: (args) => {
+          queries.push(args);
+          return args;
+        },
+      },
+      $transaction: async (items) => {
+        assert.equal(items.length, 2);
+        return [[{ callNumber: 21, status: 'PREPARING' }], [{ callNumber: 23, status: 'READY' }]];
+      },
+    });
+    const result = await service.callingDisplayContext('Bearer valid-device-token');
+    assert.equal(result.branding.displayName, 'Cafe');
+    assert.equal(result.preparing[0].callNumber, 21);
+    assert.equal(result.ready[0].callNumber, 23);
+    assert.deepEqual(queries[0].where.status.in, ['SUBMITTED', 'PREPARING']);
+    assert.equal(queries[1].where.status, 'READY');
+    assert.ok(queries[0].where.businessDate instanceof Date);
+  });
+
   it('rejects a revoked or invalid calling-display token', async () => {
     const service = stationsService({
       displayDevice: { findFirst: async () => null },

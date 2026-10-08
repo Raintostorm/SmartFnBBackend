@@ -100,6 +100,95 @@ export class StationsService {
     });
   }
 
+  async callingDisplayContext(authorization?: string) {
+    const device = await this.authenticateDisplayDevice(
+      authorization,
+      DisplayDeviceType.CALLING_DISPLAY,
+    );
+    const branch = await this.prisma.branch.findUniqueOrThrow({
+      where: { id: device.branchId },
+      select: {
+        name: true,
+        timezone: true,
+        chain: {
+          select: {
+            name: true,
+            logoUrl: true,
+            branding: {
+              select: {
+                displayName: true,
+                logoUrl: true,
+                primaryColor: true,
+                secondaryColor: true,
+                accentColor: true,
+              },
+            },
+          },
+        },
+      },
+    });
+    const businessDate = this.businessDate(branch.timezone);
+    const baseWhere = {
+      branchId: device.branchId,
+      businessDate,
+      type: OrderType.COUNTER_PICKUP,
+      paymentStatus: OrderPaymentStatus.PAID,
+    } as const;
+    const [preparing, ready] = await this.prisma.$transaction([
+      this.prisma.order.findMany({
+        where: {
+          ...baseWhere,
+          status: { in: [OrderStatus.SUBMITTED, OrderStatus.PREPARING] },
+        },
+        select: {
+          id: true,
+          callNumber: true,
+          status: true,
+          submittedAt: true,
+          readyAt: true,
+        },
+        orderBy: { submittedAt: 'asc' },
+        take: 30,
+      }),
+      this.prisma.order.findMany({
+        where: { ...baseWhere, status: OrderStatus.READY },
+        select: {
+          id: true,
+          callNumber: true,
+          status: true,
+          submittedAt: true,
+          readyAt: true,
+        },
+        orderBy: { readyAt: 'asc' },
+        take: 30,
+      }),
+    ]);
+    const branding = branch.chain.branding;
+    return {
+      branch: { name: branch.name },
+      branding: {
+        displayName: branding?.displayName ?? branch.chain.name,
+        logoUrl: branding?.logoUrl ?? branch.chain.logoUrl,
+        primaryColor: branding?.primaryColor ?? '#0F172A',
+        secondaryColor: branding?.secondaryColor ?? '#FFFFFF',
+        accentColor: branding?.accentColor ?? '#22C55E',
+      },
+      preparing,
+      ready,
+      serverTime: new Date().toISOString(),
+    };
+  }
+
+  private businessDate(timezone: string) {
+    const date = new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
+    return new Date(`${date}T00:00:00.000Z`);
+  }
+
   async customerDisplayContext(authorization?: string) {
     const device = await this.authenticateDisplayDevice(
       authorization,

@@ -100,6 +100,7 @@ describe('V9 PayOS channel credentials', () => {
             payments: [],
           }),
         },
+        posStation: { findFirst: async () => ({ id: 'station-id' }) },
         payosChannel: {
           findUnique: async () => ({
             id: 'channel-id',
@@ -124,6 +125,7 @@ describe('V9 PayOS channel credentials', () => {
     );
     await assert.rejects(
       service.create({ employeeId: 'employee-id', branchId: 'branch-id' }, 'order-id', {
+        stationId: 'station-id',
         cancelUrl: 'https://example.com/cancel',
         returnUrl: 'https://example.com/return',
       }),
@@ -209,10 +211,19 @@ describe('V9 PayOS channel credentials', () => {
     const service = new PayosChannelService(
       {
         payosChannel: { findUnique: async () => existing },
-        $transaction: async (work) => work({
-          payosChannel: { delete: async ({ where }) => { deletedId = where.id; } },
-          payosChannelAuditLog: { create: async ({ data }) => { audit = data; } },
-        }),
+        $transaction: async (work) =>
+          work({
+            payosChannel: {
+              delete: async ({ where }) => {
+                deletedId = where.id;
+              },
+            },
+            payosChannelAuditLog: {
+              create: async ({ data }) => {
+                audit = data;
+              },
+            },
+          }),
       },
       { assertCanManageChain: async () => undefined },
       cipher,
@@ -221,7 +232,9 @@ describe('V9 PayOS channel credentials', () => {
       verification,
     );
 
-    assert.deepEqual(await service.remove('chain-id', { ...owner, id: 'user-id' }), { configured: false });
+    assert.deepEqual(await service.remove('chain-id', { ...owner, id: 'user-id' }), {
+      configured: false,
+    });
     assert.equal(deletedId, 'channel-id');
     assert.equal(audit.action, 'PAYOS_CHANNEL_REMOVED');
     assert.equal(JSON.stringify(audit).includes('secret-cipher'), false);

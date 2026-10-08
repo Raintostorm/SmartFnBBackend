@@ -19,6 +19,7 @@ import {
 import { PrismaService } from '../../database/prisma.service.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
+import { OrderTrackingService } from '../order-tracking/order-tracking.service.js';
 import type {
   AddCounterOrderItemDto,
   AvailabilityDto,
@@ -40,6 +41,7 @@ export class CounterOperationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly branchAccess: BranchAccessService,
+    private readonly tracking: OrderTrackingService,
   ) {}
 
   private employee(user: AuthenticatedUser) {
@@ -495,7 +497,8 @@ export class CounterOperationsService {
             }),
           ),
         );
-        return { order: updatedOrder, payment, printJobs };
+        const tracking = await this.tracking.ensureForOrder(tx, orderId);
+        return { order: updatedOrder, payment, printJobs, tracking };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
@@ -599,6 +602,7 @@ export class CounterOperationsService {
     });
     if (!order) throw new NotFoundException('Paid counter order was not found in your branch');
     const branding = order.branch.chain.branding;
+    const tracking = await this.tracking.presentationForOrder(order.id);
     return {
       orderId: order.id,
       orderCode: order.orderCode,
@@ -627,6 +631,7 @@ export class CounterOperationsService {
       subtotal: order.subtotal,
       totalAmount: order.totalAmount,
       payment: order.payments[0] ?? null,
+      tracking,
     };
   }
 
@@ -810,7 +815,20 @@ export class CounterOperationsService {
           itemId,
         );
       }
-      return { unitIds, startedAt: now, startedById: actor.employeeId };
+      const preparingOrders = await tx.order.findMany({
+        where: {
+          id: { in: [...new Set(units.map((unit) => unit.orderItem.orderId))] },
+          status: OrderStatus.PREPARING,
+        },
+        select: {
+          id: true,
+          orderCode: true,
+          callNumber: true,
+          status: true,
+          submittedAt: true,
+        },
+      });
+      return { unitIds, startedAt: now, startedById: actor.employeeId, preparingOrders };
     });
   }
 
@@ -927,6 +945,7 @@ export class CounterOperationsService {
         where: { orderId, status: OrderItemStatus.READY },
         data: { status: OrderItemStatus.DELIVERED, servedAt: now },
       });
+      await this.tracking.markTerminal(tx, orderId, now);
       return tx.order.update({
         where: { id: orderId },
         data: {

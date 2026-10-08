@@ -1043,6 +1043,7 @@ model Order {
   invoice          Invoice?
   printJobs        PrintJob[]
   displaySessions  CustomerDisplaySession[]
+  trackingToken    OrderTrackingToken?
 
   @@unique([branchId, businessDate, callNumber])
   @@index([branchId, placedAt])
@@ -1143,6 +1144,7 @@ model Payment {
   orderId               String?         @map("order_id") @db.Uuid
   tableSessionId        String?         @map("table_session_id") @db.Uuid
   processedById         String?         @map("processed_by_id") @db.Uuid
+  stationId             String?         @map("station_id") @db.Uuid
   method                PaymentMethod
   status                PaymentStatus   @default(PENDING)
   amount                Decimal         @db.Decimal(14, 2)
@@ -1167,12 +1169,14 @@ model Payment {
   order         Order?                @relation(fields: [orderId], references: [id], onDelete: Restrict)
   tableSession  TableSession?         @relation(fields: [tableSessionId], references: [id], onDelete: Restrict)
   processedBy   Employee?             @relation("PaymentProcessedBy", fields: [processedById], references: [id], onDelete: SetNull)
+  station       PosStation?           @relation(fields: [stationId], references: [id], onDelete: SetNull)
   invoiceLinks  InvoicePayment[]
   webhookEvents PaymentWebhookEvent[]
 
   @@index([orderId, status])
   @@index([tableSessionId, status])
   @@index([processedById])
+  @@index([stationId])
   @@index([transactionRef])
   @@map("payments")
 }
@@ -1308,10 +1312,29 @@ model PosStation {
   branch         Branch          @relation(fields: [branchId], references: [id], onDelete: Cascade)
   displayDevices DisplayDevice[]
   printJobs      PrintJob[]
+  payments       Payment[]
 
   @@unique([branchId, name])
   @@index([branchId, status])
   @@map("pos_stations")
+}
+
+model OrderTrackingToken {
+  id             String    @id @default(uuid()) @db.Uuid
+  orderId        String    @unique @map("order_id") @db.Uuid
+  tokenHash      String    @unique @map("token_hash") @db.VarChar(64)
+  tokenSalt      String    @map("token_salt") @db.VarChar(64)
+  expiresAt      DateTime  @map("expires_at") @db.Timestamptz(6)
+  terminalAt     DateTime? @map("terminal_at") @db.Timestamptz(6)
+  revokedAt      DateTime? @map("revoked_at") @db.Timestamptz(6)
+  lastAccessedAt DateTime? @map("last_accessed_at") @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt, revokedAt])
+  @@map("order_tracking_tokens")
 }
 
 model PairingCode {

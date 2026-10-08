@@ -26,6 +26,10 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
   const payosWebhookBaseUrl = String(config.PAYOS_WEBHOOK_BASE_URL ?? '')
     .trim()
     .replace(/\/+$/, '');
+  const publicWebUrl = String(config.PUBLIC_WEB_URL ?? 'http://localhost:8443')
+    .trim()
+    .replace(/\/+$/, '');
+  const orderTrackingSecret = String(config.ORDER_TRACKING_SECRET ?? '').trim();
 
   if (!validEnvironments.has(nodeEnv)) {
     throw new Error('NODE_ENV must be development, test, or production.');
@@ -95,6 +99,15 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
   if (payosWebhookBaseUrl && !/^https?:\/\//.test(payosWebhookBaseUrl)) {
     throw new Error('PAYOS_WEBHOOK_BASE_URL must be an absolute HTTP(S) URL.');
   }
+  if (!/^https?:\/\//.test(publicWebUrl)) {
+    throw new Error('PUBLIC_WEB_URL must be an absolute HTTP(S) URL.');
+  }
+  if (nodeEnv === 'production' && !publicWebUrl.startsWith('https://')) {
+    throw new Error('PUBLIC_WEB_URL must use HTTPS in production.');
+  }
+  if (nodeEnv === 'production' && orderTrackingSecret.length < 32) {
+    throw new Error('ORDER_TRACKING_SECRET must contain at least 32 characters in production.');
+  }
 
   return {
     ...config,
@@ -120,5 +133,7 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
     REALTIME_CORS_ORIGINS: realtimeCorsOrigins,
     PAYOS_MASTER_KEY: payosMasterKey,
     PAYOS_WEBHOOK_BASE_URL: payosWebhookBaseUrl,
+    PUBLIC_WEB_URL: publicWebUrl,
+    ORDER_TRACKING_SECRET: orderTrackingSecret || 'local-order-tracking-secret-change-me',
   };
 }

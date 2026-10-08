@@ -37,6 +37,16 @@ export class StationsController {
   }
 
   @Public()
+  @Get('public/calling-display/context')
+  @ApiSecurity(SWAGGER_DEVICE_TOKEN)
+  @ApiOperation({
+    summary: 'Get branding plus preparing and ready call numbers for a paired display',
+  })
+  callingDisplayContext(@Headers('authorization') authorization?: string) {
+    return this.stations.callingDisplayContext(authorization);
+  }
+
+  @Public()
   @Get('public/customer-display/context')
   @ApiSecurity(SWAGGER_DEVICE_TOKEN)
   @ApiOperation({ summary: 'Get the paired station and latest customer-display state' })

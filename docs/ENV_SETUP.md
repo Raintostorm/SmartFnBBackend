@@ -57,6 +57,8 @@ REALTIME_CORS_ORIGINS=http://localhost:8443,http://localhost:5173,http://localho
 
 PAYOS_MASTER_KEY=THAY_BANG_KHOA_BASE64_32_BYTE
 PAYOS_WEBHOOK_BASE_URL=http://localhost:3100/api/v1
+PUBLIC_WEB_URL=http://localhost:8443
+ORDER_TRACKING_SECRET=THAY_BANG_SECRET_RIENG_TOI_THIEU_32_KY_TU
 ```
 
 Tạo các secret local bằng Node.js:
@@ -79,6 +81,8 @@ Các biến bắt buộc cần kiểm tra:
 - `JWT_ACCESS_SECRET` và `JWT_REFRESH_SECRET`: hai secret khác nhau.
 - `PAYOS_MASTER_KEY`: khóa base64 32 byte; phải giữ nguyên khi deploy lại để đọc được thông tin PayOS đã mã hóa.
 - `PAYOS_WEBHOOK_BASE_URL=https://smart-fnb-be.onrender.com/api/v1`: prefix API công khai để PayOS xác nhận webhook theo từng kênh.
+- `PUBLIC_WEB_URL`: domain FE Web công khai được in vào QR theo dõi trên phiếu số.
+- `ORDER_TRACKING_SECRET`: secret độc lập tối thiểu 32 ký tự; không dùng lại JWT hoặc khóa PayOS.
 - `CORS_ORIGIN` và `REALTIME_CORS_ORIGINS`: thêm domain Web thực tế, phân cách bằng dấu phẩy.
 - `REALTIME_ENABLED=true` và `REALTIME_PATH=/socket.io`.
 - `SWAGGER_ENABLED=true` nếu cần dùng `/api/docs`; production có thể tắt sau khi kiểm thử.
