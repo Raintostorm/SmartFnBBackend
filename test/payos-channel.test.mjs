@@ -60,8 +60,7 @@ describe('V9 PayOS channel credentials', () => {
         owner,
       ),
       (error) =>
-        error?.getStatus?.() === 503 &&
-        error?.message === 'PAYOS_MASTER_KEY is not configured',
+        error?.getStatus?.() === 503 && error?.message === 'PAYOS_MASTER_KEY is not configured',
     );
     assert.equal(payosCalls, 0);
   });
@@ -85,6 +84,34 @@ describe('V9 PayOS channel credentials', () => {
       assert.equal(request.init.headers['x-api-key'], 'api');
       assert.deepEqual(JSON.parse(request.init.body), {
         webhookUrl: 'https://merchant.example/api/v1/webhooks/payos/code',
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('reads and cancels a payment through the official PayOS API', async () => {
+    const originalFetch = globalThis.fetch;
+    const requests = [];
+    globalThis.fetch = async (url, init) => {
+      requests.push({ url, init });
+      return new Response(
+        JSON.stringify({ code: '00', data: { id: 'link-id', status: 'CANCELLED' } }),
+        { status: 200 },
+      );
+    };
+    try {
+      const api = new PayosApiService();
+      const credentials = { clientId: 'client', apiKey: 'api', checksumKey: 'checksum' };
+      await api.getPayment(credentials, 'link/id');
+      await api.cancelPayment(credentials, 'link/id', 'Khách đổi phương thức thanh toán');
+      assert.equal(requests[0].init.method, 'GET');
+      assert.equal(requests[0].init.body, undefined);
+      assert.match(requests[0].url, /payment-requests\/link%2Fid$/);
+      assert.equal(requests[1].init.method, 'POST');
+      assert.match(requests[1].url, /payment-requests\/link%2Fid\/cancel$/);
+      assert.deepEqual(JSON.parse(requests[1].init.body), {
+        cancellationReason: 'Khách đổi phương thức thanh toán',
       });
     } finally {
       globalThis.fetch = originalFetch;
@@ -122,6 +149,7 @@ describe('V9 PayOS channel credentials', () => {
     let channelUpdate;
     const service = new PayosPaymentService(
       {
+        payment: { updateMany: async () => ({ count: 0 }) },
         order: {
           findFirst: async () => ({
             id: 'order-id',

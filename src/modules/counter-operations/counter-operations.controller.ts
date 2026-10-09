@@ -12,7 +12,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { Roles } from '../auth/decorators/roles.decorator.js';
 import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
 import { CounterOperationsService } from './counter-operations.service.js';
-import { CreatePayosPaymentDto } from '../payos/dto/payos-payment.dto.js';
+import { CancelPayosPaymentDto, CreatePayosPaymentDto } from '../payos/dto/payos-payment.dto.js';
 import { PayosPaymentService } from '../payos/payos-payment.service.js';
 import {
   AddCounterOrderItemDto,
@@ -174,6 +174,27 @@ export class CashierController {
     @Body() dto: CreatePayosPaymentDto,
   ) {
     return this.payosPayments.create(user, id, dto);
+  }
+
+  @Post('payments/:paymentId/payos/recheck')
+  @ApiTags('Cashier · Payments')
+  @ApiOperation({ summary: 'Recheck a pending PayOS payment without waiting for its webhook' })
+  recheckPayos(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('paymentId', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.payosPayments.recheck(user, id);
+  }
+
+  @Post('payments/:paymentId/payos/cancel')
+  @ApiTags('Cashier · Payments')
+  @ApiOperation({ summary: 'Cancel a pending PayOS payment at PayOS and locally' })
+  cancelPayos(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('paymentId', new ParseUUIDPipe()) id: string,
+    @Body() dto: CancelPayosPaymentDto,
+  ) {
+    return this.payosPayments.cancel(user, id, dto.reason);
   }
 
   @Post('orders/:orderId/cancel')

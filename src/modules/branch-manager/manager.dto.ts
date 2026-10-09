@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional, OmitType, PartialType, PickType } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, OmitType, PartialType } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
   IsBoolean,
@@ -24,17 +24,19 @@ import {
 import { AppRole } from '../auth/app-role.enum.js';
 import { CreateStaffDto } from '../auth/dto/create-staff.dto.js';
 
-export class ManagerCreateStaffDto extends OmitType(CreateStaffDto, ['role', 'branchId'] as const) {
+export class ManagerCreateStaffDto extends OmitType(CreateStaffDto, [
+  'role',
+  'branchId',
+  'password',
+] as const) {
   @ApiProperty({ enum: [AppRole.CASHIER, AppRole.BARISTA] })
   @IsIn([AppRole.CASHIER, AppRole.BARISTA])
   role!: AppRole.CASHIER | AppRole.BARISTA;
 }
 
-export class ManagerUpdateStaffDto extends PartialType(
-  OmitType(ManagerCreateStaffDto, ['password'] as const),
-) {}
+export class ManagerUpdateStaffDto extends PartialType(ManagerCreateStaffDto) {}
 
-export class ManagerResetPasswordDto extends PickType(CreateStaffDto, ['password'] as const) {
+export class ManagerResetPasswordDto {
   @ApiProperty({ minLength: 3, maxLength: 500 })
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()

@@ -30,6 +30,11 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
     .trim()
     .replace(/\/+$/, '');
   const orderTrackingSecret = String(config.ORDER_TRACKING_SECRET ?? '').trim();
+  const emailProvider = String(config.EMAIL_PROVIDER ?? 'resend')
+    .trim()
+    .toLowerCase();
+  const emailApiKey = String(config.EMAIL_API_KEY ?? '').trim();
+  const emailFrom = String(config.EMAIL_FROM ?? '').trim();
 
   if (!validEnvironments.has(nodeEnv)) {
     throw new Error('NODE_ENV must be development, test, or production.');
@@ -108,6 +113,12 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
   if (nodeEnv === 'production' && orderTrackingSecret.length < 32) {
     throw new Error('ORDER_TRACKING_SECRET must contain at least 32 characters in production.');
   }
+  if (emailProvider !== 'resend') {
+    throw new Error('EMAIL_PROVIDER currently supports only resend.');
+  }
+  if ((emailApiKey && !emailFrom) || (!emailApiKey && emailFrom)) {
+    throw new Error('EMAIL_API_KEY and EMAIL_FROM must be configured together.');
+  }
 
   return {
     ...config,
@@ -135,5 +146,8 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
     PAYOS_WEBHOOK_BASE_URL: payosWebhookBaseUrl,
     PUBLIC_WEB_URL: publicWebUrl,
     ORDER_TRACKING_SECRET: orderTrackingSecret || 'local-order-tracking-secret-change-me',
+    EMAIL_PROVIDER: emailProvider,
+    EMAIL_API_KEY: emailApiKey,
+    EMAIL_FROM: emailFrom,
   };
 }

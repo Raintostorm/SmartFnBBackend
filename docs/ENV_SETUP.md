@@ -59,6 +59,11 @@ PAYOS_MASTER_KEY=THAY_BANG_KHOA_BASE64_32_BYTE
 PAYOS_WEBHOOK_BASE_URL=http://localhost:3100/api/v1
 PUBLIC_WEB_URL=http://localhost:8443
 ORDER_TRACKING_SECRET=THAY_BANG_SECRET_RIENG_TOI_THIEU_32_KY_TU
+
+# Email mời Cashier/Barista đặt mật khẩu (HTTPS, phù hợp Render)
+EMAIL_PROVIDER=resend
+EMAIL_API_KEY=re_xxxxxxxxx
+EMAIL_FROM=Smart F&B <no-reply@domain-da-xac-thuc.example>
 ```
 
 Tạo các secret local bằng Node.js (mỗi lệnh chạy riêng và sao chép kết quả vào đúng biến):
@@ -107,6 +112,8 @@ Các biến bắt buộc cần kiểm tra:
 - `PAYOS_WEBHOOK_BASE_URL=https://smart-fnb-be.onrender.com/api/v1`: prefix API công khai để PayOS xác nhận webhook theo từng kênh.
 - `PUBLIC_WEB_URL`: domain FE Web công khai được in vào QR theo dõi trên phiếu số.
 - `ORDER_TRACKING_SECRET`: secret độc lập tối thiểu 32 ký tự; không dùng lại JWT hoặc khóa PayOS.
+- `EMAIL_API_KEY`: API key của Resend. Backend gọi HTTPS nên dùng được trên Render Free.
+- `EMAIL_FROM`: người gửi thuộc domain đã xác thực trong Resend. Phải đặt cùng `EMAIL_API_KEY`; bỏ trống cả hai thì thư chỉ nằm ở trạng thái `PENDING`.
 - `CORS_ORIGIN` và `REALTIME_CORS_ORIGINS`: thêm domain Web thực tế, phân cách bằng dấu phẩy.
 - `REALTIME_ENABLED=true` và `REALTIME_PATH=/socket.io`.
 - `SWAGGER_ENABLED=true` nếu cần dùng `/api/docs`; production có thể tắt sau khi kiểm thử.
@@ -114,6 +121,9 @@ Các biến bắt buộc cần kiểm tra:
 Không đặt Client ID, API Key hoặc Checksum Key của PayOS trực tiếp trong `.env` Backend. Các khóa kênh PayOS được Owner gửi qua API và Backend mã hóa bằng `PAYOS_MASTER_KEY`.
 
 `PAYOS_WEBHOOK_BASE_URL` local chỉ dùng cho test tự động. PayOS thật không gọi được `localhost`; kiểm thử thật phải dùng URL HTTPS công khai như Render.
+
+Sau khi đặt biến email, Manager tạo hoặc reset Cashier/Barista sẽ sinh liên kết một
+lần, gửi qua Resend và trả `emailStatus`. Không đưa setup token vào response API.
 
 ## 2. Web
 
