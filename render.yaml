@@ -45,3 +45,7 @@ services:
         sync: false
       - key: PAYOS_WEBHOOK_BASE_URL
         value: https://smart-fnb-be.onrender.com/api/v1
+      - key: PUBLIC_WEB_URL
+        sync: false
+      - key: ORDER_TRACKING_SECRET
+        sync: false

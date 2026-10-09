@@ -27,10 +27,43 @@ describe('V9 PayOS channel credentials', () => {
   });
 
   it('encrypts credentials with authenticated encryption', () => {
+    assert.doesNotThrow(() => cipher.assertConfigured());
     const encrypted = cipher.encrypt('secret-value');
     assert.notEqual(encrypted, 'secret-value');
     assert.equal(cipher.decrypt(encrypted), 'secret-value');
     assert.throws(() => cipher.decrypt(`${encrypted.slice(0, -1)}x`));
+  });
+
+  it('rejects a missing master key before changing the PayOS webhook', async () => {
+    let payosCalls = 0;
+    const service = new PayosChannelService(
+      {
+        payosChannel: {
+          findUnique: () => assert.fail('configuration must be checked before reading the channel'),
+        },
+      },
+      { assertCanManageChain: async () => undefined },
+      new PayosCipherService({ get: () => undefined }),
+      {
+        confirmWebhook: async () => {
+          payosCalls += 1;
+        },
+      },
+      config,
+      verification,
+    );
+
+    await assert.rejects(
+      service.save(
+        'chain-id',
+        { clientId: 'client', apiKey: 'api', checksumKey: 'checksum' },
+        owner,
+      ),
+      (error) =>
+        error?.getStatus?.() === 503 &&
+        error?.message === 'PAYOS_MASTER_KEY is not configured',
+    );
+    assert.equal(payosCalls, 0);
   });
 
   it('calls the official PayOS confirm-webhook endpoint with channel headers', async () => {

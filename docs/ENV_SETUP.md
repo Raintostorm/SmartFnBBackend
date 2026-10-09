@@ -61,15 +61,39 @@ PUBLIC_WEB_URL=http://localhost:8443
 ORDER_TRACKING_SECRET=THAY_BANG_SECRET_RIENG_TOI_THIEU_32_KY_TU
 ```
 
-Tạo các secret local bằng Node.js:
+Tạo các secret local bằng Node.js (mỗi lệnh chạy riêng và sao chép kết quả vào đúng biến):
 
 ```bash
+# JWT_ACCESS_SECRET
 node -e "const c=require('node:crypto'); console.log(c.randomBytes(48).toString('base64url'))"
+# JWT_REFRESH_SECRET
 node -e "const c=require('node:crypto'); console.log(c.randomBytes(48).toString('base64url'))"
+# PAYOS_MASTER_KEY (bắt buộc đúng 32 byte ở dạng base64)
 node -e "const c=require('node:crypto'); console.log(c.randomBytes(32).toString('base64'))"
+# ORDER_TRACKING_SECRET (secret độc lập, dài hơn 32 ký tự)
+node -e "const c=require('node:crypto'); console.log(c.randomBytes(48).toString('base64url'))"
 ```
 
-Hai dòng đầu dùng lần lượt cho `JWT_ACCESS_SECRET` và `JWT_REFRESH_SECRET`. Dòng cuối dùng cho `PAYOS_MASTER_KEY`.
+Không dùng chung các giá trị này và không commit chúng vào Git. Giữ nguyên
+`PAYOS_MASTER_KEY` và `ORDER_TRACKING_SECRET` qua các lần deploy; đổi chúng sẽ làm
+mất khả năng giải mã cấu hình PayOS hoặc vô hiệu các QR theo dõi còn hạn.
+
+### Khắc phục migration trùng từ bản `4aa30c7`
+
+Bản `4aa30c7` từng chứa migration trùng
+`20261006000000_owner_menu_batching_default`. Migration đúng đã có tên
+`20261004160000_add_v91_menu_defaults_and_batching`.
+
+Nếu container đã thử chạy bản lỗi và Prisma báo `P3009`, đánh dấu lần chạy lỗi là
+đã rollback trước khi khởi động lại API:
+
+```bash
+docker compose run --rm --entrypoint pnpm api prisma migrate resolve --rolled-back 20261006000000_owner_menu_batching_default
+docker compose up -d --build api
+```
+
+Chỉ chạy lệnh `resolve` khi log thực sự nêu đúng migration trên. Database chưa từng
+chạy bản lỗi chỉ cần pull code mới và build lại.
 
 ### Render
 

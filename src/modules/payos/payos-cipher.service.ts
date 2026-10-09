@@ -6,6 +6,10 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 export class PayosCipherService {
   constructor(private readonly config: ConfigService) {}
 
+  assertConfigured(): void {
+    this.key();
+  }
+
   encrypt(value: string): string {
     const iv = randomBytes(12);
     const cipher = createCipheriv('aes-256-gcm', this.key(), iv);
