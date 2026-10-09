@@ -292,6 +292,64 @@ describe('Service plan quota', () => {
     const accounts = snapshot.quotas.find(({ resource }) => resource === 'accounts');
     assert.deepEqual(accounts, { resource: 'accounts', used: 4, limit: 4, remaining: 0 });
   });
+
+  it('returns an expired subscription with its date and quota instead of hiding it', async () => {
+    const service = new PlanQuotaService({
+      businessSubscription: {
+        findUnique: async () => ({
+          status: 'ACTIVE',
+          expiresAt: new Date('2020-01-01T00:00:00.000Z'),
+          plan: {
+            id: 'p',
+            code: 'BASIC',
+            name: 'Basic',
+            description: null,
+            monthlyPrice: {},
+            maxBranches: 5,
+            maxAccounts: 10,
+            maxTables: 20,
+            brandingEnabled: true,
+            multiBranchComparisonEnabled: false,
+          },
+        }),
+      },
+      branch: { count: async () => 2 },
+      employee: { count: async () => 1 },
+      ownerChainAssignment: { count: async () => 1 },
+      restaurantTable: { count: async () => 3 },
+    });
+
+    const snapshot = await service.getSubscriptionSnapshot('chain-one');
+    assert.equal(snapshot.status, 'EXPIRED');
+    assert.equal(snapshot.expiresAt.toISOString(), '2020-01-01T00:00:00.000Z');
+    assert.equal(snapshot.plan.brandingEnabled, true);
+    assert.deepEqual(
+      snapshot.quotas.find(({ resource }) => resource === 'branches'),
+      {
+        resource: 'branches',
+        used: 2,
+        limit: 5,
+        remaining: 3,
+      },
+    );
+  });
+
+  it('keeps a suspended subscription visible', async () => {
+    const service = new PlanQuotaService({
+      businessSubscription: {
+        findUnique: async () => ({
+          status: 'SUSPENDED',
+          expiresAt: new Date('2030-01-01T00:00:00.000Z'),
+          plan: { id: 'p', code: 'B', name: 'B', maxBranches: 1, maxAccounts: 1, maxTables: 1 },
+        }),
+      },
+      branch: { count: async () => 0 },
+      employee: { count: async () => 0 },
+      ownerChainAssignment: { count: async () => 0 },
+      restaurantTable: { count: async () => 0 },
+    });
+    assert.equal((await service.getSubscriptionSnapshot('chain-one')).status, 'SUSPENDED');
+  });
 });
 
 describe('Owner staff administration', () => {

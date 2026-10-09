@@ -14,6 +14,7 @@ export const SWAGGER_TAGS = [
   ['Platform administration', 'Quản trị đăng ký doanh nghiệp, gói dịch vụ và thuê bao.'],
   ['Users', 'Quản lý trạng thái tài khoản.'],
   ['Restaurant chains - OWNER', 'OWNER quản lý chuỗi nhà hàng của mình.'],
+  ['Restaurant chain subscription', 'OWNER và MANAGER xem trạng thái, hạn dùng và hạn mức gói.'],
   ['Employees - OWNER', 'OWNER quản lý tài khoản nhân viên theo phạm vi chuỗi.'],
   ['Menu - chain wide (OWNER)', 'OWNER quản lý danh mục, món và tùy chọn dùng chung.'],
   ['Reports - OWNER', 'Báo cáo doanh thu và vận hành của OWNER.'],
@@ -26,6 +27,7 @@ export const SWAGGER_TAGS = [
   ['Branches - internal', 'Quản lý chi nhánh, giờ mở cửa và khu vực phục vụ.'],
   ['Menu - branch', 'Bật/tắt món và giá riêng tại từng chi nhánh.'],
   ['POS stations and displays', 'Quầy POS, ghép màn hình khách và màn hình gọi số.'],
+  ['Public order tracking', 'Trang công khai chỉ trả số gọi và trạng thái nhận món qua token.'],
   ['Cashier · Orders', 'Cashier tạo, sửa, chốt, hủy và in lại đơn tại quầy.'],
   ['Cashier · Payments', 'Cashier thu tiền mặt hoặc tạo thanh toán QR PayOS.'],
   ['Barista · Queue', 'Barista nhận mẻ, pha chế, hoàn tác và giao đơn.'],
@@ -42,7 +44,7 @@ export const SWAGGER_TAGS = [
 ] as const;
 
 export const SWAGGER_DESCRIPTION = [
-  '# Smart F&B API V9',
+  '# Smart F&B API V9.1',
   '',
   'Tài liệu này được sinh trực tiếp từ các controller đang chạy. Tất cả REST API nghiệp vụ nằm dưới `/api/v1`.',
   '',
@@ -52,10 +54,11 @@ export const SWAGGER_DESCRIPTION = [
   '- API màn hình dùng device token được cấp khi ghép thiết bị.',
   '',
   '## Luồng Cashier → Barista',
-  '1. Cashier tải context, tạo giỏ và chốt đơn.',
-  '2. Cashier thu tiền mặt hoặc tạo QR PayOS.',
+  '1. Cashier tải context với trạng thái chuỗi, chi nhánh, số suất và option mặc định.',
+  '2. Cashier chốt đơn để giữ suất rồi thu tiền mặt hoặc tạo QR PayOS có hạn 10 phút.',
   '3. Chỉ đơn đã thanh toán mới vào hàng chờ Barista và được cấp số gọi.',
-  '4. Barista nhận mẻ, pha chế, hoàn tất rồi giao đơn.',
+  '4. Barista nhận mẻ theo cấu hình allowBatching, pha chế, hoàn tất rồi giao đơn.',
+  '5. Đơn chưa thanh toán bị hủy hoặc QR hết hạn sẽ hoàn lại số suất đã giữ.',
   '',
   '## Trạng thái thuê bao',
   'Thuê bao hết hạn vẫn được đọc dữ liệu và hoàn tất đơn đang xử lý; thao tác tạo/cấu hình mới bị chặn.',
@@ -67,9 +70,9 @@ export function configureSwagger(app: INestApplication): void {
 
   const swaggerPath = configService.get<string>('SWAGGER_PATH', 'api/docs');
   let builder = new DocumentBuilder()
-    .setTitle('Smart F&B Chain Platform — API V9')
+    .setTitle('Smart F&B Chain Platform — API V9.1')
     .setDescription(SWAGGER_DESCRIPTION)
-    .setVersion('9.0')
+    .setVersion('9.1')
     .addBearerAuth(
       {
         type: 'http',
@@ -98,7 +101,7 @@ export function configureSwagger(app: INestApplication): void {
     });
 
   SwaggerModule.setup(swaggerPath, app, documentFactory, {
-    customSiteTitle: 'Smart F&B API V9',
+    customSiteTitle: 'Smart F&B API V9.1',
     swaggerOptions: {
       deepLinking: true,
       displayOperationId: true,

@@ -1,8 +1,9 @@
-import { Body, Controller, HttpCode, Post } from '@nestjs/common';
+import { Body, Controller, HttpCode, Param, ParseUUIDPipe, Post } from '@nestjs/common';
 import {
   ApiBody,
   ApiOkResponse,
   ApiOperation,
+  ApiParam,
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
@@ -11,13 +12,18 @@ import { PayosPaymentService } from './payos-payment.service.js';
 
 @Public()
 @ApiTags('PayOS webhook')
-@Controller('webhooks/payos')
+@Controller('webhooks/payos/:webhookCode')
 export class PayosWebhookController {
   constructor(private readonly payments: PayosPaymentService) {}
 
   @Post()
   @HttpCode(200)
   @ApiOperation({ summary: 'Verify and process a PayOS payment notification' })
+  @ApiParam({
+    name: 'webhookCode',
+    format: 'uuid',
+    description: 'Opaque code of one PayOS channel',
+  })
   @ApiBody({
     schema: {
       type: 'object',
@@ -46,7 +52,10 @@ export class PayosWebhookController {
     schema: { example: { success: true } },
   })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid PayOS signature' })
-  receive(@Body() payload: Record<string, unknown>) {
-    return this.payments.webhook(payload);
+  receive(
+    @Param('webhookCode', new ParseUUIDPipe()) webhookCode: string,
+    @Body() payload: Record<string, unknown>,
+  ) {
+    return this.payments.webhook(webhookCode, payload);
   }
 }

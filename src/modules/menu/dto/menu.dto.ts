@@ -116,6 +116,15 @@ export class CreateMenuItemDto {
   allowBatching?: boolean;
 
   @ApiPropertyOptional({
+    default: true,
+    description: 'Whether identical item and size units may be grouped for preparation',
+  })
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  allowBatching?: boolean;
+
+  @ApiPropertyOptional({
     description:
       'Branches that will sell the item. Omit to enable it at every branch of the chain.',
     type: [String],
@@ -173,7 +182,9 @@ export class UpdateMenuItemDto {
   @Max(1440)
   preparationMinutes?: number;
 
-  @ApiPropertyOptional({ example: true })
+  @ApiPropertyOptional({
+    description: 'Whether identical item and size units may be grouped for preparation',
+  })
   @IsOptional()
   @Transform(toBoolean)
   @IsBoolean()

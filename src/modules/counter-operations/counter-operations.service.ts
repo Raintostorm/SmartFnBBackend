@@ -19,6 +19,7 @@ import {
 import { PrismaService } from '../../database/prisma.service.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
+import { OrderTrackingService } from '../order-tracking/order-tracking.service.js';
 import type {
   AddCounterOrderItemDto,
   AvailabilityDto,
@@ -40,6 +41,7 @@ export class CounterOperationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly branchAccess: BranchAccessService,
+    private readonly tracking: OrderTrackingService,
   ) {}
 
   private employee(user: AuthenticatedUser) {
@@ -66,7 +68,9 @@ export class CounterOperationsService {
         where: {
           branchId: actor.branchId,
           isEnabled: true,
-          menuItem: { isActive: true, deletedAt: null },
+          // Keep chain-disabled items in the operational context so Barista can
+          // explain why the item cannot be enabled at branch level (BR-12).
+          menuItem: { deletedAt: null },
         },
         include: {
           menuItem: {
@@ -97,7 +101,58 @@ export class CounterOperationsService {
         ],
       }),
     ]);
-    return { branch, menuItems };
+    return {
+      branch,
+      menuItems: menuItems.map(({ menuItem, ...branchAvailability }) => {
+        const chainAvailable = menuItem.isActive && menuItem.isAvailable;
+        const hasRemainingPortions =
+          branchAvailability.remainingPortions === null || branchAvailability.remainingPortions > 0;
+        const effectiveAvailable =
+          chainAvailable &&
+          branchAvailability.isEnabled &&
+          branchAvailability.isAvailable &&
+          hasRemainingPortions;
+        const unavailableReason = !chainAvailable
+          ? 'CHAIN_DISABLED'
+          : !branchAvailability.isEnabled
+            ? 'NOT_ASSIGNED_TO_BRANCH'
+            : !branchAvailability.isAvailable
+              ? 'BRANCH_SOLD_OUT'
+              : !hasRemainingPortions
+                ? 'NO_REMAINING_PORTIONS'
+                : null;
+
+        return {
+          ...branchAvailability,
+          // Explicit V9.1 availability fields. The original isEnabled and
+          // isAvailable fields stay in the response for existing clients.
+          chainAvailable,
+          branchEnabled: branchAvailability.isEnabled,
+          branchAvailable: branchAvailability.isAvailable,
+          effectiveAvailable,
+          unavailableReason,
+          menuItem: {
+            ...menuItem,
+            optionGroups: menuItem.optionGroups.map(({ group, ...link }) => ({
+              ...link,
+              group: {
+                ...group,
+                options: group.options.map((option) => {
+                  const branchOptionAvailable = option.branchAvailability[0]?.isAvailable ?? true;
+                  const optionChainAvailable = option.isActive;
+                  return {
+                    ...option,
+                    chainAvailable: optionChainAvailable,
+                    branchAvailable: branchOptionAvailable,
+                    effectiveAvailable: optionChainAvailable && branchOptionAvailable,
+                  };
+                }),
+              },
+            })),
+          },
+        };
+      }),
+    };
   }
 
   async baristaContext(user: AuthenticatedUser) {
@@ -143,52 +198,80 @@ export class CounterOperationsService {
     await this.branchAccess.assertSubscriptionAllowsWrite(actor.branchId);
     if (!dto.items.length) throw new BadRequestException('Cannot checkout an empty cart');
 
-    return this.prisma.$transaction(async (tx) => {
-      const order = await tx.order.create({
-        data: {
-          orderCode: `CTR-${Date.now()}-${crypto.randomUUID().slice(0, 6).toUpperCase()}`,
-          branchId: actor.branchId,
-          createdByCashierId: actor.employeeId,
-          type: OrderType.COUNTER_PICKUP,
-          status: OrderStatus.CONFIRMED,
-          note: dto.note,
-        },
-      });
-
-      let total = new Prisma.Decimal(0);
-      for (const cartItem of dto.items) {
-        const priced = await this.priceCartItem(tx, actor.branchId, cartItem);
-        const lineTotal = priced.unitPrice.mul(cartItem.quantity);
-        total = total.add(lineTotal);
-        await tx.orderItem.create({
+    return this.prisma.$transaction(
+      async (tx) => {
+        const order = await tx.order.create({
           data: {
-            orderId: order.id,
-            menuItemId: cartItem.menuItemId,
-            itemName: priced.itemName,
-            unitPrice: priced.unitPrice,
-            quantity: cartItem.quantity,
-            totalPrice: lineTotal,
-            specialInstructions: cartItem.specialInstructions,
-            selectedOptions: priced.selectedOptions,
+            orderCode: `CTR-${Date.now()}-${crypto.randomUUID().slice(0, 6).toUpperCase()}`,
+            branchId: actor.branchId,
+            createdByCashierId: actor.employeeId,
+            type: OrderType.COUNTER_PICKUP,
+            status: OrderStatus.CONFIRMED,
+            note: dto.note,
           },
         });
-      }
 
-      return tx.order.update({
-        where: { id: order.id },
-        data: { subtotal: total, totalAmount: total },
-        include: counterOrderInclude,
-      });
-    });
+        let total = new Prisma.Decimal(0);
+        for (const cartItem of dto.items) {
+          const priced = await this.priceCartItem(tx, actor.branchId, cartItem);
+          await this.reservePortions(
+            tx,
+            actor.branchId,
+            cartItem.menuItemId,
+            cartItem.quantity,
+            priced.itemName,
+          );
+          const lineTotal = priced.unitPrice.mul(cartItem.quantity);
+          total = total.add(lineTotal);
+          await tx.orderItem.create({
+            data: {
+              orderId: order.id,
+              menuItemId: cartItem.menuItemId,
+              itemName: priced.itemName,
+              unitPrice: priced.unitPrice,
+              quantity: cartItem.quantity,
+              totalPrice: lineTotal,
+              specialInstructions: cartItem.specialInstructions,
+              selectedOptions: priced.selectedOptions,
+            },
+          });
+        }
+
+        return tx.order.update({
+          where: { id: order.id },
+          data: { subtotal: total, totalAmount: total },
+          include: counterOrderInclude,
+        });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
   }
 
   async getOrder(user: AuthenticatedUser, orderId: string) {
     const actor = this.employee(user);
-    const order = await this.prisma.order.findFirst({
+    let order = await this.prisma.order.findFirst({
       where: { id: orderId, branchId: actor.branchId, type: OrderType.COUNTER_PICKUP },
       include: counterOrderInclude,
     });
     if (!order) throw new NotFoundException('Counter order was not found in your branch');
+    const expiredPayos = order.payments.some(
+      (payment) =>
+        payment.provider === PaymentProvider.PAYOS &&
+        payment.status === PaymentStatus.PENDING &&
+        payment.expiresAt !== null &&
+        payment.expiresAt <= new Date(),
+    );
+    if (
+      expiredPayos &&
+      order.status === OrderStatus.CONFIRMED &&
+      order.paymentStatus === OrderPaymentStatus.UNPAID
+    ) {
+      await this.cancelUnpaid(user, orderId, 'Mã QR PayOS đã hết hạn');
+      order = await this.prisma.order.findFirstOrThrow({
+        where: { id: orderId, branchId: actor.branchId, type: OrderType.COUNTER_PICKUP },
+        include: counterOrderInclude,
+      });
+    }
     return order;
   }
 
@@ -289,23 +372,35 @@ export class CounterOperationsService {
   async finalize(user: AuthenticatedUser, orderId: string) {
     const actor = this.employee(user);
     await this.branchAccess.assertSubscriptionAllowsWrite(actor.branchId);
-    return this.prisma.$transaction(async (tx) => {
-      const order = await tx.order.findFirst({
-        where: { id: orderId, branchId: actor.branchId, type: OrderType.COUNTER_PICKUP },
-        include: { items: true },
-      });
-      if (!order) throw new NotFoundException('Counter order was not found in your branch');
-      if (order.status !== OrderStatus.PENDING)
-        throw new ConflictException('Order is already finalized');
-      if (!order.items.length) throw new BadRequestException('Cannot finalize an empty order');
-      await this.assertOrderItemsAvailable(tx, actor.branchId, order.items);
-      const changed = await tx.order.updateMany({
-        where: { id: orderId, status: OrderStatus.PENDING },
-        data: { status: OrderStatus.CONFIRMED },
-      });
-      if (!changed.count) throw new ConflictException('Order is already finalized');
-      return tx.order.findUniqueOrThrow({ where: { id: orderId }, include: counterOrderInclude });
-    });
+    return this.prisma.$transaction(
+      async (tx) => {
+        const order = await tx.order.findFirst({
+          where: { id: orderId, branchId: actor.branchId, type: OrderType.COUNTER_PICKUP },
+          include: { items: true },
+        });
+        if (!order) throw new NotFoundException('Counter order was not found in your branch');
+        if (order.status !== OrderStatus.PENDING)
+          throw new ConflictException('Order is already finalized');
+        if (!order.items.length) throw new BadRequestException('Cannot finalize an empty order');
+        await this.assertOrderItemsAvailable(tx, actor.branchId, order.items);
+        for (const item of order.items) {
+          await this.reservePortions(
+            tx,
+            actor.branchId,
+            item.menuItemId,
+            item.quantity,
+            item.itemName,
+          );
+        }
+        const changed = await tx.order.updateMany({
+          where: { id: orderId, status: OrderStatus.PENDING },
+          data: { status: OrderStatus.CONFIRMED },
+        });
+        if (!changed.count) throw new ConflictException('Order is already finalized');
+        return tx.order.findUniqueOrThrow({ where: { id: orderId }, include: counterOrderInclude });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
   }
 
   async collectCash(user: AuthenticatedUser, orderId: string, dto: CashPaymentDto) {
@@ -402,7 +497,8 @@ export class CounterOperationsService {
             }),
           ),
         );
-        return { order: updatedOrder, payment, printJobs };
+        const tracking = await this.tracking.ensureForOrder(tx, orderId);
+        return { order: updatedOrder, payment, printJobs, tracking };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
@@ -414,11 +510,16 @@ export class CounterOperationsService {
       where: { id: actor.branchId },
       select: { timezone: true },
     });
+    const { start, end } = this.branchDayRange(branch.timezone);
     return this.prisma.order.findMany({
       where: {
         branchId: actor.branchId,
         type: OrderType.COUNTER_PICKUP,
-        businessDate: this.businessDate(branch.timezone),
+        // businessDate is only stamped on payment, so unpaid orders cancelled today are matched by cancelledAt.
+        OR: [
+          { businessDate: this.businessDate(branch.timezone) },
+          { status: OrderStatus.CANCELLED, cancelledAt: { gte: start, lt: end } },
+        ],
       },
       include: counterOrderInclude,
       orderBy: { createdAt: 'desc' },
@@ -429,24 +530,52 @@ export class CounterOperationsService {
     const actor = this.employee(user);
     if (reason.trim().length < 3)
       throw new BadRequestException('A cancellation reason is required');
-    const changed = await this.prisma.order.updateMany({
-      where: {
-        id: orderId,
-        branchId: actor.branchId,
-        type: OrderType.COUNTER_PICKUP,
-        status: OrderStatus.CONFIRMED,
-        paymentStatus: OrderPaymentStatus.UNPAID,
+    return this.prisma.$transaction(
+      async (tx) => {
+        const order = await tx.order.findFirst({
+          where: {
+            id: orderId,
+            branchId: actor.branchId,
+            type: OrderType.COUNTER_PICKUP,
+            status: OrderStatus.CONFIRMED,
+            paymentStatus: OrderPaymentStatus.UNPAID,
+          },
+          select: { items: { select: { menuItemId: true, quantity: true } } },
+        });
+        if (!order) throw new ConflictException('Only an unpaid counter order can be cancelled');
+
+        const changed = await tx.order.updateMany({
+          where: {
+            id: orderId,
+            branchId: actor.branchId,
+            type: OrderType.COUNTER_PICKUP,
+            status: OrderStatus.CONFIRMED,
+            paymentStatus: OrderPaymentStatus.UNPAID,
+          },
+          data: {
+            status: OrderStatus.CANCELLED,
+            cancelledAt: new Date(),
+            cancelledById: actor.employeeId,
+            cancellationReason: reason.trim(),
+          },
+        });
+        if (!changed.count)
+          throw new ConflictException('Only an unpaid counter order can be cancelled');
+
+        for (const item of order.items) {
+          await tx.branchMenuItem.updateMany({
+            where: {
+              branchId: actor.branchId,
+              menuItemId: item.menuItemId,
+              remainingPortions: { not: null },
+            },
+            data: { remainingPortions: { increment: item.quantity } },
+          });
+        }
+        return { cancelled: true };
       },
-      data: {
-        status: OrderStatus.CANCELLED,
-        cancelledAt: new Date(),
-        cancelledById: actor.employeeId,
-        cancellationReason: reason.trim(),
-      },
-    });
-    if (!changed.count)
-      throw new ConflictException('Only an unpaid counter order can be cancelled');
-    return { cancelled: true };
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
   }
 
   async receipt(user: AuthenticatedUser, orderId: string) {
@@ -473,6 +602,7 @@ export class CounterOperationsService {
     });
     if (!order) throw new NotFoundException('Paid counter order was not found in your branch');
     const branding = order.branch.chain.branding;
+    const tracking = await this.tracking.presentationForOrder(order.id);
     return {
       orderId: order.id,
       orderCode: order.orderCode,
@@ -501,6 +631,7 @@ export class CounterOperationsService {
       subtotal: order.subtotal,
       totalAmount: order.totalAmount,
       payment: order.payments[0] ?? null,
+      tracking,
     };
   }
 
@@ -535,7 +666,12 @@ export class CounterOperationsService {
         },
       },
       include: {
-        orderItem: { include: { order: true, menuItem: { select: { categoryId: true, allowBatching: true } } } },
+        orderItem: {
+          include: {
+            order: true,
+            menuItem: { select: { categoryId: true, allowBatching: true } },
+          },
+        },
       },
       orderBy: [{ orderItem: { order: { paidAt: 'asc' } } }, { sequence: 'asc' }],
     });
@@ -572,6 +708,7 @@ export class CounterOperationsService {
         const candidateSize = this.sizeOption(candidateOptions);
         const candidateTime = candidate.orderItem.order.paidAt ?? candidate.createdAt;
         if (
+          head.orderItem.menuItem.allowBatching &&
           candidate.orderItem.menuItemId === head.orderItem.menuItemId &&
           candidateSize === headSize &&
           candidateTime.getTime() - headTime.getTime() <= windowMs
@@ -678,7 +815,20 @@ export class CounterOperationsService {
           itemId,
         );
       }
-      return { unitIds, startedAt: now, startedById: actor.employeeId };
+      const preparingOrders = await tx.order.findMany({
+        where: {
+          id: { in: [...new Set(units.map((unit) => unit.orderItem.orderId))] },
+          status: OrderStatus.PREPARING,
+        },
+        select: {
+          id: true,
+          orderCode: true,
+          callNumber: true,
+          status: true,
+          submittedAt: true,
+        },
+      });
+      return { unitIds, startedAt: now, startedById: actor.employeeId, preparingOrders };
     });
   }
 
@@ -795,6 +945,7 @@ export class CounterOperationsService {
         where: { orderId, status: OrderItemStatus.READY },
         data: { status: OrderItemStatus.DELIVERED, servedAt: now },
       });
+      await this.tracking.markTerminal(tx, orderId, now);
       return tx.order.update({
         where: { id: orderId },
         data: {
@@ -1035,6 +1186,35 @@ export class CounterOperationsService {
     };
   }
 
+  private async reservePortions(
+    tx: Prisma.TransactionClient,
+    branchId: string,
+    menuItemId: string,
+    quantity: number,
+    itemName: string,
+  ) {
+    const limitedStock = await tx.branchMenuItem.findFirst({
+      where: { branchId, menuItemId, remainingPortions: { not: null } },
+      select: { remainingPortions: true },
+    });
+    if (!limitedStock) return;
+
+    const reserved = await tx.branchMenuItem.updateMany({
+      where: {
+        branchId,
+        menuItemId,
+        isEnabled: true,
+        isAvailable: true,
+        menuItem: { isActive: true, isAvailable: true, deletedAt: null },
+        remainingPortions: { gte: quantity },
+      },
+      data: { remainingPortions: { decrement: quantity } },
+    });
+    if (!reserved.count) {
+      throw new ConflictException(`${itemName} no longer has enough portions`);
+    }
+  }
+
   private async assertOrderItemsAvailable(
     tx: Prisma.TransactionClient,
     branchId: string,
@@ -1113,5 +1293,36 @@ export class CounterOperationsService {
     }).formatToParts(new Date());
     const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
     return new Date(`${value.year}-${value.month}-${value.day}T00:00:00.000Z`);
+  }
+
+  /** [start, end) of the current calendar day in the branch timezone, as UTC instants. */
+  private branchDayRange(timezone: string) {
+    const now = new Date();
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat('en-CA', {
+        timeZone: timezone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23',
+      })
+        .formatToParts(now)
+        .map((part) => [part.type, part.value]),
+    );
+    const localAsUtc = Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour),
+      Number(parts.minute),
+      Number(parts.second),
+    );
+    const offsetMs = localAsUtc - Math.floor(now.getTime() / 1000) * 1000;
+    const startLocal = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day));
+    const start = new Date(startLocal - offsetMs);
+    return { start, end: new Date(start.getTime() + 24 * 60 * 60 * 1000) };
   }
 }

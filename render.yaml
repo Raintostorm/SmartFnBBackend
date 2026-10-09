@@ -43,3 +43,5 @@ services:
         generateValue: true
       - key: PAYOS_MASTER_KEY
         sync: false
+      - key: PAYOS_WEBHOOK_BASE_URL
+        value: https://smart-fnb-be.onrender.com/api/v1

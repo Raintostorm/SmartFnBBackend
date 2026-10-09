@@ -69,12 +69,12 @@ Tạo **Blueprint** từ repository hoặc đổi Runtime của web service hi�
 
 Các biến bắt buộc phải nhập trên Render Dashboard:
 
-| Biến | Giá trị |
-| --- | --- |
-| `DATABASE_URL` | PostgreSQL managed URL; không dùng `127.0.0.1` |
-| `CORS_ORIGIN` | Domain FE Web, nhiều domain phân cách bằng dấu phẩy |
-| `REALTIME_CORS_ORIGINS` | Domain Web/Mobile dùng Socket.IO |
-| `PAYOS_MASTER_KEY` | Cùng khóa base64 32 byte đã dùng để mã hóa PayOS trong database |
+| Biến                    | Giá trị                                                         |
+| ----------------------- | --------------------------------------------------------------- |
+| `DATABASE_URL`          | PostgreSQL managed URL; không dùng `127.0.0.1`                  |
+| `CORS_ORIGIN`           | Domain FE Web, nhiều domain phân cách bằng dấu phẩy             |
+| `REALTIME_CORS_ORIGINS` | Domain Web/Mobile dùng Socket.IO                                |
+| `PAYOS_MASTER_KEY`      | Cùng khóa base64 32 byte đã dùng để mã hóa PayOS trong database |
 
 `JWT_ACCESS_SECRET` và `JWT_REFRESH_SECRET` được Blueprint sinh độc lập. Không chạy
 `prisma db seed` tự động ở production; chỉ seed thủ công khi chủ động tạo dữ liệu mẫu.
@@ -216,6 +216,14 @@ Socket.IO namespace `/operations` phát sự kiện `operations.updated` theo ph
 kiện hiện bao phủ order, Kitchen, serving task, bàn, payment, invoice, reservation,
 ca làm và branding. Cấu hình bằng `REALTIME_ENABLED`, `REALTIME_PATH` và
 `REALTIME_CORS_ORIGINS`; production phải dùng danh sách origin cụ thể thay vì `*`.
+
+### Cashier, Barista và báo khách nhận món
+
+- Thanh toán tiền mặt và PayOS đều cấp số gọi theo ngày, tạo mã theo dõi và đưa đơn vào hàng pha chế.
+- `GET /api/v1/public/track/:token` chỉ trả số gọi, trạng thái và nhận diện quán; không trả món hoặc số tiền.
+- `GET /api/v1/public/calling-display/context` dùng device token để trả hai cột `Đang pha` và `Mời nhận`.
+- Màn gọi số nhận các event `calling.order.queued`, `calling.order.preparing`, `calling.order.ready` và `calling.order.delivered`.
+- Cấu hình `PUBLIC_WEB_URL` và `ORDER_TRACKING_SECRET` trước khi deploy để QR trên phiếu mở đúng trang Web.
 
 ### Dữ liệu demo Waiter và Kitchen Staff
 

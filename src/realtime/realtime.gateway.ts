@@ -12,6 +12,7 @@ import {
 import type { Server, Socket } from 'socket.io';
 import { createHash } from 'node:crypto';
 import { DisplayDeviceType, PosStationStatus } from '../generated/prisma/client.js';
+import { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../database/prisma.service.js';
 import { AuthService } from '../modules/auth/auth.service.js';
 import type { AuthenticatedUser } from '../modules/auth/auth.interfaces.js';
@@ -108,6 +109,45 @@ export class RealtimeGateway implements OnGatewayConnection {
     return this.publishCart(client, data, true);
   }
 
+  @SubscribeMessage('display:update')
+  async updateDisplay(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() data: { stationId?: string; snapshot?: unknown },
+  ) {
+    return this.publishDisplay(client, data);
+  }
+
+  @SubscribeMessage('station:sync')
+  async syncStation(@ConnectedSocket() client: AuthenticatedSocket) {
+    const device = client.data.device;
+    if (device?.type !== DisplayDeviceType.CUSTOMER_DISPLAY || !device.stationId) {
+      throw new WsException('Only a paired customer display can sync its station');
+    }
+
+    const station = await this.prisma.posStation.findFirst({
+      where: {
+        id: device.stationId,
+        branchId: device.branchId,
+        status: PosStationStatus.ACTIVE,
+      },
+      select: { id: true, cartVersion: true, cartSnapshot: true },
+    });
+    if (!station) throw new WsException('Active POS station was not found');
+
+    const snapshot =
+      station.cartSnapshot && typeof station.cartSnapshot === 'object'
+        ? station.cartSnapshot
+        : { state: 'IDLE', items: [], totalAmount: 0 };
+    const event: OperationsEvent = {
+      type: 'station.sync',
+      branchId: device.branchId,
+      occurredAt: new Date().toISOString(),
+      data: { stationId: station.id, version: station.cartVersion, ...snapshot },
+    };
+    client.emit('operations.updated', event);
+    return { event: 'station.synced', data: event.data };
+  }
+
   emitToBranch(branchId: string, event: OperationsEvent) {
     this.server?.to(this.branchRoom(branchId)).emit('operations.updated', event);
   }
@@ -167,9 +207,15 @@ export class RealtimeGateway implements OnGatewayConnection {
     });
     if (!station) throw new WsException('Active POS station was not found in your branch');
 
+    const snapshot = clear
+      ? { state: 'IDLE', items: [], totalAmount: 0 }
+      : this.sanitizeSnapshot({ state: 'CART', items: data.items, totalAmount: data.totalAmount });
     const version = await this.prisma.posStation.update({
       where: { id: station.id },
-      data: { cartVersion: { increment: 1 } },
+      data: {
+        cartVersion: { increment: 1 },
+        cartSnapshot: snapshot as Prisma.InputJsonValue,
+      },
       select: { cartVersion: true },
     });
     const event: OperationsEvent = {
@@ -179,12 +225,96 @@ export class RealtimeGateway implements OnGatewayConnection {
       data: {
         stationId: station.id,
         version: version.cartVersion,
-        items: clear ? [] : data.items,
-        totalAmount: clear ? 0 : data.totalAmount,
+        ...snapshot,
       },
     };
     this.emitToStation(station.id, event);
     return { event: 'cart.acknowledged', data: event.data };
+  }
+
+  private async publishDisplay(
+    client: AuthenticatedSocket,
+    data: { stationId?: string; snapshot?: unknown },
+  ) {
+    const user = client.data.user;
+    if (
+      !user ||
+      user.role !== AppRole.CASHIER ||
+      !user.employeeId ||
+      !user.branchId ||
+      !data?.stationId
+    ) {
+      throw new WsException('Only an assigned cashier can update a customer display');
+    }
+    const station = await this.prisma.posStation.findFirst({
+      where: { id: data.stationId, branchId: user.branchId, status: PosStationStatus.ACTIVE },
+      select: { id: true },
+    });
+    if (!station) throw new WsException('Active POS station was not found in your branch');
+
+    const snapshot = this.sanitizeSnapshot(data.snapshot);
+    const version = await this.prisma.posStation.update({
+      where: { id: station.id },
+      data: { cartVersion: { increment: 1 }, cartSnapshot: snapshot as Prisma.InputJsonValue },
+      select: { cartVersion: true },
+    });
+    const event: OperationsEvent = {
+      type: 'display.update',
+      branchId: user.branchId,
+      occurredAt: new Date().toISOString(),
+      data: { stationId: station.id, version: version.cartVersion, ...snapshot },
+    };
+    this.emitToStation(station.id, event);
+    return { event: 'display.acknowledged', data: event.data };
+  }
+
+  private sanitizeSnapshot(value: unknown) {
+    const input = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+    const allowedStates = new Set(['IDLE', 'CART', 'PAYMENT_PENDING', 'PAYMENT_QR', 'PAID']);
+    const state =
+      typeof input.state === 'string' && allowedStates.has(input.state) ? input.state : 'CART';
+    const money = (raw: unknown) => {
+      const number = Number(raw);
+      return Number.isFinite(number) && number >= 0 ? Math.round(number) : 0;
+    };
+    const text = (raw: unknown, max: number) =>
+      typeof raw === 'string' && raw.trim() ? raw.trim().slice(0, max) : undefined;
+    const items = Array.isArray(input.items)
+      ? input.items.slice(0, 100).map((raw, index) => {
+          const item = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+          const quantity = Math.max(1, Math.min(999, Math.floor(Number(item.quantity) || 1)));
+          const options = Array.isArray(item.options)
+            ? item.options
+                .slice(0, 20)
+                .map((option) => text(option, 100))
+                .filter(Boolean)
+            : [];
+          return {
+            key: text(item.key, 100) ?? String(index),
+            name: text(item.name, 150) ?? 'Món',
+            quantity,
+            unitPrice: money(item.unitPrice),
+            lineTotal: money(item.lineTotal),
+            options,
+            ...(text(item.note, 500) ? { note: text(item.note, 500) } : {}),
+          };
+        })
+      : [];
+    const orderCode = text(input.orderCode, 50);
+    const callNumber = Number(input.callNumber);
+    const paymentMethod = text(input.paymentMethod, 30);
+    const qrCode = text(input.qrCode, 4000);
+    const qrExpiresAt = text(input.qrExpiresAt, 50);
+    return {
+      state,
+      items,
+      totalAmount: money(input.totalAmount),
+      ...(orderCode ? { orderCode } : {}),
+      ...(Number.isInteger(callNumber) ? { callNumber } : {}),
+      ...(paymentMethod ? { paymentMethod } : {}),
+      ...(qrCode ? { qrCode } : {}),
+      ...(qrExpiresAt ? { qrExpiresAt } : {}),
+    };
   }
 
   private extractToken(client: Socket) {

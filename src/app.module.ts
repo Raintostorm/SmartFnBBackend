@@ -24,6 +24,7 @@ import { RealtimeModule } from './realtime/realtime.module.js';
 import { CounterOperationsModule } from './modules/counter-operations/counter-operations.module.js';
 import { PayosModule } from './modules/payos/payos.module.js';
 import { BranchManagerModule } from './modules/branch-manager/branch-manager.module.js';
+import { OrderTrackingModule } from './modules/order-tracking/order-tracking.module.js';
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { BranchManagerModule } from './modules/branch-manager/branch-manager.mod
     MenuModule,
     OrdersModule,
     CounterOperationsModule,
+    OrderTrackingModule,
     PayosModule,
     PaymentsModule,
     InvoicesModule,
