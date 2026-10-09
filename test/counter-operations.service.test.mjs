@@ -239,6 +239,20 @@ describe('V9 counter operations', () => {
     assert.equal(batches[2].units[0].id, 'outside-window');
   });
 
+  it('keeps each cup separate when the menu item disables batching', async () => {
+    const paidAt = new Date('2026-09-29T01:00:00Z');
+    const units = ['first', 'second'].map((id) => ({
+      id, sequence: 1, status: 'QUEUED', startedAt: null, startedById: null, createdAt: paidAt,
+      orderItem: {
+        menuItemId: 'milk-tea', menuItem: { categoryId: 'drinks', allowBatching: false }, itemName: 'Trà sữa',
+        selectedOptions: [], specialInstructions: null, order: { callNumber: 1, paidAt },
+      },
+    }));
+    const service = counterService({ orderItemUnit: { findMany: async () => units } });
+    const batches = await service.baristaQueue(barista);
+    assert.deepEqual(batches.map((batch) => batch.units.map((unit) => unit.id)), [['first'], ['second']]);
+  });
+
   it('does not let another barista complete a claimed batch', async () => {
     const tx = {
       orderItemUnit: {

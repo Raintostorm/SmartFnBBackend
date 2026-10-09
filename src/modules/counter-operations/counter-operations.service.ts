@@ -535,7 +535,7 @@ export class CounterOperationsService {
         },
       },
       include: {
-        orderItem: { include: { order: true, menuItem: { select: { categoryId: true } } } },
+        orderItem: { include: { order: true, menuItem: { select: { categoryId: true, allowBatching: true } } } },
       },
       orderBy: [{ orderItem: { order: { paidAt: 'asc' } } }, { sequence: 'asc' }],
     });
@@ -566,7 +566,7 @@ export class CounterOperationsService {
       const headSize = this.sizeOption(headOptions);
       const headTime = head.orderItem.order.paidAt ?? head.createdAt;
       const selected = [head];
-      for (let index = 0; index < pending.length && selected.length < maxBatchSize;) {
+      for (let index = 0; head.orderItem.menuItem.allowBatching !== false && index < pending.length && selected.length < maxBatchSize;) {
         const candidate = pending[index];
         const candidateOptions = this.optionSnapshots(candidate.orderItem.selectedOptions);
         const candidateSize = this.sizeOption(candidateOptions);

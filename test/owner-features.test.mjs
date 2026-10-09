@@ -295,6 +295,41 @@ describe('Service plan quota', () => {
 });
 
 describe('Owner staff administration', () => {
+  it('invites an inactive manager without returning the setup token', async () => {
+    const created = [];
+    const transaction = {
+      $queryRaw: async () => [],
+      businessSubscription: { findFirst: async () => ({ plan: { maxAccounts: 5 } }) },
+      employee: {
+        count: async () => 1,
+        create: async ({ data }) => {
+          created.push(data);
+          return { id: 'employee-one', user: { id: 'manager-user', email: data.user.create.email } };
+        },
+      },
+      ownerChainAssignment: { count: async () => 1 },
+      role: { findUnique: async () => ({ id: 'manager-role' }) },
+      passwordSetupToken: { create: async ({ data }) => created.push(data) },
+      emailOutbox: { create: async ({ data }) => created.push(data) },
+    };
+    const service = new EmployeesService(
+      {
+        branch: { findFirst: async () => ({ id: 'branch-one', name: 'Chi nhánh 1', chainId: 'chain-one' }) },
+        $transaction: async (work) => work(transaction),
+      },
+      { assertCanManageChain: async () => undefined },
+      { hash: async () => 'hashed-random-password' },
+    );
+    const result = await service.inviteManager(owner, { branchId: 'branch-one', name: 'Nguyễn Văn An', email: ' AN@example.com ' });
+    assert.equal(result.account.user.email, 'an@example.com');
+    assert.equal(created[0].user.create.status, UserStatus.INACTIVE);
+    assert.equal(created[0].user.create.passwordHash, 'hashed-random-password');
+    assert.equal(created[1].tokenHash.length, 64);
+    assert.equal(created[2].template, 'MANAGER_ACCOUNT_CREATED');
+    assert.equal(created[2].payload.setupPath, '/setup-password');
+    assert.equal(JSON.stringify(result).includes(created[2].payload.setupToken), false);
+  });
+
   function employeesServiceFor(roleCode) {
     return new EmployeesService(
       {
@@ -413,6 +448,23 @@ describe('Owner branding logo upload', () => {
 });
 
 describe('Chain menu boundaries', () => {
+  it('returns branch availability with true as the default for untouched options', async () => {
+    const service = new MenuService(
+      {
+        branch: { findFirst: async () => ({ id: 'branch-one' }) },
+        menuOption: { findMany: async () => [
+          { id: 'size-m', branchAvailability: [] },
+          { id: 'size-l', branchAvailability: [{ isAvailable: false }] },
+        ] },
+      },
+      { assertCanManageChain: async () => undefined },
+    );
+    assert.deepEqual(await service.listBranchOptionStates('chain-one', 'branch-one', owner), [
+      { branchId: 'branch-one', optionId: 'size-m', isAvailable: true },
+      { branchId: 'branch-one', optionId: 'size-l', isAvailable: false },
+    ]);
+  });
+
   it('creates a required option group with normalized selection rules', async () => {
     const captured = {};
     const service = new MenuService(

@@ -109,6 +109,12 @@ export class CreateMenuItemDto {
   @Max(1440)
   preparationMinutes?: number;
 
+  @ApiPropertyOptional({ example: true, description: 'Whether identical items may be prepared together' })
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  allowBatching?: boolean;
+
   @ApiPropertyOptional({
     description:
       'Branches that will sell the item. Omit to enable it at every branch of the chain.',
@@ -166,6 +172,12 @@ export class UpdateMenuItemDto {
   @Min(0)
   @Max(1440)
   preparationMinutes?: number;
+
+  @ApiPropertyOptional({ example: true })
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  allowBatching?: boolean;
 }
 
 export class SetMenuItemActiveDto {
@@ -331,6 +343,12 @@ export class CreateMenuOptionDto {
   @Min(0)
   @Max(9999)
   displayOrder?: number;
+
+  @ApiPropertyOptional({ example: false, description: 'Only one active default option is allowed per group' })
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  isDefault?: boolean;
 }
 
 export class UpdateMenuOptionDto extends PartialType(CreateMenuOptionDto) {

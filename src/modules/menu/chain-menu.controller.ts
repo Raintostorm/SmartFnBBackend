@@ -111,6 +111,17 @@ export class ChainMenuController {
 
   // --- Option groups and options ------------------------------------------
 
+  @Get('option-groups/branch-states')
+  @ApiOperation({ summary: 'Read option availability for one branch in this chain' })
+  @ApiOkResponse({ description: 'Availability of every chain option at the selected branch' })
+  listBranchOptionStates(
+    @Param('chainId', new ParseUUIDPipe()) chainId: string,
+    @Query('branchId', new ParseUUIDPipe()) branchId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.menuService.listBranchOptionStates(chainId, branchId, user);
+  }
+
   @Get('option-groups')
   @ApiOperation({ summary: 'List chain-wide option groups and their options' })
   @ApiOkResponse({ description: 'Option groups with selection rules and chain-wide prices' })

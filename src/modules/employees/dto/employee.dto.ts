@@ -1,6 +1,7 @@
 import { Transform, Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsEmail,
   IsEnum,
   IsIn,
   IsInt,
@@ -10,6 +11,7 @@ import {
   Max,
   MaxLength,
   Min,
+  MinLength,
 } from 'class-validator';
 import { UserStatus } from '../../../generated/prisma/client.js';
 import { AppRole, STAFF_ROLES } from '../../auth/app-role.enum.js';
@@ -67,6 +69,27 @@ export class UpdateEmployeeAccountStatusDto {
 
 export class TransferEmployeeBranchDto {
   @ApiProperty({ format: 'uuid', description: 'Target branch, inside the same restaurant chain' })
+  @IsUUID()
+  branchId!: string;
+}
+
+export class InviteManagerDto {
+  @ApiProperty({ example: 'Nguyễn Văn An', maxLength: 200 })
+  @Transform(trim)
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  name!: string;
+
+  @ApiProperty({ example: 'manager@example.com' })
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim().toLowerCase() : value,
+  )
+  @IsEmail()
+  @MaxLength(255)
+  email!: string;
+
+  @ApiProperty({ format: 'uuid' })
   @IsUUID()
   branchId!: string;
 }

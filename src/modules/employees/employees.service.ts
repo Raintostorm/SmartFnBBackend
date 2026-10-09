@@ -1,11 +1,13 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { randomBytes, createHash } from 'node:crypto';
+import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { randomBytes, createHash, randomUUID } from 'node:crypto';
 import { Prisma, UserStatus } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { AppRole } from '../auth/app-role.enum.js';
+import { PasswordService } from '../auth/password.service.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
 import type {
+  InviteManagerDto,
   ListEmployeesQueryDto,
   TransferEmployeeBranchDto,
   UpdateEmployeeAccountStatusDto,
@@ -46,7 +48,80 @@ export class EmployeesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly branchAccess: BranchAccessService,
+    private readonly passwords: PasswordService,
   ) {}
+
+  /** Creates an inactive manager and queues a one-time password setup email atomically. */
+  async inviteManager(user: AuthenticatedUser, dto: InviteManagerDto) {
+    const branch = await this.prisma.branch.findFirst({
+      where: { id: dto.branchId, deletedAt: null },
+      select: { id: true, name: true, chainId: true },
+    });
+    if (!branch) throw new NotFoundException('Branch not found');
+    await this.branchAccess.assertCanManageChain(user, branch.chainId);
+
+    const nameParts = dto.name.trim().split(/\s+/);
+    const firstName = nameParts.shift()!;
+    const lastName = nameParts.join(' ');
+    const setupToken = randomBytes(32).toString('base64url');
+    const expiresAt = new Date(Date.now() + PASSWORD_SETUP_TTL_MS);
+    const passwordHash = await this.passwords.hash(randomBytes(32).toString('base64url'));
+    const email = dto.email.trim().toLowerCase();
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM restaurant_chains WHERE id = ${branch.chainId}::uuid FOR UPDATE`;
+        const subscription = await tx.businessSubscription.findFirst({
+          where: { chainId: branch.chainId, status: 'ACTIVE', expiresAt: { gt: new Date() } },
+          select: { plan: { select: { maxAccounts: true } } },
+        });
+        if (!subscription) throw new ForbiddenException('Business subscription is not active');
+        const [employees, owners] = await Promise.all([
+          tx.employee.count({ where: { branch: { chainId: branch.chainId }, deletedAt: null, user: { deletedAt: null } } }),
+          tx.ownerChainAssignment.count({ where: { chainId: branch.chainId, owner: { deletedAt: null, user: { deletedAt: null } } } }),
+        ]);
+        if (employees + owners >= subscription.plan.maxAccounts) {
+          throw new ConflictException({ statusCode: 409, error: 'PLAN_LIMIT_REACHED', message: 'Service plan account limit has been reached' });
+        }
+        const role = await tx.role.findUnique({ where: { code: AppRole.MANAGER }, select: { id: true } });
+        if (!role) throw new ConflictException('Manager role is not configured');
+        const employee = await tx.employee.create({
+          data: {
+            branch: { connect: { id: branch.id } },
+            employeeCode: `MGR-${randomUUID().replace(/-/g, '').slice(0, 16).toUpperCase()}`,
+            firstName,
+            lastName,
+            user: { create: { email, passwordHash, roleId: role.id, status: UserStatus.INACTIVE } },
+          },
+          select: employeeSelect,
+        });
+        await tx.passwordSetupToken.create({
+          data: { userId: employee.user.id, tokenHash: createHash('sha256').update(setupToken).digest('hex'), expiresAt },
+        });
+        await tx.emailOutbox.create({
+          data: {
+            recipient: email,
+            subject: 'Thiết lập tài khoản Manager Smart F&B',
+            template: 'MANAGER_ACCOUNT_CREATED',
+            payload: {
+              managerName: dto.name.trim(),
+              branchName: branch.name,
+              setupToken,
+              setupPath: '/setup-password',
+              expiresAt: expiresAt.toISOString(),
+              requestedByUserId: user.id,
+            },
+          },
+        });
+        return { account: employee, expiresAt };
+      });
+    } catch (error) {
+      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2002') {
+        throw new ConflictException('Email or employee code already exists');
+      }
+      throw error;
+    }
+  }
 
   /** Read-only roster across the Owner's branches, including waiter and kitchen staff. */
   async listEmployees(user: AuthenticatedUser, query: ListEmployeesQueryDto) {

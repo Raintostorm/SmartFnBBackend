@@ -15,6 +15,7 @@ import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { Roles } from '../auth/decorators/roles.decorator.js';
 import {
+  InviteManagerDto,
   ListEmployeesQueryDto,
   TransferEmployeeBranchDto,
   UpdateEmployeeAccountStatusDto,
@@ -30,12 +31,19 @@ import { EmployeesService } from './employees.service.js';
 export class EmployeesController {
   constructor(private readonly employeesService: EmployeesService) {}
 
+  @Post('managers')
+  @ApiOperation({ summary: 'Invite a MANAGER by email without choosing their password' })
+  @ApiOkResponse({ description: 'Inactive manager created and password setup email queued' })
+  inviteManager(@CurrentUser() user: AuthenticatedUser, @Body() dto: InviteManagerDto) {
+    return this.employeesService.inviteManager(user, dto);
+  }
+
   @Get()
   @ApiOperation({
     summary: 'List the staff of every branch the OWNER is assigned to',
     description:
       'Read-only roster covering all roles. Creating waiter and kitchen accounts is the Branch ' +
-      'Manager job; the OWNER creates managers through POST /auth/managers.',
+      'Manager job; the OWNER invites managers through POST /employees/managers.',
   })
   @ApiOkResponse({ description: 'Paginated staff roster' })
   list(@CurrentUser() user: AuthenticatedUser, @Query() query: ListEmployeesQueryDto) {

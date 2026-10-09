@@ -44,6 +44,7 @@ const itemSelect = {
   price: true,
   imageUrl: true,
   preparationMinutes: true,
+  allowBatching: true,
   isActive: true,
   isAvailable: true,
   createdAt: true,
@@ -59,6 +60,7 @@ const optionSelect = {
   priceDelta: true,
   displayOrder: true,
   isActive: true,
+  isDefault: true,
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.MenuOptionSelect;
@@ -155,6 +157,24 @@ export class MenuService {
 
   // --- Option groups and options ------------------------------------------
 
+  async listBranchOptionStates(chainId: string, branchId: string, user: AuthenticatedUser) {
+    await this.branchAccess.assertCanManageChain(user, chainId);
+    const branch = await this.prisma.branch.findFirst({
+      where: { id: branchId, chainId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!branch) throw new NotFoundException('Branch not found in this chain');
+    const options = await this.prisma.menuOption.findMany({
+      where: { group: { chainId } },
+      select: { id: true, branchAvailability: { where: { branchId }, select: { isAvailable: true } } },
+    });
+    return options.map((option) => ({
+      branchId,
+      optionId: option.id,
+      isAvailable: option.branchAvailability[0]?.isAvailable ?? true,
+    }));
+  }
+
   async listOptionGroups(chainId: string, user: AuthenticatedUser) {
     await this.branchAccess.assertCanManageChain(user, chainId);
     return this.prisma.menuOptionGroup.findMany({
@@ -203,6 +223,12 @@ export class MenuService {
       dto.isRequired ?? (dto.minSelections !== undefined ? minSelections > 0 : group.isRequired);
     const maxSelections = dto.maxSelections ?? group.maxSelections;
     this.assertOptionGroupRules(isRequired, minSelections, maxSelections);
+    if (maxSelections < group.maxSelections) {
+      const defaults = await this.prisma.menuOption.count({ where: { groupId, isDefault: true } });
+      if (defaults > maxSelections) {
+        throw new BadRequestException('Clear extra default options before lowering maxSelections');
+      }
+    }
 
     return this.withUniqueConflict(
       'An option group with this code already exists in the chain',
@@ -230,6 +256,9 @@ export class MenuService {
   ) {
     await this.branchAccess.assertCanManageChain(user, chainId);
     await this.getOptionGroupOrFail(chainId, groupId);
+    if (dto.isDefault) {
+      throw new BadRequestException('Create the option before setting it as the group default');
+    }
     return this.withUniqueConflict('An option with this code already exists in the group', () =>
       this.prisma.menuOption.create({
         data: { ...dto, groupId },
@@ -246,12 +275,25 @@ export class MenuService {
     user: AuthenticatedUser,
   ) {
     await this.branchAccess.assertCanManageChain(user, chainId);
-    await this.getOptionOrFail(chainId, groupId, optionId);
+    const current = await this.getOptionOrFail(chainId, groupId, optionId);
+    if (dto.isDefault && (dto.isActive === false || (dto.isActive === undefined && !current.isActive))) {
+      throw new BadRequestException('An inactive option cannot be the default');
+    }
     return this.withUniqueConflict('An option with this code already exists in the group', () =>
-      this.prisma.menuOption.update({
-        where: { id: optionId },
-        data: dto,
-        select: optionSelect,
+      this.prisma.$transaction(async (tx) => {
+        if (dto.isDefault) {
+          await tx.$queryRaw`SELECT id FROM menu_option_groups WHERE id = ${groupId}::uuid FOR UPDATE`;
+          const group = await tx.menuOptionGroup.findUniqueOrThrow({ where: { id: groupId }, select: { maxSelections: true } });
+          const defaults = await tx.menuOption.count({ where: { groupId, isDefault: true, id: { not: optionId } } });
+          if (defaults >= group.maxSelections) {
+            throw new BadRequestException('Default options exceed maxSelections');
+          }
+        }
+        return tx.menuOption.update({
+          where: { id: optionId },
+          data: { ...dto, ...(dto.isActive === false ? { isDefault: false } : {}) },
+          select: optionSelect,
+        });
       }),
     );
   }
