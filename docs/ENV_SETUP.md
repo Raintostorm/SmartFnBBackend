@@ -100,6 +100,47 @@ docker compose up -d --build api
 Chỉ chạy lệnh `resolve` khi log thực sự nêu đúng migration trên. Database chưa từng
 chạy bản lỗi chỉ cần pull code mới và build lại.
 
+### Docker local báo mất kết nối máy chủ
+
+Trong Docker Desktop, nếu `postgres` có chấm xanh nhưng `api` hiện nút chạy
+**▶**, Backend đã dừng nên Web/Mobile sẽ báo mất kết nối. Kiểm tra lỗi thật bằng:
+
+```bash
+docker compose ps -a
+docker compose logs --tail=200 api
+```
+
+File `docker-compose.yml` local phải dùng `NODE_ENV=development`. Không đổi nó
+thành `production`, vì cấu hình production bắt buộc `PUBLIC_WEB_URL` dùng HTTPS,
+trong khi FE local thường chạy tại `http://localhost:8443`.
+
+Nếu chưa cần gửi thư mời tài khoản, để **cả hai** biến email trống:
+
+```env
+EMAIL_API_KEY=
+EMAIL_FROM=
+```
+
+Nếu cần gửi thư, phải điền đồng thời API key và người gửi đã xác thực:
+
+```env
+EMAIL_API_KEY=re_xxxxxxxxx
+EMAIL_FROM=Smart F&B <no-reply@your-verified-domain.example>
+```
+
+Sau khi sửa `.env`, tạo lại container API và kiểm tra health endpoint:
+
+```bash
+docker compose up -d --build api
+docker compose ps
+curl http://localhost:3100/api/v1/health
+```
+
+API hoạt động khi container `api` có trạng thái `Up/healthy` và health endpoint
+trả HTTP 200. Cổng `5433:5432` của PostgreSQL trong Docker Desktop là bình thường:
+API trong Compose kết nối bằng hostname nội bộ `postgres:5432`, còn máy host dùng
+`localhost:5433`.
+
 ### Render
 
 Trên Render, nhập các biến trong phần **Environment** của service Backend. Không tải file `.env` local lên Render.
