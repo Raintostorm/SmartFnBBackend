@@ -84,7 +84,8 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @Post('setup-password')
   @ApiOperation({
-    summary: 'Set or reset an OWNER or MANAGER password using a one-time email token',
+    summary: 'Set or reset a staff password using a one-time email token',
+    description: 'Supports OWNER, MANAGER, CASHIER, and BARISTA invitation/reset links.',
   })
   @ApiOkResponse({ type: MessageResponseDto })
   @ApiUnauthorizedResponse({ description: 'Setup token is invalid or expired' })

@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { createHash, randomBytes } from 'node:crypto';
 import { Prisma, UserStatus } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { AppRole } from '../auth/app-role.enum.js';
@@ -18,8 +19,10 @@ import type {
   ManagerResetPasswordDto,
 } from './manager.dto.js';
 import { managerActor, writeBranchAudit } from './manager-scope.js';
+import { EmailOutboxService } from '../email/email-outbox.service.js';
 
 const staffRoles = [AppRole.CASHIER, AppRole.BARISTA];
+const PASSWORD_SETUP_TTL_MS = 24 * 60 * 60 * 1000;
 const staffSelect = {
   id: true,
   branchId: true,
@@ -41,6 +44,7 @@ export class ManagerStaffService {
     private readonly prisma: PrismaService,
     private readonly access: BranchAccessService,
     private readonly passwords: PasswordService,
+    private readonly emails: EmailOutboxService,
   ) {}
 
   private async scope(user: AuthenticatedUser, write = false) {
@@ -111,11 +115,13 @@ export class ManagerStaffService {
     const { branchId } = await this.scope(user, true);
     if (!staffRoles.includes(dto.role))
       throw new BadRequestException('Only CASHIER and BARISTA can be created');
-    const passwordHash = await this.passwords.hash(dto.password);
-    return this.mutate(async (tx) => {
+    const setupToken = randomBytes(32).toString('base64url');
+    const expiresAt = new Date(Date.now() + PASSWORD_SETUP_TTL_MS);
+    const passwordHash = await this.passwords.hash(randomBytes(32).toString('base64url'));
+    const invitation = await this.mutate(async (tx) => {
       const branch = await tx.branch.findUniqueOrThrow({
         where: { id: branchId },
-        select: { chainId: true },
+        select: { chainId: true, name: true },
       });
       // Serialize manager hires across every branch of the same chain.
       await tx.$queryRaw`SELECT id FROM restaurant_chains WHERE id = ${branch.chainId}::uuid FOR UPDATE`;
@@ -154,20 +160,45 @@ export class ManagerStaffService {
               phone: dto.phone?.trim(),
               passwordHash,
               roleId: role.id,
-              status: UserStatus.ACTIVE,
+              status: UserStatus.INACTIVE,
             },
           },
         },
         select: staffSelect,
       });
+      await tx.passwordSetupToken.create({
+        data: {
+          userId: created.user.id,
+          tokenHash: createHash('sha256').update(setupToken).digest('hex'),
+          expiresAt,
+        },
+      });
+      const email = await tx.emailOutbox.create({
+        data: {
+          recipient: created.user.email,
+          subject: 'Thiết lập tài khoản nhân viên Smart F&B',
+          template: 'STAFF_ACCOUNT_CREATED',
+          payload: {
+            employeeName: `${created.firstName} ${created.lastName}`.trim(),
+            branchName: branch.name,
+            role: created.user.role.code,
+            setupToken,
+            setupPath: '/setup-password',
+            expiresAt: expiresAt.toISOString(),
+            requestedByUserId: user.id,
+          },
+        },
+      });
       await writeBranchAudit(tx, user, {
-        action: 'STAFF_CREATED',
+        action: 'STAFF_INVITED',
         entityType: 'EMPLOYEE',
         entityId: created.id,
         after: this.snapshot(created),
       });
-      return created;
+      return { account: created, emailId: email.id };
     });
+    const emailStatus = await this.emails.deliver(invitation.emailId);
+    return { ...invitation.account, invitationExpiresAt: expiresAt, emailStatus };
   }
 
   async update(user: AuthenticatedUser, id: string, dto: ManagerUpdateStaffDto) {
@@ -234,23 +265,52 @@ export class ManagerStaffService {
 
   async resetPassword(user: AuthenticatedUser, id: string, dto: ManagerResetPasswordDto) {
     const { branchId } = await this.scope(user, true);
-    const passwordHash = await this.passwords.hash(dto.password);
-    return this.mutate(async (tx) => {
+    const setupToken = randomBytes(32).toString('base64url');
+    const expiresAt = new Date(Date.now() + PASSWORD_SETUP_TTL_MS);
+    const invitation = await this.mutate(async (tx) => {
       const staff = await this.target(tx, branchId, id);
-      await tx.user.update({ where: { id: staff.user.id }, data: { passwordHash } });
       await this.revoke(tx, staff.user.id);
       await tx.passwordSetupToken.updateMany({
         where: { userId: staff.user.id, usedAt: null },
         data: { usedAt: new Date() },
       });
+      await tx.passwordSetupToken.create({
+        data: {
+          userId: staff.user.id,
+          tokenHash: createHash('sha256').update(setupToken).digest('hex'),
+          expiresAt,
+        },
+      });
+      const email = await tx.emailOutbox.create({
+        data: {
+          recipient: staff.user.email,
+          subject: 'Đặt lại mật khẩu nhân viên Smart F&B',
+          template: 'STAFF_PASSWORD_RESET',
+          payload: {
+            employeeName: `${staff.firstName} ${staff.lastName}`.trim(),
+            role: staff.user.role.code,
+            setupToken,
+            setupPath: '/setup-password',
+            expiresAt: expiresAt.toISOString(),
+            requestedByUserId: user.id,
+          },
+        },
+      });
       await writeBranchAudit(tx, user, {
-        action: 'STAFF_PASSWORD_RESET',
+        action: 'STAFF_PASSWORD_SETUP_SENT',
         entityType: 'EMPLOYEE',
         entityId: id,
         reason: dto.reason,
       });
-      return { message: 'Password reset; all sessions revoked', employeeId: id };
+      return { emailId: email.id };
     });
+    const emailStatus = await this.emails.deliver(invitation.emailId);
+    return {
+      message: 'A password setup link has been queued for delivery',
+      employeeId: id,
+      expiresAt,
+      emailStatus,
+    };
   }
 
   private snapshot(

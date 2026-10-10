@@ -75,10 +75,14 @@ Các biến bắt buộc phải nhập trên Render Dashboard:
 | `CORS_ORIGIN`           | Domain FE Web, nhiều domain phân cách bằng dấu phẩy             |
 | `REALTIME_CORS_ORIGINS` | Domain Web/Mobile dùng Socket.IO                                |
 | `PAYOS_MASTER_KEY`      | Cùng khóa base64 32 byte đã dùng để mã hóa PayOS trong database |
+| `EMAIL_API_KEY`         | API key Resend để gửi link đặt mật khẩu qua HTTPS               |
+| `EMAIL_FROM`            | Người gửi thuộc domain đã xác thực trong Resend                 |
 
 `JWT_ACCESS_SECRET` và `JWT_REFRESH_SECRET` được Blueprint sinh độc lập. Không chạy
 `prisma db seed` tự động ở production; chỉ seed thủ công khi chủ động tạo dữ liệu mẫu.
 Render tự cấp biến `PORT`, Backend đã lắng nghe `0.0.0.0` nên không cần cấu hình thêm.
+Không cần SMTP hay worker riêng: email mời Cashier/Barista được gửi bằng HTTPS; QR
+PayOS được đối soát lại theo yêu cầu của Cashier nên không phụ thuộc cron trên Render Free.
 
 ## Swagger / OpenAPI
 

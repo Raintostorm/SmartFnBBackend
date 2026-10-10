@@ -10,7 +10,9 @@ services:
     env_file:
       - .env
     environment:
-      NODE_ENV: production
+      # This Compose file is for local development. Keeping development here allows
+      # localhost HTTP URLs; Render sets NODE_ENV=production separately.
+      NODE_ENV: development
       PORT: 3100
       DATABASE_URL: postgresql://${POSTGRES_USER:-smartfnb}:${POSTGRES_PASSWORD:-smartfnb_dev_password}@postgres:5432/${POSTGRES_DB:-smart_fnb}?schema=public
       SWAGGER_ENABLED: 'true'

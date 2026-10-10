@@ -121,6 +121,7 @@ enum OrderStatus {
   PENDING
   SUBMITTED
   CONFIRMED
+  REQUIRES_ATTENTION
   PREPARING
   READY
   SERVED
@@ -190,6 +191,7 @@ enum PaymentMethod {
 
 enum PaymentStatus {
   PENDING
+  AMOUNT_MISMATCH
   SUCCESS
   FAILED
   REFUNDED

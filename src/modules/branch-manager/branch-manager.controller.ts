@@ -96,7 +96,9 @@ export class BranchManagerController {
 
   @Post('staff/:employeeId/reset-password')
   @HttpCode(200)
-  @ApiOperation({ summary: 'BM-01: Set a new password and revoke all sessions; requires a reason' })
+  @ApiOperation({
+    summary: 'BM-01: Send a one-time password setup link and revoke all sessions',
+  })
   resetPassword(
     @CurrentUser() user: AuthenticatedUser,
     @Param('employeeId', new ParseUUIDPipe()) id: string,

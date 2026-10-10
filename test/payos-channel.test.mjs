@@ -6,6 +6,7 @@ import { PayosPaymentService } from '../dist/modules/payos/payos-payment.service
 import { PayosVerificationStore } from '../dist/modules/payos/payos-verification.store.js';
 import { PayosCipherService } from '../dist/modules/payos/payos-cipher.service.js';
 import { payosSignature, verifyPayosSignature } from '../dist/modules/payos/payos-signature.js';
+import { Prisma } from '../dist/generated/prisma/client.js';
 
 const masterKey = Buffer.alloc(32, 7).toString('base64');
 const cipher = new PayosCipherService({
@@ -60,8 +61,7 @@ describe('V9 PayOS channel credentials', () => {
         owner,
       ),
       (error) =>
-        error?.getStatus?.() === 503 &&
-        error?.message === 'PAYOS_MASTER_KEY is not configured',
+        error?.getStatus?.() === 503 && error?.message === 'PAYOS_MASTER_KEY is not configured',
     );
     assert.equal(payosCalls, 0);
   });
@@ -91,6 +91,34 @@ describe('V9 PayOS channel credentials', () => {
     }
   });
 
+  it('reads and cancels a payment through the official PayOS API', async () => {
+    const originalFetch = globalThis.fetch;
+    const requests = [];
+    globalThis.fetch = async (url, init) => {
+      requests.push({ url, init });
+      return new Response(
+        JSON.stringify({ code: '00', data: { id: 'link-id', status: 'CANCELLED' } }),
+        { status: 200 },
+      );
+    };
+    try {
+      const api = new PayosApiService();
+      const credentials = { clientId: 'client', apiKey: 'api', checksumKey: 'checksum' };
+      await api.getPayment(credentials, 'link/id');
+      await api.cancelPayment(credentials, 'link/id', 'Khách đổi phương thức thanh toán');
+      assert.equal(requests[0].init.method, 'GET');
+      assert.equal(requests[0].init.body, undefined);
+      assert.match(requests[0].url, /payment-requests\/link%2Fid$/);
+      assert.equal(requests[1].init.method, 'POST');
+      assert.match(requests[1].url, /payment-requests\/link%2Fid\/cancel$/);
+      assert.deepEqual(JSON.parse(requests[1].init.body), {
+        cancellationReason: 'Khách đổi phương thức thanh toán',
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('accepts a correctly signed PayOS verification callback without an order', async () => {
     const store = new PayosVerificationStore();
     const webhookCode = '123e4567-e89b-12d3-a456-426614174000';
@@ -105,8 +133,8 @@ describe('V9 PayOS channel credentials', () => {
       {},
       cipher,
       {},
-      {},
       store,
+      {},
     );
     await assert.doesNotReject(
       service.webhook(webhookCode, {
@@ -122,6 +150,7 @@ describe('V9 PayOS channel credentials', () => {
     let channelUpdate;
     const service = new PayosPaymentService(
       {
+        payment: { updateMany: async () => ({ count: 0 }) },
         order: {
           findFirst: async () => ({
             id: 'order-id',
@@ -153,8 +182,8 @@ describe('V9 PayOS channel credentials', () => {
           throw new PayosApiError('Invalid API key', false, 401);
         },
       },
-      {},
       { get: () => null },
+      {},
     );
     await assert.rejects(
       service.create({ employeeId: 'employee-id', branchId: 'branch-id' }, 'order-id', {
@@ -166,6 +195,108 @@ describe('V9 PayOS channel credentials', () => {
     );
     assert.equal(channelUpdate.status, 'ERROR');
     assert.equal(channelUpdate.lastError, 'Invalid API key');
+  });
+
+  it('routes a valid mismatched webhook to manager attention instead of FAILED', async () => {
+    const webhookCode = '123e4567-e89b-12d3-a456-426614174000';
+    const data = { orderCode: 123, amount: 40_000, reference: 'bank-ref' };
+    let mismatch;
+    let eventStatus;
+    const payment = {
+      id: 'payment-id',
+      status: 'PENDING',
+      amount: new Prisma.Decimal(50_000),
+      order: { id: 'order-id', branch: { chainId: 'chain-id' } },
+    };
+    const prisma = {
+      payosChannel: {
+        findUnique: async () => ({
+          chainId: 'chain-id',
+          checksumKeyCipher: cipher.encrypt('checksum'),
+        }),
+      },
+      payment: { findUnique: async () => payment },
+      paymentWebhookEvent: {
+        update: async ({ data: update }) => {
+          eventStatus = update.status;
+        },
+      },
+      $transaction: async (work) =>
+        work({
+          paymentWebhookEvent: {
+            findUnique: async () => null,
+            create: async () => ({ id: 'event-id' }),
+            update: async () => ({}),
+          },
+        }),
+    };
+    const service = new PayosPaymentService(
+      prisma,
+      {},
+      cipher,
+      {},
+      { get: () => null },
+      {
+        markAmountMismatch: async (...args) => {
+          mismatch = args;
+        },
+      },
+    );
+    await service.webhook(webhookCode, {
+      code: '00',
+      success: true,
+      data,
+      signature: payosSignature(data, 'checksum'),
+    });
+    assert.deepEqual(mismatch, ['payment-id', 40_000, 'bank-ref']);
+    assert.equal(eventStatus, 'PROCESSED');
+  });
+
+  it('uses the shared settlement workflow when recheck reports PAID', async () => {
+    let settlementInput;
+    const payment = {
+      id: 'payment-id',
+      status: 'PENDING',
+      amount: new Prisma.Decimal(50_000),
+      transactionRef: 'link-id',
+      providerOrderCode: '123',
+      expiresAt: new Date(Date.now() + 60_000),
+      order: { branch: { chainId: 'chain-id' } },
+    };
+    const service = new PayosPaymentService(
+      {
+        payment: { findFirst: async () => payment },
+        payosChannel: {
+          findUnique: async () => ({
+            clientIdCipher: cipher.encrypt('client'),
+            apiKeyCipher: cipher.encrypt('api'),
+            checksumKeyCipher: cipher.encrypt('checksum'),
+          }),
+        },
+      },
+      {},
+      cipher,
+      { getPayment: async () => ({ status: 'PAID', amountPaid: 50_000, id: 'payos-id' }) },
+      {},
+      {
+        settle: async (input) => {
+          settlementInput = input;
+          return {
+            payment: { id: input.paymentId, status: 'SUCCESS' },
+            order: { id: 'order-id' },
+            tracking: { token: 'token' },
+          };
+        },
+      },
+    );
+    const result = await service.recheck(
+      { employeeId: 'cashier-id', branchId: 'branch-id' },
+      'payment-id',
+    );
+    assert.equal(settlementInput.source, 'PAYOS_RECHECK');
+    assert.equal(settlementInput.receivedAmount, 50_000);
+    assert.equal(result.status, 'SUCCESS');
+    assert.equal(result.tracking.token, 'token');
   });
 
   it('stores encrypted values and never returns them to the owner', async () => {

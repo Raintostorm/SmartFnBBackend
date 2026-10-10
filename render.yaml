@@ -16,17 +16,17 @@ services:
       - key: API_PREFIX
         value: api/v1
       - key: SWAGGER_ENABLED
-        value: "true"
+        value: 'true'
       - key: SWAGGER_PATH
         value: api/docs
       - key: REALTIME_ENABLED
-        value: "true"
+        value: 'true'
       - key: REALTIME_PATH
         value: /socket.io
       - key: JWT_ACCESS_TTL_SECONDS
-        value: "900"
+        value: '900'
       - key: JWT_REFRESH_TTL_SECONDS
-        value: "604800"
+        value: '604800'
       - key: JWT_ISSUER
         value: smart-fnb-backend
       - key: JWT_AUDIENCE
@@ -48,4 +48,10 @@ services:
       - key: PUBLIC_WEB_URL
         sync: false
       - key: ORDER_TRACKING_SECRET
+        sync: false
+      - key: EMAIL_PROVIDER
+        value: resend
+      - key: EMAIL_API_KEY
+        sync: false
+      - key: EMAIL_FROM
         sync: false
