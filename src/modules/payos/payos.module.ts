@@ -6,12 +6,11 @@ import { PayosCipherService } from './payos-cipher.service.js';
 import { PayosApiService } from './payos-api.service.js';
 import { PayosPaymentService } from './payos-payment.service.js';
 import { PayosWebhookController } from './payos-webhook.controller.js';
-import { RealtimeModule } from '../../realtime/realtime.module.js';
 import { PayosVerificationStore } from './payos-verification.store.js';
-import { OrderTrackingModule } from '../order-tracking/order-tracking.module.js';
+import { PaymentsModule } from '../payments/payments.module.js';
 
 @Module({
-  imports: [BranchesModule, RealtimeModule, OrderTrackingModule],
+  imports: [BranchesModule, PaymentsModule],
   controllers: [PayosChannelController, PayosWebhookController],
   providers: [
     PayosChannelService,

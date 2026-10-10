@@ -19,6 +19,7 @@ import {
   OrderStatus,
   OrderType,
   PaymentMethod,
+  PaymentStatus,
   UserStatus,
 } from '../../generated/prisma/client.js';
 import { AppRole } from '../auth/app-role.enum.js';
@@ -146,6 +147,14 @@ export class ManagerOrderQueryDto extends ManagerPageDto {
   @IsOptional()
   @IsEnum(OrderPaymentStatus)
   paymentStatus?: OrderPaymentStatus;
+
+  @ApiPropertyOptional({
+    enum: PaymentStatus,
+    description: 'Status of a payment record, including AMOUNT_MISMATCH',
+  })
+  @IsOptional()
+  @IsEnum(PaymentStatus)
+  paymentRecordStatus?: PaymentStatus;
 
   @ApiPropertyOptional({
     enum: PaymentMethod,

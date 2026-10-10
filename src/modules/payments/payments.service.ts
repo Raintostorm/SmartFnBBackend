@@ -8,8 +8,6 @@ import {
 import {
   OrderPaymentStatus,
   OrderStatus,
-  OrderType,
-  OrderItemStatus,
   PaymentMethod,
   PaymentStatus,
   Prisma,
@@ -20,6 +18,7 @@ import { AppRole } from '../auth/app-role.enum.js';
 import { writeBranchAudit } from '../branch-manager/manager-scope.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
+import { CounterPaymentSettlementService } from './counter-payment-settlement.service.js';
 import type {
   ConfirmPaymentDto,
   CreateTableSessionPaymentDto,
@@ -50,6 +49,7 @@ export class PaymentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly branchAccess: BranchAccessService,
+    private readonly counterSettlement: CounterPaymentSettlementService,
   ) {}
 
   async list(branchId: string, query: PaymentListQueryDto, user: AuthenticatedUser) {
@@ -143,154 +143,41 @@ export class PaymentsService {
 
   async confirm(paymentId: string, dto: ConfirmPaymentDto, user: AuthenticatedUser) {
     const actor = this.employee(user);
-    if (user.role !== AppRole.MANAGER && user.role !== AppRole.CASHIER)
-      throw new ForbiddenException('Only MANAGER or CASHIER can confirm payments');
+    if (user.role !== AppRole.MANAGER)
+      throw new ForbiddenException('Only MANAGER can manually confirm bank transfers');
     await this.branchAccess.assertCanAccessBranch(user, actor.branchId);
-    try {
-      return await this.prisma.$transaction(
-        async (tx) => {
-          const payment = await tx.payment.findUnique({
-            where: { id: paymentId },
-            include: paymentInclude,
-          });
-          if (!payment) throw new NotFoundException('Payment not found');
-          if (this.branchIdOf(payment) !== actor.branchId) {
-            throw new ForbiddenException('Payment does not belong to your assigned branch');
-          }
-          const manual = payment.method !== PaymentMethod.CASH;
-          if (manual && user.role !== AppRole.MANAGER)
-            throw new ForbiddenException('Only MANAGER can manually confirm non-cash payments');
-          if (
-            manual &&
-            (!dto.reason || dto.reason.trim().length < 3 || dto.reason.trim().length > 500)
-          )
-            throw new BadRequestException(
-              'A manual confirmation reason of 3 to 500 characters is required',
-            );
-          if (
-            manual &&
-            (dto.receivedAmount == null ||
-              !Number.isFinite(dto.receivedAmount) ||
-              dto.receivedAmount <= 0)
-          )
-            throw new BadRequestException('Actual received amount is required');
-          if (payment.status !== PaymentStatus.PENDING) {
-            throw new ConflictException('Only a pending payment can be confirmed');
-          }
-          if (
-            payment.tableSession &&
-            payment.tableSession.status !== TableSessionStatus.OPEN &&
-            payment.tableSession.status !== TableSessionStatus.SERVING
-          ) {
-            throw new ConflictException('The table session is no longer open for payment');
-          }
-
-          await this.assertPaymentDoesNotExceedBalance(tx, payment);
-
-          const order = payment.orderId
-            ? await tx.order.findUniqueOrThrow({
-                where: { id: payment.orderId },
-                include: { items: true, branch: { select: { timezone: true } } },
-              })
-            : null;
-          if (
-            order &&
-            (order.status === OrderStatus.CANCELLED ||
-              order.paymentStatus === OrderPaymentStatus.PAID)
-          )
-            throw new ConflictException('Order is cancelled or already paid');
-          if (
-            order?.type === OrderType.COUNTER_PICKUP &&
-            (order.status !== OrderStatus.CONFIRMED ||
-              order.paymentStatus !== OrderPaymentStatus.UNPAID ||
-              !payment.amount.equals(order.totalAmount))
-          ) {
-            throw new ConflictException('Counter order must await a full payment');
-          }
-
-          const paidAt = new Date();
-          const confirmed = await tx.payment.update({
-            where: { id: paymentId },
-            data: {
-              status: PaymentStatus.SUCCESS,
-              paidAt,
-              confirmedAt: paidAt,
-              confirmationReason: manual ? dto.reason!.trim() : null,
-              receivedAmount: manual ? dto.receivedAmount : payment.amount,
-              processedById: actor.employeeId,
-              transactionRef: dto.transactionRef ?? payment.transactionRef,
-            },
-            include: paymentInclude,
-          });
-
-          if (payment.tableSessionId) {
-            await this.refreshTableSessionPaymentState(tx, payment.tableSessionId, paidAt);
-          } else if (order?.type === OrderType.COUNTER_PICKUP) {
-            const localDate = new Intl.DateTimeFormat('en-CA', {
-              timeZone: order.branch.timezone,
-              year: 'numeric',
-              month: '2-digit',
-              day: '2-digit',
-            }).format(paidAt);
-            const businessDate = new Date(`${localDate}T00:00:00Z`);
-            const sequence = await tx.branchDailySequence.upsert({
-              where: { branchId_businessDate: { branchId: actor.branchId, businessDate } },
-              create: { branchId: actor.branchId, businessDate, nextNumber: 1 },
-              update: { nextNumber: { increment: 1 } },
-            });
-            for (const item of order.items) {
-              await tx.orderItem.update({
-                where: { id: item.id },
-                data: {
-                  status: OrderItemStatus.QUEUED,
-                  queuedAt: paidAt,
-                  units: {
-                    create: Array.from({ length: item.quantity }, (_, index) => ({
-                      sequence: index + 1,
-                      status: OrderItemStatus.QUEUED,
-                    })),
-                  },
-                },
-              });
-            }
-            await tx.order.update({
-              where: { id: order.id },
-              data: {
-                status: OrderStatus.SUBMITTED,
-                paymentStatus: OrderPaymentStatus.PAID,
-                paidAt,
-                submittedAt: paidAt,
-                businessDate,
-                callNumber: sequence.nextNumber,
-              },
-            });
-          } else if (payment.orderId) {
-            await this.refreshOrderPaymentState(tx, payment.orderId, paidAt);
-          }
-          await writeBranchAudit(tx, user, {
-            action: manual ? 'PAYMENT_MANUALLY_CONFIRMED' : 'CASH_PAYMENT_CONFIRMED',
-            entityType: 'PAYMENT',
-            entityId: payment.id,
-            reason: manual ? dto.reason!.trim() : undefined,
-            before: {
-              status: payment.status,
-              processedById: payment.processedById,
-              amount: payment.amount.toString(),
-            },
-            after: {
-              status: 'SUCCESS',
-              amount: payment.amount.toString(),
-              receivedAmount: confirmed.receivedAmount!.toString(),
-              variance: confirmed.receivedAmount!.minus(payment.amount).toString(),
-              transactionRef: confirmed.transactionRef,
-              orderId: payment.orderId,
-              tableSessionId: payment.tableSessionId,
-            },
-          });
-          return confirmed;
-        },
-        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    if (!dto.reason || dto.reason.trim().length < 3 || dto.reason.trim().length > 500)
+      throw new BadRequestException(
+        'A manual confirmation reason of 3 to 500 characters is required',
       );
+    if (
+      dto.receivedAmount == null ||
+      !Number.isFinite(dto.receivedAmount) ||
+      dto.receivedAmount <= 0
+    )
+      throw new BadRequestException('Actual received amount is required');
+    const payment = await this.prisma.payment.findUnique({
+      where: { id: paymentId },
+      include: paymentInclude,
+    });
+    if (!payment) throw new NotFoundException('Payment not found');
+    if (this.branchIdOf(payment) !== actor.branchId)
+      throw new ForbiddenException('Payment does not belong to your assigned branch');
+    if (payment.method !== PaymentMethod.BANK_TRANSFER)
+      throw new ConflictException('Only bank transfers can be confirmed manually');
+    if (payment.tableSessionId) {
+      return this.confirmTableTransfer(paymentId, dto, user, actor.employeeId);
+    }
+    try {
+      const result = await this.counterSettlement.settle({
+        paymentId,
+        source: 'MANAGER_MANUAL',
+        receivedAmount: dto.receivedAmount,
+        transactionRef: dto.transactionRef,
+        actor: user,
+        reason: dto.reason,
+      });
+      return { ...result.payment, order: result.order, tracking: result.tracking };
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034')
         throw new ConflictException('Payment changed concurrently; reload before retrying');
@@ -314,6 +201,70 @@ export class PaymentsService {
     return branchId;
   }
 
+  private async confirmTableTransfer(
+    paymentId: string,
+    dto: ConfirmPaymentDto,
+    user: AuthenticatedUser,
+    employeeId: string,
+  ) {
+    return this.prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT id FROM payments WHERE id = ${paymentId}::uuid FOR UPDATE`;
+        const payment = await tx.payment.findUniqueOrThrow({
+          where: { id: paymentId },
+          include: paymentInclude,
+        });
+        if (payment.status !== PaymentStatus.PENDING)
+          throw new ConflictException('Only a pending payment can be confirmed');
+        if (
+          !payment.tableSession ||
+          (payment.tableSession.status !== TableSessionStatus.OPEN &&
+            payment.tableSession.status !== TableSessionStatus.SERVING)
+        )
+          throw new ConflictException('The table session is no longer open for payment');
+        const tableSessionId = payment.tableSession.id;
+        const received = new Prisma.Decimal(dto.receivedAmount!);
+        if (received.lessThan(payment.amount)) {
+          throw new ConflictException({
+            statusCode: 409,
+            error: 'PAYMENT_AMOUNT_INSUFFICIENT',
+            message: 'Số tiền thực nhận thấp hơn tổng tiền đơn hàng.',
+          });
+        }
+        const now = new Date();
+        const updated = await tx.payment.update({
+          where: { id: payment.id },
+          data: {
+            status: PaymentStatus.SUCCESS,
+            receivedAmount: received,
+            processedById: employeeId,
+            paidAt: now,
+            confirmedAt: now,
+            confirmationReason: dto.reason!.trim(),
+            transactionRef: dto.transactionRef ?? payment.transactionRef,
+          },
+          include: paymentInclude,
+        });
+        await this.refreshTableSessionPaymentState(tx, tableSessionId, now);
+        await writeBranchAudit(tx, user, {
+          action: 'PAYMENT_MANUALLY_CONFIRMED',
+          entityType: 'PAYMENT',
+          entityId: payment.id,
+          reason: dto.reason!.trim(),
+          before: { status: payment.status, amount: payment.amount.toString() },
+          after: {
+            status: PaymentStatus.SUCCESS,
+            receivedAmount: received.toString(),
+            changeDue: received.minus(payment.amount).toString(),
+            tableSessionId,
+          },
+        });
+        return updated;
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  }
+
   private async refreshTableSessionPaymentState(
     tx: Prisma.TransactionClient,
     tableSessionId: string,
@@ -322,7 +273,7 @@ export class PaymentsService {
     const [orders, payments] = await Promise.all([
       tx.order.findMany({
         where: { tableSessionId, status: { not: OrderStatus.CANCELLED } },
-        select: { id: true, totalAmount: true },
+        select: { totalAmount: true },
       }),
       tx.payment.findMany({
         where: { tableSessionId, status: PaymentStatus.SUCCESS },
@@ -358,73 +309,5 @@ export class PaymentsService {
           : {}),
       },
     });
-  }
-
-  private async refreshOrderPaymentState(
-    tx: Prisma.TransactionClient,
-    orderId: string,
-    paidAt: Date,
-  ) {
-    const [order, payments] = await Promise.all([
-      tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { totalAmount: true } }),
-      tx.payment.findMany({
-        where: { orderId, status: PaymentStatus.SUCCESS },
-        select: { amount: true },
-      }),
-    ]);
-    const totalPaid = payments.reduce(
-      (sum, payment) => sum.add(payment.amount),
-      new Prisma.Decimal(0),
-    );
-    await tx.order.update({
-      where: { id: orderId },
-      data: {
-        paidAt: totalPaid.greaterThanOrEqualTo(order.totalAmount) ? paidAt : null,
-        paymentStatus: totalPaid.greaterThanOrEqualTo(order.totalAmount)
-          ? OrderPaymentStatus.PAID
-          : OrderPaymentStatus.PARTIALLY_PAID,
-      },
-    });
-  }
-
-  private async assertPaymentDoesNotExceedBalance(
-    tx: Prisma.TransactionClient,
-    payment: {
-      id: string;
-      amount: Prisma.Decimal;
-      tableSessionId: string | null;
-      orderId: string | null;
-    },
-  ) {
-    const successful = await tx.payment.findMany({
-      where: {
-        id: { not: payment.id },
-        status: PaymentStatus.SUCCESS,
-        ...(payment.tableSessionId
-          ? { tableSessionId: payment.tableSessionId }
-          : { orderId: payment.orderId }),
-      },
-      select: { amount: true },
-    });
-    const paid = successful.reduce((sum, item) => sum.add(item.amount), new Prisma.Decimal(0));
-    const due = payment.tableSessionId
-      ? (
-          await tx.order.aggregate({
-            where: {
-              tableSessionId: payment.tableSessionId,
-              status: { not: OrderStatus.CANCELLED },
-            },
-            _sum: { totalAmount: true },
-          })
-        )._sum.totalAmount
-      : (
-          await tx.order.findUniqueOrThrow({
-            where: { id: payment.orderId! },
-            select: { totalAmount: true },
-          })
-        ).totalAmount;
-    if (!due || paid.add(payment.amount).greaterThan(due)) {
-      throw new ConflictException('Payment amount exceeds the remaining balance');
-    }
   }
 }

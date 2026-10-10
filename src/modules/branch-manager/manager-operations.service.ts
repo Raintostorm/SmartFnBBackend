@@ -99,6 +99,20 @@ export class ManagerOperationsService {
               },
             ]
           : []),
+        ...(query.paymentRecordStatus
+          ? [
+              {
+                OR: [
+                  { payments: { some: { status: query.paymentRecordStatus } } },
+                  {
+                    tableSession: {
+                      payments: { some: { status: query.paymentRecordStatus } },
+                    },
+                  },
+                ],
+              },
+            ]
+          : []),
       ],
     };
     const [items, total] = await this.prisma.$transaction([

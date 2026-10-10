@@ -88,15 +88,14 @@ export class PaymentsController {
     return result;
   }
 
-  @Roles(AppRole.MANAGER, AppRole.CASHIER)
+  @Roles(AppRole.MANAGER)
   @Post('payments/:paymentId/confirm')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Confirm cash or MANAGER-only manual non-cash payment',
+    summary: 'Manually confirm a pending or mismatched bank transfer (MANAGER only)',
     description:
-      'CASHIER can only confirm CASH. MANAGER must supply reason and receivedAmount for non-cash. ' +
-      'An amount mismatch settles the expected payment amount under Manager responsibility; the actual receipt and variance remain audited. ' +
-      'Confirmation, actor, time, audit and counter preparation queue are committed together.',
+      'BM-05: receivedAmount must cover the expected amount. Confirmation, call number, ' +
+      'preparation units, tracking link, print jobs and audit are committed together.',
   })
   @ApiUuidPath('paymentId', 'Pending payment to confirm')
   @ApiOkResponse({ type: PaymentResponseDto })
@@ -106,14 +105,7 @@ export class PaymentsController {
     @Body() dto: ConfirmPaymentDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    const result = await this.service.confirm(paymentId, dto, user);
-    const branchId = result.tableSession?.branchId ?? result.order?.branchId;
-    if (branchId) {
-      this.realtime.branch(branchId, 'payment.confirmed', { id: result.id, status: result.status });
-      if (result.order?.type === 'COUNTER_PICKUP')
-        this.realtime.branch(branchId, 'preparation.order.queued', { orderId: result.orderId });
-    }
-    return result;
+    return this.service.confirm(paymentId, dto, user);
   }
 
   @Roles(AppRole.OWNER, AppRole.MANAGER, AppRole.CASHIER)
