@@ -54,7 +54,9 @@ interface TimeseriesRow {
   /** Already formatted as YYYY-MM-DD by Postgres, so no driver timezone guessing. */
   bucket: string;
   order_count: bigint;
-  revenue: string;
+  gross_revenue: string;
+  refund_amount: string;
+  net_revenue: string;
 }
 
 /**
@@ -80,7 +82,7 @@ export class ReportsService {
       return this.emptyReport(scope);
     }
 
-    const [revenueRows, guestRows] = await Promise.all([
+    const [revenueRows, guestRows, refundRows] = await Promise.all([
       this.prisma.order.groupBy({
         by: ['branchId'],
         where: this.completedOrdersWhere(scope),
@@ -93,20 +95,47 @@ export class ReportsService {
         _sum: { guestCount: true },
         _count: { _all: true },
       }),
+      this.prisma.$queryRaw<
+        Array<{
+          branch_id: string;
+          refund_amount: string;
+          pending_refund_amount: string;
+          paid_cancellation_count: bigint;
+        }>
+      >`
+        SELECT o.branch_id,
+          COALESCE(SUM(r.amount),0)::text AS refund_amount,
+          COALESCE(SUM(r.amount) FILTER (WHERE r.status = 'PENDING'),0)::text AS pending_refund_amount,
+          COUNT(DISTINCT r.order_id) AS paid_cancellation_count
+        FROM refunds r JOIN orders o ON o.id = r.order_id
+        WHERE o.branch_id = ANY(${scope.branchIds}::uuid[])
+          AND r.cancellation_date >= ${scope.fromDate}::date
+          AND r.cancellation_date <= ${scope.toDate}::date
+        GROUP BY o.branch_id
+      `,
     ]);
 
     const revenueByBranch = new Map(revenueRows.map((row) => [row.branchId, row]));
     const guestsByBranch = new Map(guestRows.map((row) => [row.branchId, row]));
+    const refundsByBranch = new Map(refundRows.map((row) => [row.branch_id, row]));
 
     const branches = scope.branches.map((branch) => {
       const revenue = revenueByBranch.get(branch.id);
       const guests = guestsByBranch.get(branch.id);
       const totalRevenue = revenue?._sum.totalAmount ?? new Prisma.Decimal(0);
+      const refunds = refundsByBranch.get(branch.id);
+      const refundAmount = new Prisma.Decimal(refunds?.refund_amount ?? 0);
+      const netRevenue = totalRevenue.sub(refundAmount);
       const orderCount = revenue?._count._all ?? 0;
 
       return {
         branch,
-        revenue: this.money(totalRevenue),
+        revenue: this.money(netRevenue),
+        grossRevenue: this.money(totalRevenue),
+        refundAmount: this.money(refundAmount),
+        pendingRefundAmount: this.money(new Prisma.Decimal(refunds?.pending_refund_amount ?? 0)),
+        netRevenue: this.money(netRevenue),
+        paidCancellationCount: Number(refunds?.paid_cancellation_count ?? 0),
         discount: this.money(revenue?._sum.discountAmount ?? new Prisma.Decimal(0)),
         orderCount,
         averageOrderValue: this.money(
@@ -123,6 +152,16 @@ export class ReportsService {
       range: this.describeRange(scope),
       totals: {
         revenue: this.sumMoney(branches.map(({ revenue }) => revenue)),
+        grossRevenue: this.sumMoney(branches.map(({ grossRevenue }) => grossRevenue)),
+        refundAmount: this.sumMoney(branches.map(({ refundAmount }) => refundAmount)),
+        pendingRefundAmount: this.sumMoney(
+          branches.map(({ pendingRefundAmount }) => pendingRefundAmount),
+        ),
+        netRevenue: this.sumMoney(branches.map(({ netRevenue }) => netRevenue)),
+        paidCancellationCount: branches.reduce(
+          (total, { paidCancellationCount }) => total + paidCancellationCount,
+          0,
+        ),
         orderCount: branches.reduce((total, { orderCount }) => total + orderCount, 0),
         guestCount: branches.reduce((total, { guestCount }) => total + guestCount, 0),
       },
@@ -139,21 +178,32 @@ export class ReportsService {
 
     const unit = TRUNC_UNIT[query.granularity];
     const rows = await this.prisma.$queryRaw<TimeseriesRow[]>`
-      SELECT
-        o."branch_id" AS branch_id,
-        to_char(
-          date_trunc(${unit}, o."paid_at" AT TIME ZONE ${scope.timezone}),
-          'YYYY-MM-DD'
-        ) AS bucket,
-        COUNT(*) AS order_count,
-        COALESCE(SUM(o."total_amount"), 0)::text AS revenue
-      FROM "orders" o
-      WHERE o."branch_id" = ANY(${scope.branchIds}::uuid[])
-        AND o."payment_status" = ${OrderPaymentStatus.PAID}::"OrderPaymentStatus"
-        AND o."paid_at" >= ${scope.from}
-        AND o."paid_at" < ${scope.to}
-      GROUP BY 1, 2
-      ORDER BY 2 ASC, 1 ASC
+      WITH sales AS (
+        SELECT o.branch_id,
+          date_trunc(${unit}, o.paid_at AT TIME ZONE ${scope.timezone}) AS bucket,
+          COUNT(*) AS order_count, SUM(o.total_amount) AS gross_revenue
+        FROM orders o WHERE o.branch_id = ANY(${scope.branchIds}::uuid[])
+          AND o.payment_status = ${OrderPaymentStatus.PAID}::"OrderPaymentStatus"
+          AND o.paid_at >= ${scope.from} AND o.paid_at < ${scope.to}
+        GROUP BY 1,2
+      ), refunds_by_bucket AS (
+        SELECT o.branch_id, date_trunc(${unit}, r.cancellation_date::timestamp) AS bucket,
+          SUM(r.amount) AS refund_amount
+        FROM refunds r JOIN orders o ON o.id=r.order_id
+        WHERE o.branch_id = ANY(${scope.branchIds}::uuid[])
+          AND r.cancellation_date >= ${scope.fromDate}::date
+          AND r.cancellation_date <= ${scope.toDate}::date
+        GROUP BY 1,2
+      )
+      SELECT COALESCE(s.branch_id,r.branch_id) AS branch_id,
+        to_char(COALESCE(s.bucket,r.bucket),'YYYY-MM-DD') AS bucket,
+        COALESCE(s.order_count,0) AS order_count,
+        COALESCE(s.gross_revenue,0)::text AS gross_revenue,
+        COALESCE(r.refund_amount,0)::text AS refund_amount,
+        (COALESCE(s.gross_revenue,0)-COALESCE(r.refund_amount,0))::text AS net_revenue
+      FROM sales s FULL OUTER JOIN refunds_by_bucket r
+        ON r.branch_id=s.branch_id AND r.bucket=s.bucket
+      ORDER BY 2 ASC,1 ASC
     `;
 
     const bucketKeys = this.buildBucketKeys(scope, query.granularity);
@@ -175,7 +225,10 @@ export class ReportsService {
           const row = series?.get(bucket);
           return {
             bucket,
-            revenue: row ? this.money(new Prisma.Decimal(row.revenue)) : '0.00',
+            revenue: row ? this.money(new Prisma.Decimal(row.net_revenue)) : '0.00',
+            grossRevenue: row ? this.money(new Prisma.Decimal(row.gross_revenue)) : '0.00',
+            refundAmount: row ? this.money(new Prisma.Decimal(row.refund_amount)) : '0.00',
+            netRevenue: row ? this.money(new Prisma.Decimal(row.net_revenue)) : '0.00',
             orderCount: row ? Number(row.order_count) : 0,
           };
         });
@@ -183,6 +236,9 @@ export class ReportsService {
           branch,
           points,
           total: this.sumMoney(points.map(({ revenue }) => revenue)),
+          grossTotal: this.sumMoney(points.map(({ grossRevenue }) => grossRevenue)),
+          refundTotal: this.sumMoney(points.map(({ refundAmount }) => refundAmount)),
+          netTotal: this.sumMoney(points.map(({ netRevenue }) => netRevenue)),
           orderCount: points.reduce((total, { orderCount }) => total + orderCount, 0),
         };
       }),
@@ -490,7 +546,17 @@ export class ReportsService {
   private emptyReport(scope: ReportScope) {
     return {
       range: this.describeRange(scope),
-      totals: { revenue: '0.00', orderCount: 0, guestCount: 0, sessionCount: 0 },
+      totals: {
+        revenue: '0.00',
+        grossRevenue: '0.00',
+        refundAmount: '0.00',
+        pendingRefundAmount: '0.00',
+        netRevenue: '0.00',
+        paidCancellationCount: 0,
+        orderCount: 0,
+        guestCount: 0,
+        sessionCount: 0,
+      },
       branches: [],
     };
   }

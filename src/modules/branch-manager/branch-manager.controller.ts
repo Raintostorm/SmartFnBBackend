@@ -22,6 +22,7 @@ import { ManagerReportsService } from './manager-reports.service.js';
 import {
   ManagerAuditQueryDto,
   ManagerAvailabilityDto,
+  CancelPaidOrderDto,
   ManagerCreateStaffDto,
   ManagerOrderQueryDto,
   ManagerReportQueryDto,
@@ -31,6 +32,7 @@ import {
   ManagerUpdateStaffDto,
 } from './manager.dto.js';
 import { ApiAuthenticatedOperation } from '../../common/swagger/swagger.decorators.js';
+import { PaidOrderRefundService } from '../payments/paid-order-refund.service.js';
 
 @Roles(AppRole.MANAGER)
 @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
@@ -43,6 +45,7 @@ export class BranchManagerController {
     private readonly operations: ManagerOperationsService,
     private readonly reports: ManagerReportsService,
     private readonly realtime: RealtimePublisher,
+    private readonly refunds: PaidOrderRefundService,
   ) {}
 
   @Get('staff')
@@ -164,6 +167,20 @@ export class BranchManagerController {
   })
   order(@CurrentUser() user: AuthenticatedUser, @Param('orderId', new ParseUUIDPipe()) id: string) {
     return this.operations.order(user, id);
+  }
+
+  @Post('orders/:orderId/cancel-paid')
+  @ApiOperation({
+    summary: 'BM-06: Cancel a paid order or selected lines and record the external refund',
+    description:
+      'Cash is recorded as refunded immediately. Bank transfer creates a pending refund for an Owner or Manager to complete. No PayOS refund is called.',
+  })
+  cancelPaidOrder(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('orderId', new ParseUUIDPipe()) id: string,
+    @Body() dto: CancelPaidOrderDto,
+  ) {
+    return this.refunds.cancelPaidOrder(user, id, dto);
   }
 
   @Get('audit-logs')

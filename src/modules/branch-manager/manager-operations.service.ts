@@ -23,6 +23,34 @@ const paymentSelect = {
   failureReason: true,
   processedBy: { select: actorSelect },
 } satisfies Prisma.PaymentSelect;
+const refundSelect = {
+  id: true,
+  paymentId: true,
+  amount: true,
+  status: true,
+  method: true,
+  source: true,
+  sourceReference: true,
+  reason: true,
+  requestedByUserId: true,
+  requestedByEmployeeId: true,
+  requestedByRole: true,
+  requestedAt: true,
+  completedByUserId: true,
+  completedByEmployeeId: true,
+  completedByRole: true,
+  completedAt: true,
+  cancellationDate: true,
+  note: true,
+  items: {
+    select: {
+      orderItemId: true,
+      quantity: true,
+      refundAmount: true,
+      isWastage: true,
+    },
+  },
+} satisfies Prisma.RefundSelect;
 const summarySelect = {
   id: true,
   orderCode: true,
@@ -38,6 +66,7 @@ const summarySelect = {
   createdByCashier: { select: actorSelect },
   createdByWaiter: { select: actorSelect },
   payments: { select: paymentSelect },
+  refunds: { select: refundSelect, orderBy: { requestedAt: 'asc' } },
   tableSession: { select: { id: true, sessionCode: true, payments: { select: paymentSelect } } },
 } satisfies Prisma.OrderSelect;
 
@@ -78,6 +107,7 @@ export class ManagerOperationsService {
             },
           }
         : {}),
+      ...(query.refundStatus ? { refunds: { some: { status: query.refundStatus } } } : {}),
       AND: [
         ...(search
           ? [
@@ -171,8 +201,9 @@ export class ManagerOperationsService {
     const paymentIds = [...order.payments, ...(order.tableSession?.payments ?? [])].map(
       (p) => p.id,
     );
+    const refundIds = order.refunds.map((refund) => refund.id);
     const audit = await this.prisma.branchAuditLog.findMany({
-      where: { branchId, entityId: { in: [id, ...paymentIds] } },
+      where: { branchId, entityId: { in: [id, ...paymentIds, ...refundIds] } },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
     return { ...order, audit };
