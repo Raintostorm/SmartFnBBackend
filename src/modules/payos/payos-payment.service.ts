@@ -27,6 +27,7 @@ import { PayosCipherService } from './payos-cipher.service.js';
 import { verifyPayosSignature } from './payos-signature.js';
 import { PayosVerificationStore } from './payos-verification.store.js';
 import { CounterPaymentSettlementService } from '../payments/counter-payment-settlement.service.js';
+import { PaidOrderRefundService } from '../payments/paid-order-refund.service.js';
 
 interface PayosWebhook {
   code?: string;
@@ -49,6 +50,7 @@ export class PayosPaymentService {
     private readonly api: PayosApiService,
     private readonly verification: PayosVerificationStore,
     private readonly settlement: CounterPaymentSettlementService,
+    private readonly refunds: PaidOrderRefundService,
   ) {}
 
   async create(user: AuthenticatedUser, orderId: string, dto: CreatePayosPaymentDto) {
@@ -224,7 +226,9 @@ export class PayosPaymentService {
     );
     if (eventResult.duplicate || !eventResult.accepted) return { success: true };
     try {
-      if (eventResult.mismatch) {
+      if (payment.order.status === OrderStatus.CANCELLED) {
+        await this.refunds.recordLatePayosPayment(payment.id, data.amount ?? -1, data.reference);
+      } else if (eventResult.mismatch) {
         await this.settlement.markAmountMismatch(payment.id, data.amount ?? -1, data.reference);
       } else {
         await this.settlement.settle({
@@ -239,6 +243,20 @@ export class PayosPaymentService {
         data: { status: WebhookProcessingStatus.PROCESSED, processedAt: new Date() },
       });
     } catch (error) {
+      if (error instanceof ConflictException) {
+        const current = await this.prisma.payment.findUnique({
+          where: { id: payment.id },
+          select: { order: { select: { status: true } } },
+        });
+        if (current?.order?.status === OrderStatus.CANCELLED) {
+          await this.refunds.recordLatePayosPayment(payment.id, data.amount ?? -1, data.reference);
+          await this.prisma.paymentWebhookEvent.update({
+            where: { id: eventResult.eventId },
+            data: { status: WebhookProcessingStatus.PROCESSED, processedAt: new Date() },
+          });
+          return { success: true };
+        }
+      }
       if (error instanceof ConflictException && error.message === 'PAYMENT_ALREADY_SETTLED') {
         await this.prisma.paymentWebhookEvent.update({
           where: { id: eventResult.eventId },

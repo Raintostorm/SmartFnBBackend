@@ -20,6 +20,8 @@ import {
   OrderType,
   PaymentMethod,
   PaymentStatus,
+  RefundMethod,
+  RefundStatus,
   UserStatus,
 } from '../../generated/prisma/client.js';
 import { AppRole } from '../auth/app-role.enum.js';
@@ -156,6 +158,11 @@ export class ManagerOrderQueryDto extends ManagerPageDto {
   @IsEnum(PaymentStatus)
   paymentRecordStatus?: PaymentStatus;
 
+  @ApiPropertyOptional({ enum: RefundStatus })
+  @IsOptional()
+  @IsEnum(RefundStatus)
+  refundStatus?: RefundStatus;
+
   @ApiPropertyOptional({
     enum: PaymentMethod,
     description: 'Matches payment attempts on the order or its table session',
@@ -168,6 +175,37 @@ export class ManagerOrderQueryDto extends ManagerPageDto {
   @IsOptional()
   @IsEnum(OrderType)
   type?: OrderType;
+}
+
+export class CancelPaidOrderDto {
+  @ApiProperty({ minLength: 3, maxLength: 500 })
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @MinLength(3)
+  @MaxLength(500)
+  reason!: string;
+
+  @ApiProperty({ enum: RefundMethod })
+  @IsEnum(RefundMethod)
+  refundMethod!: RefundMethod;
+
+  @ApiPropertyOptional({
+    type: [String],
+    format: 'uuid',
+    description: 'Omit or send an empty array to cancel the whole order',
+  })
+  @IsOptional()
+  @IsUUID('4', { each: true })
+  orderItemIds?: string[];
+}
+
+export class CompleteRefundDto {
+  @ApiPropertyOptional({ maxLength: 500 })
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @MaxLength(500)
+  note?: string;
 }
 
 export class ManagerReportQueryDto {

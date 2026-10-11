@@ -35,6 +35,8 @@ import {
 } from './dto/payment.dto.js';
 import { PaymentsService } from './payments.service.js';
 import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
+import { PaidOrderRefundService } from './paid-order-refund.service.js';
+import { CompleteRefundDto } from '../branch-manager/manager.dto.js';
 
 @ApiTags('Payments')
 @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
@@ -44,6 +46,7 @@ export class PaymentsController {
   constructor(
     private readonly service: PaymentsService,
     private readonly realtime: RealtimePublisher,
+    private readonly refunds: PaidOrderRefundService,
   ) {}
 
   @Roles(AppRole.OWNER, AppRole.MANAGER, AppRole.CASHIER)
@@ -106,6 +109,22 @@ export class PaymentsController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.service.confirm(paymentId, dto, user);
+  }
+
+  @Roles(AppRole.OWNER, AppRole.MANAGER)
+  @Post('refunds/:refundId/complete')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Mark an external bank-transfer refund as completed',
+    description:
+      'The platform records the action only; it does not transfer money or call a PayOS refund API.',
+  })
+  completeRefund(
+    @Param('refundId', new ParseUUIDPipe()) refundId: string,
+    @Body() dto: CompleteRefundDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.refunds.completeRefund(user, refundId, dto);
   }
 
   @Roles(AppRole.OWNER, AppRole.MANAGER, AppRole.CASHIER)

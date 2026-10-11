@@ -24,28 +24,58 @@ export class ManagerReportsService {
     const bounds = Prisma.sql`bounds AS (SELECT ${from}::date::timestamp AT TIME ZONE ${branch.timezone} AS start_at,
       (${to}::date + 1)::timestamp AT TIME ZONE ${branch.timezone} AS end_at)`;
     const sales = Prisma.sql`sales AS (SELECT o.* FROM orders o, bounds b WHERE o.branch_id = ${branchId}::uuid
-      AND o.payment_status = 'PAID' AND o.status <> 'CANCELLED' AND o.paid_at >= b.start_at AND o.paid_at < b.end_at)`;
+      AND o.payment_status = 'PAID' AND o.paid_at >= b.start_at AND o.paid_at < b.end_at)`;
     const result = await this.prisma.$transaction(
       async (tx) => {
         const [summary] = await tx.$queryRaw<
-          Array<{ revenue: string; orderCount: number; averageOrderValue: string }>
+          Array<{
+            grossRevenue: string;
+            refundAmount: string;
+            pendingRefundAmount: string;
+            netRevenue: string;
+            revenue: string;
+            orderCount: number;
+            averageOrderValue: string;
+          }>
         >`
-        WITH ${bounds}, ${sales}
-        SELECT COALESCE(SUM(total_amount),0)::text AS revenue, COUNT(*)::int AS "orderCount",
-          COALESCE(ROUND(AVG(total_amount),2),0)::text AS "averageOrderValue" FROM sales`;
+        WITH ${bounds}, ${sales}, refund_totals AS (
+          SELECT COALESCE(SUM(r.amount),0) AS total,
+            COALESCE(SUM(r.amount) FILTER (WHERE r.status = 'PENDING'),0) AS pending
+          FROM refunds r JOIN orders o ON o.id = r.order_id, bounds b
+          WHERE o.branch_id = ${branchId}::uuid AND r.cancellation_date >= ${from}::date
+            AND r.cancellation_date <= ${to}::date
+        ), sale_totals AS (
+          SELECT COALESCE(SUM(total_amount),0) AS gross, COUNT(*)::int AS orders,
+            COALESCE(ROUND(AVG(total_amount),2),0) AS average FROM sales
+        ) SELECT st.gross::text AS "grossRevenue",
+          rt.total::text AS "refundAmount", rt.pending::text AS "pendingRefundAmount",
+          (st.gross - rt.total)::text AS "netRevenue", (st.gross - rt.total)::text AS revenue,
+          st.orders AS "orderCount",
+          st.average::text AS "averageOrderValue" FROM sale_totals st CROSS JOIN refund_totals rt`;
         const revenue = await tx.$queryRaw`
         WITH ${bounds}, ${sales}, buckets AS (
           SELECT generate_series(date_trunc(${query.granularity}, ${from}::date::timestamp),
             date_trunc(${query.granularity}, ${to}::date::timestamp), ('1 ' || ${query.granularity})::interval) AS bucket
-        ) SELECT to_char(b.bucket,'YYYY-MM-DD') AS bucket, COALESCE(SUM(s.total_amount),0)::text AS revenue,
-          COUNT(s.id)::int AS "orderCount" FROM buckets b
-          LEFT JOIN sales s ON date_trunc(${query.granularity}, s.paid_at AT TIME ZONE ${branch.timezone}) = b.bucket
-          GROUP BY b.bucket ORDER BY b.bucket`;
+        ), sale_totals AS (
+          SELECT date_trunc(${query.granularity}, s.paid_at AT TIME ZONE ${branch.timezone}) AS bucket,
+            SUM(s.total_amount) AS gross, COUNT(s.id)::int AS orders FROM sales s GROUP BY 1
+        ), refund_totals AS (
+          SELECT date_trunc(${query.granularity}, r.cancellation_date::timestamp) AS bucket,
+            SUM(r.amount) AS refunds FROM refunds r JOIN orders o ON o.id = r.order_id
+          WHERE o.branch_id = ${branchId}::uuid AND r.cancellation_date >= ${from}::date
+            AND r.cancellation_date <= ${to}::date GROUP BY 1
+        ) SELECT to_char(b.bucket,'YYYY-MM-DD') AS bucket,
+          COALESCE(s.gross,0)::text AS "grossRevenue", COALESCE(r.refunds,0)::text AS "refundAmount",
+          (COALESCE(s.gross,0)-COALESCE(r.refunds,0))::text AS "netRevenue",
+          (COALESCE(s.gross,0)-COALESCE(r.refunds,0))::text AS revenue,
+          COALESCE(s.orders,0)::int AS "orderCount" FROM buckets b
+          LEFT JOIN sale_totals s ON s.bucket = b.bucket LEFT JOIN refund_totals r ON r.bucket = b.bucket
+          ORDER BY b.bucket`;
         const payments = await tx.$queryRaw`
         WITH ${bounds} SELECT p.method, SUM(p.amount)::text AS "settledAmount",
           SUM(COALESCE(p.received_amount,p.amount))::text AS "receivedAmount", COUNT(*)::int AS "paymentCount"
         FROM payments p, bounds b WHERE p.status = 'SUCCESS' AND p.paid_at >= b.start_at AND p.paid_at < b.end_at
-          AND (EXISTS (SELECT 1 FROM orders o WHERE o.id = p.order_id AND o.branch_id = ${branchId}::uuid AND o.status <> 'CANCELLED')
+          AND (EXISTS (SELECT 1 FROM orders o WHERE o.id = p.order_id AND o.branch_id = ${branchId}::uuid)
             OR EXISTS (SELECT 1 FROM table_sessions s WHERE s.id = p.table_session_id AND s.branch_id = ${branchId}::uuid))
         GROUP BY p.method ORDER BY p.method`;
         const topItems = await tx.$queryRaw`
@@ -88,12 +118,28 @@ export class ManagerReportsService {
             AND i.started_at IS NOT NULL AND i.completed_at >= i.started_at AND i.status <> 'CANCELLED' AND o.status <> 'CANCELLED'
             AND NOT EXISTS (SELECT 1 FROM order_item_units u WHERE u.order_item_id = i.id)
         ) SELECT ROUND(AVG(seconds),2)::float8 AS "averageSeconds", COUNT(*)::int AS "completedUnits" FROM durations`;
-        const [cancellations] = await tx.$queryRaw<Array<{ total: number }>>`
-        WITH ${bounds} SELECT COUNT(*)::int AS total FROM orders o,bounds b WHERE o.branch_id = ${branchId}::uuid
-          AND o.status = 'CANCELLED' AND o.cancelled_at >= b.start_at AND o.cancelled_at < b.end_at`;
+        const [cancellations] = await tx.$queryRaw<
+          Array<{
+            total: number;
+            paidCancellationCount: number;
+            refundAmount: string;
+            pendingRefundAmount: string;
+          }>
+        >`
+        WITH ${bounds}, cancelled AS (
+          SELECT COUNT(*)::int AS total FROM orders o,bounds b WHERE o.branch_id=${branchId}::uuid
+            AND o.status='CANCELLED' AND o.cancelled_at>=b.start_at AND o.cancelled_at<b.end_at
+        ), paid AS (
+          SELECT COUNT(DISTINCT r.order_id)::int AS count, COALESCE(SUM(r.amount),0) AS refunds,
+            COALESCE(SUM(r.amount) FILTER (WHERE r.status='PENDING'),0) AS pending
+          FROM refunds r JOIN orders o ON o.id=r.order_id WHERE o.branch_id=${branchId}::uuid
+            AND r.cancellation_date>=${from}::date AND r.cancellation_date<=${to}::date
+        ) SELECT c.total,p.count AS "paidCancellationCount",p.refunds::text AS "refundAmount",
+          p.pending::text AS "pendingRefundAmount" FROM cancelled c CROSS JOIN paid p`;
         const cancelledOrders = await tx.$queryRaw`
         WITH ${bounds} SELECT o.id,o.order_code AS "orderCode",o.call_number AS "callNumber",o.total_amount::text AS "totalAmount",
-          o.cancelled_at AS "cancelledAt",o.cancellation_reason AS reason,o.cancelled_by_id AS "cancelledById"
+          o.cancelled_at AS "cancelledAt",o.cancellation_reason AS reason,o.cancelled_by_id AS "cancelledById",
+          COALESCE((SELECT SUM(r.amount) FROM refunds r WHERE r.order_id=o.id),0)::text AS "refundAmount"
         FROM orders o,bounds b WHERE o.branch_id = ${branchId}::uuid AND o.status = 'CANCELLED'
           AND o.cancelled_at >= b.start_at AND o.cancelled_at < b.end_at ORDER BY o.cancelled_at DESC,o.id LIMIT ${query.limit}`;
         return {

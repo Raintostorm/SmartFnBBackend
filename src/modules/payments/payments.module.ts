@@ -5,11 +5,12 @@ import { PaymentsService } from './payments.service.js';
 import { RealtimeModule } from '../../realtime/realtime.module.js';
 import { OrderTrackingModule } from '../order-tracking/order-tracking.module.js';
 import { CounterPaymentSettlementService } from './counter-payment-settlement.service.js';
+import { PaidOrderRefundService } from './paid-order-refund.service.js';
 
 @Module({
   imports: [BranchesModule, RealtimeModule, OrderTrackingModule],
   controllers: [PaymentsController],
-  providers: [PaymentsService, CounterPaymentSettlementService],
-  exports: [CounterPaymentSettlementService],
+  providers: [PaymentsService, CounterPaymentSettlementService, PaidOrderRefundService],
+  exports: [CounterPaymentSettlementService, PaidOrderRefundService],
 })
 export class PaymentsModule {}

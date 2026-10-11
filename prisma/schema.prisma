@@ -115,6 +115,22 @@ enum PrintJobStatus {
   PENDING
   PRINTED
   FAILED
+  CANCELLED
+}
+
+enum RefundStatus {
+  PENDING
+  COMPLETED
+}
+
+enum RefundMethod {
+  CASH
+  BANK_TRANSFER
+}
+
+enum RefundSource {
+  MANAGER_CANCELLATION
+  LATE_PAYMENT
 }
 
 enum OrderStatus {
@@ -1046,6 +1062,7 @@ model Order {
   printJobs        PrintJob[]
   displaySessions  CustomerDisplaySession[]
   trackingToken    OrderTrackingToken?
+  refunds          Refund[]
 
   @@unique([branchId, businessDate, callNumber])
   @@index([branchId, placedAt])
@@ -1109,6 +1126,7 @@ model OrderItem {
   servingTask        ServingTask?
   invoiceItems       InvoiceItem[]
   units              OrderItemUnit[]
+  refundItems        RefundItem[]
 
   @@index([orderId, status])
   @@index([menuItemId])
@@ -1174,6 +1192,7 @@ model Payment {
   station       PosStation?           @relation(fields: [stationId], references: [id], onDelete: SetNull)
   invoiceLinks  InvoicePayment[]
   webhookEvents PaymentWebhookEvent[]
+  refunds       Refund[]
 
   @@index([orderId, status])
   @@index([tableSessionId, status])
@@ -1181,6 +1200,55 @@ model Payment {
   @@index([stationId])
   @@index([transactionRef])
   @@map("payments")
+}
+
+model Refund {
+  id                    String       @id @default(uuid()) @db.Uuid
+  orderId               String       @map("order_id") @db.Uuid
+  paymentId             String       @map("payment_id") @db.Uuid
+  amount                Decimal      @db.Decimal(14, 2)
+  status                RefundStatus @default(PENDING)
+  method                RefundMethod
+  source                RefundSource @default(MANAGER_CANCELLATION)
+  sourceReference       String?      @unique @map("source_reference") @db.VarChar(255)
+  reason                String       @db.VarChar(500)
+  requestedByUserId     String?      @map("requested_by_user_id") @db.Uuid
+  requestedByEmployeeId String?      @map("requested_by_employee_id") @db.Uuid
+  requestedByRole       String       @map("requested_by_role") @db.VarChar(50)
+  requestedAt           DateTime     @default(now()) @map("requested_at") @db.Timestamptz(6)
+  completedByUserId     String?      @map("completed_by_user_id") @db.Uuid
+  completedByEmployeeId String?      @map("completed_by_employee_id") @db.Uuid
+  completedByRole       String?      @map("completed_by_role") @db.VarChar(50)
+  completedAt           DateTime?    @map("completed_at") @db.Timestamptz(6)
+  cancellationDate      DateTime     @map("cancellation_date") @db.Date
+  note                  String?      @db.VarChar(500)
+  createdAt             DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  order   Order        @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  payment Payment      @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  items   RefundItem[]
+
+  @@index([orderId, status])
+  @@index([paymentId, status])
+  @@index([cancellationDate, status])
+  @@map("refunds")
+}
+
+model RefundItem {
+  id           String  @id @default(uuid()) @db.Uuid
+  refundId     String  @map("refund_id") @db.Uuid
+  orderItemId  String  @map("order_item_id") @db.Uuid
+  quantity     Int
+  refundAmount Decimal @map("refund_amount") @db.Decimal(14, 2)
+  isWastage    Boolean @default(false) @map("is_wastage")
+
+  refund    Refund    @relation(fields: [refundId], references: [id], onDelete: Cascade)
+  orderItem OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+
+  @@unique([orderItemId])
+  @@index([refundId])
+  @@map("refund_items")
 }
 
 // Immutable actor identifiers survive account archival. No API updates or deletes these rows.

@@ -135,6 +135,7 @@ describe('V9 PayOS channel credentials', () => {
       {},
       store,
       {},
+      {},
     );
     await assert.doesNotReject(
       service.webhook(webhookCode, {
@@ -183,6 +184,7 @@ describe('V9 PayOS channel credentials', () => {
         },
       },
       { get: () => null },
+      {},
       {},
     );
     await assert.rejects(
@@ -241,6 +243,7 @@ describe('V9 PayOS channel credentials', () => {
           mismatch = args;
         },
       },
+      {},
     );
     await service.webhook(webhookCode, {
       code: '00',
@@ -288,6 +291,7 @@ describe('V9 PayOS channel credentials', () => {
           };
         },
       },
+      {},
     );
     const result = await service.recheck(
       { employeeId: 'cashier-id', branchId: 'branch-id' },
@@ -297,6 +301,65 @@ describe('V9 PayOS channel credentials', () => {
     assert.equal(settlementInput.receivedAmount, 50_000);
     assert.equal(result.status, 'SUCCESS');
     assert.equal(result.tracking.token, 'token');
+  });
+
+  it('records a late PayOS payment as a refund when the order is already cancelled', async () => {
+    const webhookCode = '123e4567-e89b-12d3-a456-426614174000';
+    const data = { orderCode: 123, amount: 50_000, reference: 'late-bank-ref' };
+    let latePayment;
+    let eventStatus;
+    const payment = {
+      id: 'payment-id',
+      status: 'FAILED',
+      amount: new Prisma.Decimal(50_000),
+      order: {
+        id: 'order-id',
+        status: 'CANCELLED',
+        branch: { chainId: 'chain-id' },
+      },
+    };
+    const service = new PayosPaymentService(
+      {
+        payosChannel: {
+          findUnique: async () => ({
+            chainId: 'chain-id',
+            checksumKeyCipher: cipher.encrypt('checksum'),
+          }),
+        },
+        payment: { findUnique: async () => payment },
+        paymentWebhookEvent: {
+          update: async ({ data: update }) => {
+            eventStatus = update.status;
+          },
+        },
+        $transaction: async (work) =>
+          work({
+            paymentWebhookEvent: {
+              findUnique: async () => null,
+              create: async () => ({ id: 'event-id' }),
+              update: async () => ({}),
+            },
+          }),
+      },
+      {},
+      cipher,
+      {},
+      { get: () => null },
+      { settle: async () => assert.fail('a cancelled order must not be restored') },
+      {
+        recordLatePayosPayment: async (...args) => {
+          latePayment = args;
+        },
+      },
+    );
+    await service.webhook(webhookCode, {
+      code: '00',
+      success: true,
+      data,
+      signature: payosSignature(data, 'checksum'),
+    });
+    assert.deepEqual(latePayment, ['payment-id', 50_000, 'late-bank-ref']);
+    assert.equal(eventStatus, 'PROCESSED');
   });
 
   it('stores encrypted values and never returns them to the owner', async () => {
