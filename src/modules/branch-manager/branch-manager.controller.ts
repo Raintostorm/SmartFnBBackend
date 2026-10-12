@@ -110,6 +110,17 @@ export class BranchManagerController {
     return this.staff.resetPassword(user, id, dto);
   }
 
+  @Post('staff/:employeeId/invitation/cancel')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Cancel an unused Cashier/Barista account invitation' })
+  cancelInvitation(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('employeeId', new ParseUUIDPipe()) id: string,
+    @Body() dto: ManagerResetPasswordDto,
+  ) {
+    return this.staff.cancelInvitation(user, id, dto.reason);
+  }
+
   @Get('menu-options')
   @ApiOperation({ summary: 'BM-02: List chain options and branch/effective availability' })
   options(@CurrentUser() user: AuthenticatedUser) {

@@ -34,7 +34,20 @@ const staffSelect = {
   hireDate: true,
   status: true,
   user: {
-    select: { id: true, email: true, phone: true, status: true, role: { select: { code: true } } },
+    select: {
+      id: true,
+      email: true,
+      phone: true,
+      status: true,
+      lastLoginAt: true,
+      role: { select: { code: true } },
+      passwordSetupTokens: {
+        where: { usedAt: null },
+        orderBy: { createdAt: 'desc' as const },
+        take: 1,
+        select: { expiresAt: true },
+      },
+    },
   },
 } satisfies Prisma.EmployeeSelect;
 
@@ -94,12 +107,17 @@ export class ManagerStaffService {
       }),
       this.prisma.employee.count({ where }),
     ]);
-    return { items, total, page: query.page, limit: query.limit };
+    return {
+      items: items.map((item) => this.response(item)),
+      total,
+      page: query.page,
+      limit: query.limit,
+    };
   }
 
   async get(user: AuthenticatedUser, id: string) {
     const { branchId } = await this.scope(user);
-    return this.target(this.prisma, branchId, id);
+    return this.response(await this.target(this.prisma, branchId, id));
   }
 
   private async target(tx: Prisma.TransactionClient, branchId: string, id: string) {
@@ -198,15 +216,15 @@ export class ManagerStaffService {
       return { account: created, emailId: email.id };
     });
     const emailStatus = await this.emails.deliver(invitation.emailId);
-    return { ...invitation.account, invitationExpiresAt: expiresAt, emailStatus };
+    return { ...this.response(invitation.account), invitationExpiresAt: expiresAt, emailStatus };
   }
 
   async update(user: AuthenticatedUser, id: string, dto: ManagerUpdateStaffDto) {
     const { branchId } = await this.scope(user, true);
     if (!Object.values(dto).some((value) => value !== undefined))
       throw new BadRequestException('Provide at least one field');
-    if (Object.values(dto).some((value) => value === null))
-      throw new BadRequestException('Null fields are not supported');
+    if (Object.entries(dto).some(([field, value]) => value === null && field !== 'phone'))
+      throw new BadRequestException('Only phone can be cleared with null');
     if (dto.role && !staffRoles.includes(dto.role))
       throw new BadRequestException('Only CASHIER and BARISTA roles are allowed');
     return this.mutate(async (tx) => {
@@ -226,7 +244,7 @@ export class ManagerStaffService {
           user: {
             update: {
               email: dto.email?.trim().toLowerCase(),
-              phone: dto.phone?.trim(),
+              phone: dto.phone === null ? null : dto.phone?.trim(),
               roleId: role?.id,
             },
           },
@@ -241,7 +259,7 @@ export class ManagerStaffService {
         before: this.snapshot(old),
         after: this.snapshot(updated),
       });
-      return updated;
+      return this.response(updated);
     });
   }
 
@@ -259,7 +277,29 @@ export class ManagerStaffService {
         before: { status: old.user.status },
         after: { status: dto.status },
       });
-      return this.target(tx, branchId, id);
+      return this.response(await this.target(tx, branchId, id));
+    });
+  }
+
+  async cancelInvitation(user: AuthenticatedUser, id: string, reason: string) {
+    const { branchId } = await this.scope(user, true);
+    return this.mutate(async (tx) => {
+      const staff = await this.target(tx, branchId, id);
+      if (staff.user.status !== UserStatus.INACTIVE) {
+        throw new ConflictException('Only an inactive invitation can be cancelled');
+      }
+      const cancelled = await tx.passwordSetupToken.updateMany({
+        where: { userId: staff.user.id, usedAt: null },
+        data: { usedAt: new Date() },
+      });
+      if (!cancelled.count) throw new ConflictException('No active invitation was found');
+      await writeBranchAudit(tx, user, {
+        action: 'STAFF_INVITATION_CANCELLED',
+        entityType: 'EMPLOYEE',
+        entityId: id,
+        reason,
+      });
+      return { employeeId: id, invitationStatus: 'DEACTIVATED' };
     });
   }
 
@@ -328,6 +368,22 @@ export class ManagerStaffService {
       role: staff.user.role.code,
       status: staff.user.status,
     };
+  }
+
+  private response(staff: Prisma.EmployeeGetPayload<{ select: typeof staffSelect }>) {
+    const { passwordSetupTokens, ...user } = staff.user;
+    const invitationExpiresAt = passwordSetupTokens?.[0]?.expiresAt ?? null;
+    const invitationStatus =
+      user.status === UserStatus.ACTIVE
+        ? 'ACTIVE'
+        : user.status === UserStatus.SUSPENDED
+          ? 'SUSPENDED'
+          : invitationExpiresAt && invitationExpiresAt > new Date()
+            ? 'INVITED'
+            : invitationExpiresAt
+              ? 'INVITATION_EXPIRED'
+              : 'DEACTIVATED';
+    return { ...staff, user, invitationStatus, invitationExpiresAt };
   }
 
   private revoke(tx: Prisma.TransactionClient, userId: string) {

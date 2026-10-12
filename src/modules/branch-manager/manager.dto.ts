@@ -37,7 +37,16 @@ export class ManagerCreateStaffDto extends OmitType(CreateStaffDto, [
   role!: AppRole.CASHIER | AppRole.BARISTA;
 }
 
-export class ManagerUpdateStaffDto extends PartialType(ManagerCreateStaffDto) {}
+class ManagerUpdateStaffBaseDto extends OmitType(PartialType(ManagerCreateStaffDto), [
+  'phone',
+] as const) {}
+
+export class ManagerUpdateStaffDto extends ManagerUpdateStaffBaseDto {
+  @ApiPropertyOptional({ nullable: true, example: '+84901234567' })
+  @IsOptional()
+  @IsString()
+  phone?: string | null;
+}
 
 export class ManagerResetPasswordDto {
   @ApiProperty({ minLength: 3, maxLength: 500 })

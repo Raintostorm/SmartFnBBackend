@@ -14,7 +14,11 @@ const paymentSelect = {
   provider: true,
   status: true,
   amount: true,
+  tenderedAmount: true,
+  changeAmount: true,
   receivedAmount: true,
+  expiresAt: true,
+  stationId: true,
   transactionRef: true,
   confirmationReason: true,
   confirmedAt: true,
@@ -22,6 +26,7 @@ const paymentSelect = {
   createdAt: true,
   failureReason: true,
   processedBy: { select: actorSelect },
+  station: { select: { id: true, name: true, status: true } },
 } satisfies Prisma.PaymentSelect;
 const refundSelect = {
   id: true,
@@ -204,11 +209,55 @@ export class ManagerOperationsService {
       (p) => p.id,
     );
     const refundIds = order.refunds.map((refund) => refund.id);
-    const audit = await this.prisma.branchAuditLog.findMany({
-      where: { branchId, entityId: { in: [id, ...paymentIds, ...refundIds] } },
-      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    });
-    return { ...order, audit };
+    const actorUserIds = [
+      ...new Set(
+        order.refunds.flatMap((refund) =>
+          [refund.requestedByUserId, refund.completedByUserId].filter(
+            (userId): userId is string => userId !== null,
+          ),
+        ),
+      ),
+    ];
+    const [audit, actorUsers] = await Promise.all([
+      this.prisma.branchAuditLog.findMany({
+        where: { branchId, entityId: { in: [id, ...paymentIds, ...refundIds] } },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      }),
+      actorUserIds.length
+        ? this.prisma.user.findMany({
+            where: { id: { in: actorUserIds } },
+            select: {
+              id: true,
+              email: true,
+              employee: { select: actorSelect },
+              owner: { select: { id: true, ownerCode: true, firstName: true, lastName: true } },
+            },
+          })
+        : [],
+    ]);
+    const actors = new Map(
+      actorUsers.map((actor) => [
+        actor.id,
+        {
+          id: actor.id,
+          email: actor.email,
+          profile: actor.employee ?? actor.owner,
+        },
+      ]),
+    );
+    return {
+      ...order,
+      refunds: order.refunds.map((refund) => ({
+        ...refund,
+        requestedBy: refund.requestedByUserId
+          ? (actors.get(refund.requestedByUserId) ?? null)
+          : null,
+        completedBy: refund.completedByUserId
+          ? (actors.get(refund.completedByUserId) ?? null)
+          : null,
+      })),
+      audit,
+    };
   }
 
   async audit(user: AuthenticatedUser, query: ManagerAuditQueryDto) {
