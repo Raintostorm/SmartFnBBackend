@@ -48,9 +48,11 @@ cp .env.example .env # PowerShell: Copy-Item .env.example .env
 pnpm docker:up
 ```
 
-Lệnh này build NestJS bằng Node.js 24, khởi động cả API và PostgreSQL, chạy Prisma
-migration/seed tự động rồi mở API tại `http://localhost:3100`. Xem log API bằng
-`pnpm docker:logs`.
+Lệnh này build NestJS bằng Node.js 24, khởi động cả API và PostgreSQL, tự chạy Prisma
+migration rồi mở API tại `http://localhost:3100`. Seed demo không chạy khi container khởi
+động lại, nên dữ liệu vận hành và số suất món không bị ghi đè. Khi chủ động tạo dữ liệu mẫu,
+đặt `RUN_DEMO_SEED=true` cho đúng một lần chạy hoặc chạy `pnpm prisma:seed` thủ công. Xem log
+API bằng `pnpm docker:logs`.
 
 Docker chỉ là một lựa chọn cho môi trường local; deploy Render không cần Docker.
 
