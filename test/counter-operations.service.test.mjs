@@ -508,6 +508,7 @@ describe('V9 counter operations', () => {
   it('marks paid queued items out of stock when barista disables a menu item', async () => {
     let unitMutation;
     let itemMutation;
+    let orderMutation;
     const tx = {
       branchMenuItem: { updateMany: async () => ({ count: 1 }) },
       orderItem: {
@@ -526,6 +527,12 @@ describe('V9 counter operations', () => {
           return { count: 2 };
         },
       },
+      order: {
+        updateMany: async (args) => {
+          orderMutation = args;
+          return { count: 1 };
+        },
+      },
     };
     const service = counterService({ $transaction: (callback) => callback(tx) });
     const result = await service.setMenuItemAvailability(barista, 'drink-id', {
@@ -536,5 +543,7 @@ describe('V9 counter operations', () => {
     assert.equal(unitMutation.data.status, 'OUT_OF_STOCK');
     assert.equal(itemMutation.data.status, 'OUT_OF_STOCK');
     assert.equal(itemMutation.data.unavailableById, 'barista-id');
+    assert.equal(orderMutation.data.status, 'REQUIRES_ATTENTION');
+    assert.equal(orderMutation.data.attentionReason, 'PAID_ITEM_OUT_OF_STOCK');
   });
 });

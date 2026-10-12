@@ -17,6 +17,7 @@ Tài liệu này ghi trạng thái triển khai phía Backend theo danh sách FE
 | #60           | Lỗi thanh toán dùng mã ổn định trong trường `error`, gồm `PAYMENT_ALREADY_SETTLED` và `PAYMENT_AMOUNT_INSUFFICIENT`.                                                                           |
 | #62, #63, #64 | Danh sách nhân viên có `lastLoginAt`, trạng thái lời mời và hạn lời mời; có thể huỷ lời mời; `phone: null` xoá số điện thoại.                                                                  |
 | #65, #66      | Đơn cần xử lý có `attentionAt`, `attentionReason`; `GET /manager/orders` hỗ trợ `sortBy` và `sortOrder`.                                                                                       |
+| #67 (hết món) | Barista/Manager tắt món hoặc tùy chọn trong đơn đã trả sẽ chuyển đơn sang `REQUIRES_ATTENTION` và lưu thời điểm/lý do. Cảnh báo chờ xác nhận tay quá lâu còn cần nhóm chốt ngưỡng thời gian.   |
 | #68, #69, #70 | Thu hồi thiết bị ngắt socket đang nối; lỗi token/mã ghép phân biệt rõ; mã ghép công khai giới hạn 10 yêu cầu/phút/IP và tự dọn mã hết hạn/đã dùng.                                             |
 | #71           | Context màn gọi số trả `counts.preparing`, `counts.ready` và `pageLimit`, nên FE tính đúng `+N số khác`.                                                                                       |
 | #73           | Khoản hoàn trả thông tin người yêu cầu và người hoàn (id, tên, email, vai trò).                                                                                                                |
@@ -48,4 +49,4 @@ cho thiết bị cũ; thiết bị mới luôn nhận hạn khi ghép.
 
 - `pnpm prisma validate`
 - `pnpm typecheck`
-- `pnpm test` (139 test)
+- `pnpm test` (140 test)

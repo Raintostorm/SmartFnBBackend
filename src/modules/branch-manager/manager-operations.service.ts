@@ -328,6 +328,8 @@ export class ManagerOperationsService {
               select: { id: true, orderId: true },
             });
         if (items.length) {
+          const now = new Date();
+          const orderIds = [...new Set(items.map((item) => item.orderId))];
           await tx.orderItemUnit.updateMany({
             where: {
               orderItemId: { in: items.map((i) => i.id) },
@@ -339,8 +341,16 @@ export class ManagerOperationsService {
             where: { id: { in: items.map((i) => i.id) } },
             data: {
               status: 'OUT_OF_STOCK',
-              unavailableAt: new Date(),
+              unavailableAt: now,
               unavailableById: employeeId,
+            },
+          });
+          await tx.order.updateMany({
+            where: { id: { in: orderIds } },
+            data: {
+              status: 'REQUIRES_ATTENTION',
+              attentionAt: now,
+              attentionReason: 'PAID_OPTION_OUT_OF_STOCK',
             },
           });
         }
