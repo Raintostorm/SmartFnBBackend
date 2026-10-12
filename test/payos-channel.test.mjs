@@ -303,6 +303,54 @@ describe('V9 PayOS channel credentials', () => {
     assert.equal(result.tracking.token, 'token');
   });
 
+  it('routes a paid recheck after local expiry to manager attention', async () => {
+    const calls = [];
+    const payment = {
+      id: 'payment-id',
+      status: 'PENDING',
+      amount: new Prisma.Decimal(50_000),
+      transactionRef: 'link-id',
+      providerOrderCode: '123',
+      failureReason: null,
+      expiresAt: new Date(Date.now() - 60_000),
+      order: { branch: { chainId: 'chain-id' } },
+    };
+    const service = new PayosPaymentService(
+      {
+        payment: { findFirst: async () => payment },
+        payosChannel: {
+          findUnique: async () => ({
+            clientIdCipher: cipher.encrypt('client'),
+            apiKeyCipher: cipher.encrypt('api'),
+            checksumKeyCipher: cipher.encrypt('checksum'),
+          }),
+        },
+      },
+      {},
+      cipher,
+      { getPayment: async () => ({ status: 'PAID', amountPaid: 50_000, id: 'payos-id' }) },
+      {},
+      {
+        markExpired: async (id) => calls.push(['expired', id]),
+        markLateExpiredPayment: async (...args) => {
+          calls.push(['attention', ...args]);
+          return { id: args[0], status: 'REQUIRES_ATTENTION' };
+        },
+        settle: async () => assert.fail('an expired QR must not queue preparation'),
+      },
+      {},
+    );
+    const result = await service.recheck(
+      { employeeId: 'cashier-id', branchId: 'branch-id' },
+      'payment-id',
+    );
+    assert.deepEqual(calls, [
+      ['expired', 'payment-id'],
+      ['attention', 'payment-id', 50_000, 'payos-id'],
+    ]);
+    assert.equal(result.status, 'REQUIRES_ATTENTION');
+  });
+
   it('records a late PayOS payment as a refund when the order is already cancelled', async () => {
     const webhookCode = '123e4567-e89b-12d3-a456-426614174000';
     const data = { orderCode: 123, amount: 50_000, reference: 'late-bank-ref' };

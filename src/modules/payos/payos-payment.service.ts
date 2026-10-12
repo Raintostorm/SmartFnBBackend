@@ -84,15 +84,16 @@ export class PayosPaymentService {
       }
       return pending;
     }
-    await this.prisma.payment.updateMany({
-      where: {
-        orderId,
-        provider: PaymentProvider.PAYOS,
-        status: PaymentStatus.PENDING,
-        expiresAt: { lte: new Date() },
-      },
-      data: { status: PaymentStatus.FAILED, failureReason: 'PAYOS_EXPIRED' },
-    });
+    const now = new Date();
+    for (const expired of order.payments.filter(
+      (item) =>
+        item.provider === PaymentProvider.PAYOS &&
+        item.status === PaymentStatus.PENDING &&
+        item.expiresAt !== null &&
+        item.expiresAt <= now,
+    )) {
+      await this.settlement.markExpired(expired.id);
+    }
 
     const channel = await this.prisma.payosChannel.findUnique({
       where: { chainId: order.branch.chainId },
@@ -228,6 +229,15 @@ export class PayosPaymentService {
     try {
       if (payment.order.status === OrderStatus.CANCELLED) {
         await this.refunds.recordLatePayosPayment(payment.id, data.amount ?? -1, data.reference);
+      } else if (
+        payment.status === PaymentStatus.EXPIRED ||
+        (payment.status === PaymentStatus.FAILED && payment.failureReason === 'PAYOS_EXPIRED') ||
+        this.isExpired(payment.expiresAt)
+      ) {
+        if (payment.status === PaymentStatus.PENDING) {
+          await this.settlement.markExpired(payment.id);
+        }
+        await this.settlement.markLateExpiredPayment(payment.id, data.amount ?? -1, data.reference);
       } else if (eventResult.mismatch) {
         await this.settlement.markAmountMismatch(payment.id, data.amount ?? -1, data.reference);
       } else {
@@ -279,11 +289,19 @@ export class PayosPaymentService {
   async recheck(user: AuthenticatedUser, paymentId: string) {
     const { payment, credentials } = await this.scopedPayment(user, paymentId);
     if (payment.status === PaymentStatus.SUCCESS) return payment;
+    if (payment.status === PaymentStatus.REQUIRES_ATTENTION) return payment;
+    const legacyExpired =
+      payment.status === PaymentStatus.FAILED && payment.failureReason === 'PAYOS_EXPIRED';
+    const expiredByTime = this.isExpired(payment.expiresAt);
     if (
       payment.status !== PaymentStatus.PENDING &&
-      payment.status !== PaymentStatus.AMOUNT_MISMATCH
+      payment.status !== PaymentStatus.AMOUNT_MISMATCH &&
+      payment.status !== PaymentStatus.EXPIRED &&
+      !legacyExpired
     )
-      throw new ConflictException('Only a pending or mismatched PayOS payment can be rechecked');
+      throw new ConflictException(
+        'Only a pending, expired, mismatched or attention-required PayOS payment can be rechecked',
+      );
     let state;
     try {
       state = await this.api.getPayment(
@@ -300,6 +318,12 @@ export class PayosPaymentService {
       if (amount == null) throw new BadGatewayException('PayOS did not return the paid amount');
       const reference = transaction?.reference ?? state!.id;
       try {
+        if (payment.status === PaymentStatus.EXPIRED || legacyExpired || expiredByTime) {
+          if (payment.status === PaymentStatus.PENDING) {
+            await this.settlement.markExpired(payment.id);
+          }
+          return this.settlement.markLateExpiredPayment(payment.id, amount, reference);
+        }
         if (!new Prisma.Decimal(amount).equals(payment.amount)) {
           return this.settlement.markAmountMismatch(payment.id, amount, reference);
         }
@@ -318,12 +342,10 @@ export class PayosPaymentService {
       }
     }
     if (['CANCELLED', 'EXPIRED'].includes(providerStatus) || this.isExpired(payment.expiresAt)) {
+      if (providerStatus !== 'CANCELLED') return this.settlement.markExpired(payment.id);
       return this.prisma.payment.update({
         where: { id: payment.id },
-        data: {
-          status: PaymentStatus.FAILED,
-          failureReason: providerStatus === 'CANCELLED' ? 'PAYOS_CANCELLED' : 'PAYOS_EXPIRED',
-        },
+        data: { status: PaymentStatus.FAILED, failureReason: 'PAYOS_CANCELLED' },
       });
     }
     return payment;

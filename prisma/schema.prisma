@@ -207,6 +207,8 @@ enum PaymentMethod {
 
 enum PaymentStatus {
   PENDING
+  EXPIRED
+  REQUIRES_ATTENTION
   AMOUNT_MISMATCH
   SUCCESS
   FAILED
@@ -352,19 +354,19 @@ model RestaurantChain {
 }
 
 model PayosChannel {
-  id                String   @id @default(uuid()) @db.Uuid
-  chainId           String   @unique @map("chain_id") @db.Uuid
-  clientIdCipher    String   @map("client_id_cipher") @db.Text
-  apiKeyCipher      String   @map("api_key_cipher") @db.Text
-  checksumKeyCipher String   @map("checksum_key_cipher") @db.Text
-  clientIdLast4     String?  @map("client_id_last4") @db.VarChar(4)
-  apiKeyLast4       String?  @map("api_key_last4") @db.VarChar(4)
+  id                String             @id @default(uuid()) @db.Uuid
+  chainId           String             @unique @map("chain_id") @db.Uuid
+  clientIdCipher    String             @map("client_id_cipher") @db.Text
+  apiKeyCipher      String             @map("api_key_cipher") @db.Text
+  checksumKeyCipher String             @map("checksum_key_cipher") @db.Text
+  clientIdLast4     String?            @map("client_id_last4") @db.VarChar(4)
+  apiKeyLast4       String?            @map("api_key_last4") @db.VarChar(4)
   status            PayosChannelStatus @default(LINKED)
-  lastError         String?  @map("last_error") @db.VarChar(1000)
-  lastVerifiedAt    DateTime? @map("last_verified_at") @db.Timestamptz(6)
-  webhookCode       String   @unique @default(uuid()) @map("webhook_code") @db.Uuid
-  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  lastError         String?            @map("last_error") @db.VarChar(1000)
+  lastVerifiedAt    DateTime?          @map("last_verified_at") @db.Timestamptz(6)
+  webhookCode       String             @unique @default(uuid()) @map("webhook_code") @db.Uuid
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   chain RestaurantChain @relation(fields: [chainId], references: [id], onDelete: Cascade)
 
@@ -1043,6 +1045,8 @@ model Order {
   callNumber         Int?               @map("call_number")
   cancelledAt        DateTime?          @map("cancelled_at") @db.Timestamptz(6)
   cancellationReason String?            @map("cancellation_reason") @db.VarChar(500)
+  attentionAt        DateTime?          @map("attention_at") @db.Timestamptz(6)
+  attentionReason    String?            @map("attention_reason") @db.VarChar(100)
   createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -1073,6 +1077,7 @@ model Order {
   @@index([createdByCashierId])
   @@index([cancelledById])
   @@index([status, paymentStatus])
+  @@index([attentionAt])
   @@map("orders")
 }
 

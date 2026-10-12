@@ -63,6 +63,8 @@ const summarySelect = {
   paidAt: true,
   cancelledAt: true,
   cancellationReason: true,
+  attentionAt: true,
+  attentionReason: true,
   createdByCashier: { select: actorSelect },
   createdByWaiter: { select: actorSelect },
   payments: { select: paymentSelect },

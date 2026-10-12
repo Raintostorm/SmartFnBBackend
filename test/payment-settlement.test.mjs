@@ -21,6 +21,7 @@ function fixture(overrides = {}) {
     status: 'PENDING',
     amount: new Prisma.Decimal(50_000),
     receivedAmount: null,
+    failureReason: null,
     providerTransactionId: null,
     transactionRef: 'link-id',
     order: {
@@ -156,6 +157,27 @@ describe('Counter payment settlement (#53 and #54)', () => {
     assert.equal(calls.events[0].type, 'manager.order.attention-required');
     assert.equal(calls.events[0].data.expectedAmount, '50000');
     assert.equal(calls.events[0].data.receivedAmount, '40000');
+  });
+
+  it('marks an expired QR and publishes the expiration once', async () => {
+    const { service, calls } = fixture();
+    const result = await service.markExpired('payment-id');
+    assert.equal(result.status, 'EXPIRED');
+    assert.equal(result.failureReason, 'PAYOS_EXPIRED');
+    assert.equal(calls.events[0].type, 'payment.expired');
+    assert.equal(calls.units, 0);
+    assert.equal(calls.printJobs.length, 0);
+  });
+
+  it('flags money received after QR expiry without queueing preparation', async () => {
+    const { service, calls } = fixture({ status: 'EXPIRED', failureReason: 'PAYOS_EXPIRED' });
+    const result = await service.markLateExpiredPayment('payment-id', 50_000, 'late-reference');
+    assert.equal(result.status, 'REQUIRES_ATTENTION');
+    assert.equal(result.receivedAmount.toString(), '50000');
+    assert.equal(calls.events[0].type, 'manager.order.attention-required');
+    assert.equal(calls.events[0].data.reason, 'PAYMENT_RECEIVED_AFTER_EXPIRY');
+    assert.equal(calls.units, 0);
+    assert.equal(calls.printJobs.length, 0);
   });
 
   it('does not settle a payment twice', async () => {

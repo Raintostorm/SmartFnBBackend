@@ -35,6 +35,101 @@ export class CounterPaymentSettlementService {
     private readonly realtime: RealtimePublisher,
   ) {}
 
+  async markExpired(paymentId: string) {
+    const result = await this.prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT id FROM payments WHERE id = ${paymentId}::uuid FOR UPDATE`;
+        const payment = await tx.payment.findUnique({
+          where: { id: paymentId },
+          include: { order: { select: { id: true, branchId: true } } },
+        });
+        if (!payment?.order) throw new ConflictException('Counter payment has no order');
+        if (payment.status === PaymentStatus.EXPIRED) return { changed: false, payment };
+        if (payment.status !== PaymentStatus.PENDING) return { changed: false, payment };
+        const updated = await tx.payment.update({
+          where: { id: payment.id },
+          data: { status: PaymentStatus.EXPIRED, failureReason: 'PAYOS_EXPIRED' },
+          include: { order: { select: { id: true, branchId: true } } },
+        });
+        return { changed: true, payment: updated };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+    if (result.changed && result.payment.order) {
+      this.realtime.branch(result.payment.order.branchId, 'payment.expired', {
+        orderId: result.payment.order.id,
+        paymentId: result.payment.id,
+        status: PaymentStatus.EXPIRED,
+      });
+    }
+    return result.payment;
+  }
+
+  async markLateExpiredPayment(
+    paymentId: string,
+    receivedAmount: string | number | Prisma.Decimal,
+    providerTransactionId?: string,
+  ) {
+    const received = new Prisma.Decimal(receivedAmount);
+    if (received.lte(0)) throw new ConflictException('Received amount must be positive');
+    const result = await this.prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT id FROM payments WHERE id = ${paymentId}::uuid FOR UPDATE`;
+        const payment = await tx.payment.findUnique({
+          where: { id: paymentId },
+          include: { order: { select: { id: true, branchId: true, status: true } } },
+        });
+        if (!payment?.order) throw new ConflictException('Counter payment has no order');
+        if (payment.status === PaymentStatus.REQUIRES_ATTENTION) {
+          return { changed: false, payment };
+        }
+        const isLegacyExpired =
+          payment.status === PaymentStatus.FAILED && payment.failureReason === 'PAYOS_EXPIRED';
+        if (payment.status !== PaymentStatus.EXPIRED && !isLegacyExpired) {
+          throw new ConflictException('Payment is not an expired PayOS payment');
+        }
+        if (
+          payment.order.status !== OrderStatus.CONFIRMED &&
+          payment.order.status !== OrderStatus.REQUIRES_ATTENTION
+        ) {
+          throw new ConflictException('Order is no longer awaiting payment review');
+        }
+        const now = new Date();
+        const updated = await tx.payment.update({
+          where: { id: payment.id },
+          data: {
+            status: PaymentStatus.REQUIRES_ATTENTION,
+            receivedAmount: received,
+            paidAt: now,
+            providerTransactionId: providerTransactionId ?? payment.providerTransactionId,
+            failureReason: 'PAYMENT_RECEIVED_AFTER_EXPIRY',
+          },
+          include: { order: { select: { id: true, branchId: true, status: true } } },
+        });
+        await tx.order.update({
+          where: { id: payment.order.id },
+          data: {
+            status: OrderStatus.REQUIRES_ATTENTION,
+            attentionAt: now,
+            attentionReason: 'PAYMENT_RECEIVED_AFTER_EXPIRY',
+          },
+        });
+        return { changed: true, payment: updated };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+    if (result.changed && result.payment.order) {
+      this.realtime.branch(result.payment.order.branchId, 'manager.order.attention-required', {
+        reason: 'PAYMENT_RECEIVED_AFTER_EXPIRY',
+        orderId: result.payment.order.id,
+        paymentId: result.payment.id,
+        expectedAmount: result.payment.amount.toString(),
+        receivedAmount: received.toString(),
+      });
+    }
+    return result.payment;
+  }
+
   async markAmountMismatch(
     paymentId: string,
     receivedAmount: string | number | Prisma.Decimal,
