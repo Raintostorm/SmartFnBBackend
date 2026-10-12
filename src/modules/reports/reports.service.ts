@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/com
 import {
   OrderItemStatus,
   OrderPaymentStatus,
+  OrderStatus,
   Prisma,
   TableSessionStatus,
 } from '../../generated/prisma/client.js';
@@ -82,11 +83,16 @@ export class ReportsService {
       return this.emptyReport(scope);
     }
 
-    const [revenueRows, guestRows, refundRows] = await Promise.all([
+    const [revenueRows, countRows, guestRows, refundRows] = await Promise.all([
       this.prisma.order.groupBy({
         by: ['branchId'],
         where: this.completedOrdersWhere(scope),
         _sum: { totalAmount: true, discountAmount: true },
+        _count: { _all: true },
+      }),
+      this.prisma.order.groupBy({
+        by: ['branchId'],
+        where: this.countableOrdersWhere(scope),
         _count: { _all: true },
       }),
       this.prisma.tableSession.groupBy({
@@ -116,6 +122,7 @@ export class ReportsService {
     ]);
 
     const revenueByBranch = new Map(revenueRows.map((row) => [row.branchId, row]));
+    const countsByBranch = new Map(countRows.map((row) => [row.branchId, row._count._all]));
     const guestsByBranch = new Map(guestRows.map((row) => [row.branchId, row]));
     const refundsByBranch = new Map(refundRows.map((row) => [row.branch_id, row]));
 
@@ -126,7 +133,7 @@ export class ReportsService {
       const refunds = refundsByBranch.get(branch.id);
       const refundAmount = new Prisma.Decimal(refunds?.refund_amount ?? 0);
       const netRevenue = totalRevenue.sub(refundAmount);
-      const orderCount = revenue?._count._all ?? 0;
+      const orderCount = countsByBranch.get(branch.id) ?? 0;
 
       return {
         branch,
@@ -139,7 +146,7 @@ export class ReportsService {
         discount: this.money(revenue?._sum.discountAmount ?? new Prisma.Decimal(0)),
         orderCount,
         averageOrderValue: this.money(
-          orderCount > 0 ? totalRevenue.dividedBy(orderCount) : new Prisma.Decimal(0),
+          orderCount > 0 ? netRevenue.dividedBy(orderCount) : new Prisma.Decimal(0),
         ),
         guestCount: guests?._sum.guestCount ?? 0,
         sessionCount: guests?._count._all ?? 0,
@@ -181,7 +188,8 @@ export class ReportsService {
       WITH sales AS (
         SELECT o.branch_id,
           date_trunc(${unit}, o.paid_at AT TIME ZONE ${scope.timezone}) AS bucket,
-          COUNT(*) AS order_count, SUM(o.total_amount) AS gross_revenue
+          COUNT(*) FILTER (WHERE o.status <> 'CANCELLED') AS order_count,
+          SUM(o.total_amount) AS gross_revenue
         FROM orders o WHERE o.branch_id = ANY(${scope.branchIds}::uuid[])
           AND o.payment_status = ${OrderPaymentStatus.PAID}::"OrderPaymentStatus"
           AND o.paid_at >= ${scope.from} AND o.paid_at < ${scope.to}
@@ -523,6 +531,13 @@ export class ReportsService {
       branchId: { in: scope.branchIds },
       paymentStatus: OrderPaymentStatus.PAID,
       paidAt: { gte: scope.from, lt: scope.to },
+    };
+  }
+
+  private countableOrdersWhere(scope: ReportScope): Prisma.OrderWhereInput {
+    return {
+      ...this.completedOrdersWhere(scope),
+      status: { not: OrderStatus.CANCELLED },
     };
   }
 
