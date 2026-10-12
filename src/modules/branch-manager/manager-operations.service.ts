@@ -156,7 +156,10 @@ export class ManagerOperationsService {
       this.prisma.order.findMany({
         where,
         select: summarySelect,
-        orderBy: [{ placedAt: 'desc' }, { id: 'desc' }],
+        orderBy: [
+          { [query.sortBy ?? 'placedAt']: query.sortOrder ?? 'desc' },
+          { id: query.sortOrder ?? 'desc' },
+        ],
         skip: (query.page - 1) * query.limit,
         take: query.limit,
       }),

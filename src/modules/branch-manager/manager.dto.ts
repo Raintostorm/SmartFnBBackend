@@ -110,6 +110,16 @@ export class ManagerAvailabilityDto {
 }
 
 export class ManagerOrderQueryDto extends ManagerPageDto {
+  @ApiPropertyOptional({ enum: ['placedAt', 'attentionAt', 'status', 'totalAmount'] })
+  @IsOptional()
+  @IsIn(['placedAt', 'attentionAt', 'status', 'totalAmount'])
+  sortBy?: 'placedAt' | 'attentionAt' | 'status' | 'totalAmount';
+
+  @ApiPropertyOptional({ enum: ['asc', 'desc'], default: 'desc' })
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortOrder?: 'asc' | 'desc';
+
   @ApiPropertyOptional({
     description: 'Partial order code or exact numeric call number',
     maxLength: 100,

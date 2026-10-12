@@ -164,6 +164,19 @@ export class RealtimeGateway implements OnGatewayConnection {
     this.server?.to(this.callingDisplayRoom(branchId)).emit('operations.updated', event);
   }
 
+  async disconnectDevice(deviceId: string) {
+    if (!this.server) return 0;
+    const sockets = await this.server.fetchSockets();
+    const matches = sockets.filter(
+      (socket) => (socket.data as AuthenticatedSocket['data']).device?.id === deviceId,
+    );
+    for (const socket of matches) {
+      socket.emit('device.revoked', { deviceId, occurredAt: new Date().toISOString() });
+      socket.disconnect(true);
+    }
+    return matches.length;
+  }
+
   private authenticateUser(token: string) {
     return this.authService.authenticateAccessToken(token);
   }
@@ -171,15 +184,29 @@ export class RealtimeGateway implements OnGatewayConnection {
   private async authenticateDevice(token: string) {
     const tokenHash = createHash('sha256').update(token).digest('hex');
     const device = await this.prisma.displayDevice.findFirst({
-      where: { tokenHash, revokedAt: null },
-      select: { id: true, type: true, branchId: true, stationId: true },
+      where: { tokenHash },
+      select: {
+        id: true,
+        type: true,
+        branchId: true,
+        stationId: true,
+        revokedAt: true,
+        tokenExpiresAt: true,
+      },
     });
-    if (!device) throw new Error('Device token is invalid or revoked');
+    if (!device) throw new Error('DEVICE_TOKEN_INVALID');
+    if (device.revokedAt) throw new Error('DEVICE_TOKEN_REVOKED');
+    if (device.tokenExpiresAt <= new Date()) throw new Error('DEVICE_TOKEN_EXPIRED');
     await this.prisma.displayDevice.update({
       where: { id: device.id },
       data: { lastSeenAt: new Date() },
     });
-    return device;
+    return {
+      id: device.id,
+      type: device.type,
+      branchId: device.branchId,
+      stationId: device.stationId,
+    };
   }
 
   private async publishCart(

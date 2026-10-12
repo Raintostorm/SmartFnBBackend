@@ -15,8 +15,16 @@ const cashier = {
   chainIds: [],
 };
 const writableBranch = { assertSubscriptionAllowsWrite: async () => undefined };
-const stationsService = (prisma, branchAccess = writableBranch) =>
-  new StationsService(prisma, branchAccess);
+const stationsService = (prisma, branchAccess = writableBranch, realtime) =>
+  new StationsService(prisma, branchAccess, realtime);
+const activeDevice = (overrides = {}) => ({
+  id: 'device-id',
+  branchId: 'branch-a',
+  stationId: null,
+  revokedAt: null,
+  tokenExpiresAt: new Date(Date.now() + 60_000),
+  ...overrides,
+});
 
 describe('V9 POS stations and display pairing', () => {
   it('creates a device token for the screen and stores only its hash', async () => {
@@ -56,6 +64,28 @@ describe('V9 POS stations and display pairing', () => {
     });
     await service.list(cashier);
     assert.equal(query.where.branchId, 'branch-a');
+  });
+
+  it('updates only a station in the manager branch', async () => {
+    let update;
+    const service = stationsService({
+      posStation: {
+        findFirst: async ({ where }) => {
+          assert.deepEqual(where, { id: 'station-a', branchId: 'branch-a' });
+          return { id: 'station-a', printerConnection: 'NONE', printerAddress: null };
+        },
+        update: async (args) => {
+          update = args;
+          return { id: 'station-a', ...args.data };
+        },
+      },
+    });
+    const result = await service.update(cashier, 'station-a', {
+      name: ' Quầy mang đi ',
+      status: 'INACTIVE',
+    });
+    assert.equal(result.name, 'Quầy mang đi');
+    assert.equal(update.data.status, 'INACTIVE');
   });
 
   it('rejects a station outside the cashier branch', async () => {
@@ -98,6 +128,7 @@ describe('V9 POS stations and display pairing', () => {
 
   it('revokes only an active device from the authenticated branch', async () => {
     let query;
+    let disconnected;
     const service = stationsService({
       displayDevice: {
         updateMany: async (args) => {
@@ -105,9 +136,14 @@ describe('V9 POS stations and display pairing', () => {
           return { count: 1 };
         },
       },
+    }, writableBranch, {
+      revokeDevice: async (id) => {
+        disconnected = id;
+      },
     });
     assert.deepEqual(await service.revoke(cashier, 'device-id'), { revoked: true });
     assert.deepEqual(query.where, { id: 'device-id', branchId: 'branch-a', revokedAt: null });
+    assert.equal(disconnected, 'device-id');
   });
 
   it('pairs one calling display for the manager branch without returning its token', async () => {
@@ -143,7 +179,7 @@ describe('V9 POS stations and display pairing', () => {
     let orderFilter;
     const service = stationsService({
       displayDevice: {
-        findFirst: async () => ({ id: 'device-id', branchId: 'branch-a', stationId: null }),
+        findFirst: async () => activeDevice(),
         update: async () => ({}),
       },
       order: {
@@ -164,7 +200,7 @@ describe('V9 POS stations and display pairing', () => {
     const queries = [];
     const service = stationsService({
       displayDevice: {
-        findFirst: async () => ({ id: 'device-id', branchId: 'branch-a', stationId: null }),
+        findFirst: async () => activeDevice(),
         update: async () => ({}),
       },
       branch: {
@@ -183,16 +219,24 @@ describe('V9 POS stations and display pairing', () => {
           queries.push(args);
           return args;
         },
+        count: (args) => args,
       },
       $transaction: async (items) => {
-        assert.equal(items.length, 2);
-        return [[{ callNumber: 21, status: 'PREPARING' }], [{ callNumber: 23, status: 'READY' }]];
+        assert.equal(items.length, 4);
+        return [
+          [{ callNumber: 21, status: 'PREPARING' }],
+          [{ callNumber: 23, status: 'READY' }],
+          42,
+          7,
+        ];
       },
     });
     const result = await service.callingDisplayContext('Bearer valid-device-token');
     assert.equal(result.branding.displayName, 'Cafe');
     assert.equal(result.preparing[0].callNumber, 21);
     assert.equal(result.ready[0].callNumber, 23);
+    assert.deepEqual(result.counts, { preparing: 42, ready: 7 });
+    assert.equal(result.pageLimit, 30);
     assert.deepEqual(queries[0].where.status.in, ['SUBMITTED', 'PREPARING']);
     assert.equal(queries[1].where.status, 'READY');
     assert.ok(queries[0].where.businessDate instanceof Date);
@@ -208,10 +252,24 @@ describe('V9 POS stations and display pairing', () => {
     );
   });
 
+  it('returns a distinct error for an expired display token', async () => {
+    const service = stationsService({
+      displayDevice: {
+        findFirst: async () => activeDevice({ tokenExpiresAt: new Date(Date.now() - 1_000) }),
+      },
+    });
+    await assert.rejects(
+      service.callingDisplayReadyOrders('Bearer expired-token'),
+      (error) =>
+        error instanceof ForbiddenException &&
+        error.getResponse().code === 'DEVICE_TOKEN_EXPIRED',
+    );
+  });
+
   it('restores the latest cart and branding for a paired customer display', async () => {
     const service = stationsService({
       displayDevice: {
-        findFirst: async () => ({ id: 'device-id', branchId: 'branch-a', stationId: 'station-a' }),
+        findFirst: async () => activeDevice({ stationId: 'station-a' }),
         update: async () => ({}),
       },
       posStation: {

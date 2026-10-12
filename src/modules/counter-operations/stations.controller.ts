@@ -1,4 +1,15 @@
-import { Body, Controller, Delete, Get, Headers, Param, ParseUUIDPipe, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Headers,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Req,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiSecurity, ApiTags } from '@nestjs/swagger';
 import { ApiAuthenticatedOperation } from '../../common/swagger/swagger.decorators.js';
 import { SWAGGER_DEVICE_TOKEN } from '../../swagger.setup.js';
@@ -13,8 +24,10 @@ import {
   CreateStationDto,
   PairCallingDisplayDto,
   PairCustomerDisplayDto,
+  UpdateStationDto,
 } from './dto/station.dto.js';
 import { StationsService } from './stations.service.js';
+import type { Request } from 'express';
 
 @ApiTags('POS stations and displays')
 @Controller()
@@ -24,8 +37,11 @@ export class StationsController {
   @Public()
   @Post('device-pairing/codes')
   @ApiOperation({ summary: 'Create a six-digit, five-minute device pairing code' })
-  createPairingCode(@Body() dto: CreatePairingCodeDto) {
-    return this.stations.createPairingCode(dto.deviceType);
+  createPairingCode(@Body() dto: CreatePairingCodeDto, @Req() request: Request) {
+    return this.stations.createPairingCode(
+      dto.deviceType,
+      request.ip || request.socket.remoteAddress || 'unknown',
+    );
   }
 
   @Public()
@@ -70,6 +86,28 @@ export class StationsController {
   @ApiOperation({ summary: 'Create a POS station in the assigned branch' })
   create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateStationDto) {
     return this.stations.create(user, dto);
+  }
+
+  @Patch('stations/:stationId')
+  @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
+  @ApiAuthenticatedOperation()
+  @Roles(AppRole.MANAGER)
+  @ApiOperation({ summary: 'Rename, activate, deactivate, or update a POS station' })
+  update(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('stationId', new ParseUUIDPipe()) stationId: string,
+    @Body() dto: UpdateStationDto,
+  ) {
+    return this.stations.update(user, stationId, dto);
+  }
+
+  @Get('display-devices')
+  @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
+  @ApiAuthenticatedOperation()
+  @Roles(AppRole.MANAGER)
+  @ApiOperation({ summary: 'List paired display devices in the assigned branch' })
+  listDisplayDevices(@CurrentUser() user: AuthenticatedUser) {
+    return this.stations.listDisplayDevices(user);
   }
 
   @Post('stations/pair-customer-display')

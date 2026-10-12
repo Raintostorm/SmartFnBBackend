@@ -151,11 +151,16 @@ export class CreateServicePlanDto {
   @Min(1)
   maxAccounts!: number;
 
-  @ApiProperty({ example: 100, minimum: 1 })
+  @ApiPropertyOptional({
+    example: 100,
+    minimum: 1,
+    description: 'Legacy v7 table quota; omitted plans default to 1',
+  })
+  @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  maxTables!: number;
+  maxTables?: number;
 
   @ApiProperty({
     example: true,

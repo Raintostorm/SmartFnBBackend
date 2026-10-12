@@ -188,7 +188,9 @@ describe('Counter payment settlement (#53 and #54)', () => {
         source: 'PAYOS_RECHECK',
         receivedAmount: 50_000,
       }),
-      (error) => error?.getStatus?.() === 409 && error.message === 'PAYMENT_ALREADY_SETTLED',
+      (error) =>
+        error?.getStatus?.() === 409 &&
+        error?.getResponse?.().error === 'PAYMENT_ALREADY_SETTLED',
     );
   });
 });

@@ -267,7 +267,12 @@ export class PayosPaymentService {
           return { success: true };
         }
       }
-      if (error instanceof ConflictException && error.message === 'PAYMENT_ALREADY_SETTLED') {
+      const conflictResponse = error instanceof ConflictException ? error.getResponse() : undefined;
+      const conflictCode =
+        typeof conflictResponse === 'object' && conflictResponse && 'error' in conflictResponse
+          ? conflictResponse.error
+          : undefined;
+      if (conflictCode === 'PAYMENT_ALREADY_SETTLED') {
         await this.prisma.paymentWebhookEvent.update({
           where: { id: eventResult.eventId },
           data: { status: WebhookProcessingStatus.PROCESSED, processedAt: new Date() },

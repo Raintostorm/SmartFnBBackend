@@ -205,7 +205,11 @@ export class CounterPaymentSettlementService {
           payment.status !== PaymentStatus.PENDING &&
           payment.status !== PaymentStatus.AMOUNT_MISMATCH
         ) {
-          throw new ConflictException('PAYMENT_ALREADY_SETTLED');
+          throw new ConflictException({
+            statusCode: 409,
+            error: 'PAYMENT_ALREADY_SETTLED',
+            message: 'Payment has already been settled or is no longer payable',
+          });
         }
         if (input.source === 'MANAGER_MANUAL') {
           if (payment.method !== PaymentMethod.BANK_TRANSFER) {

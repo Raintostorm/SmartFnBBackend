@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ForbiddenException,
+  HttpException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -16,13 +17,19 @@ import {
 import { PrismaService } from '../../database/prisma.service.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
-import type { CreateStationDto } from './dto/station.dto.js';
+import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
+import type { CreateStationDto, UpdateStationDto } from './dto/station.dto.js';
+
+const DISPLAY_TOKEN_LIFETIME_MS = 30 * 24 * 60 * 60_000;
 
 @Injectable()
 export class StationsService {
+  private readonly pairingAttempts = new Map<string, { count: number; resetAt: number }>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly branchAccess: BranchAccessService,
+    private readonly realtime?: RealtimePublisher,
   ) {}
 
   private employee(user: AuthenticatedUser) {
@@ -60,7 +67,69 @@ export class StationsService {
     });
   }
 
-  async createPairingCode(type: DisplayDeviceType) {
+  async update(user: AuthenticatedUser, stationId: string, dto: UpdateStationDto) {
+    const actor = this.employee(user);
+    await this.branchAccess.assertSubscriptionAllowsWrite(actor.branchId);
+    if (!Object.values(dto).some((value) => value !== undefined)) {
+      throw new BadRequestException('At least one station field is required');
+    }
+    const station = await this.prisma.posStation.findFirst({
+      where: { id: stationId, branchId: actor.branchId },
+      select: { id: true, printerConnection: true, printerAddress: true },
+    });
+    if (!station) throw new NotFoundException('POS station was not found in your branch');
+
+    const printerConnection = dto.printerConnection ?? station.printerConnection;
+    const printerAddress =
+      printerConnection === 'NONE'
+        ? null
+        : dto.printerAddress === undefined
+          ? station.printerAddress
+          : dto.printerAddress?.trim() || null;
+    if (printerConnection !== 'NONE' && !printerAddress) {
+      throw new BadRequestException('Printer address is required for WiFi or Bluetooth');
+    }
+    if (dto.name !== undefined && !dto.name.trim()) {
+      throw new BadRequestException('Station name must not be empty');
+    }
+
+    return this.prisma.posStation.update({
+      where: { id: station.id },
+      data: {
+        ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
+        ...(dto.status !== undefined ? { status: dto.status } : {}),
+        ...(dto.printerConnection !== undefined ? { printerConnection } : {}),
+        ...(dto.printerConnection !== undefined || dto.printerAddress !== undefined
+          ? { printerAddress }
+          : {}),
+      },
+    });
+  }
+
+  listDisplayDevices(user: AuthenticatedUser) {
+    const actor = this.employee(user);
+    return this.prisma.displayDevice.findMany({
+      where: { branchId: actor.branchId },
+      select: {
+        id: true,
+        type: true,
+        name: true,
+        stationId: true,
+        station: { select: { id: true, name: true, status: true } },
+        pairedAt: true,
+        lastSeenAt: true,
+        tokenExpiresAt: true,
+        revokedAt: true,
+      },
+      orderBy: { pairedAt: 'desc' },
+    });
+  }
+
+  async createPairingCode(type: DisplayDeviceType, clientKey = 'unknown') {
+    this.assertPairingRateLimit(clientKey);
+    await this.prisma.pairingCode.deleteMany?.({
+      where: { OR: [{ expiresAt: { lt: new Date() } }, { consumedAt: { not: null } }] },
+    });
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const code = randomInt(0, 1_000_000).toString().padStart(6, '0');
       const deviceToken = randomBytes(32).toString('base64url');
@@ -134,12 +203,14 @@ export class StationsService {
       type: OrderType.COUNTER_PICKUP,
       paymentStatus: OrderPaymentStatus.PAID,
     } as const;
-    const [preparing, ready] = await this.prisma.$transaction([
+    const preparingWhere = {
+      ...baseWhere,
+      status: { in: [OrderStatus.SUBMITTED, OrderStatus.PREPARING] },
+    };
+    const readyWhere = { ...baseWhere, status: OrderStatus.READY };
+    const [preparing, ready, preparingCount, readyCount] = await this.prisma.$transaction([
       this.prisma.order.findMany({
-        where: {
-          ...baseWhere,
-          status: { in: [OrderStatus.SUBMITTED, OrderStatus.PREPARING] },
-        },
+        where: preparingWhere,
         select: {
           id: true,
           callNumber: true,
@@ -151,7 +222,7 @@ export class StationsService {
         take: 30,
       }),
       this.prisma.order.findMany({
-        where: { ...baseWhere, status: OrderStatus.READY },
+        where: readyWhere,
         select: {
           id: true,
           callNumber: true,
@@ -162,6 +233,8 @@ export class StationsService {
         orderBy: { readyAt: 'asc' },
         take: 30,
       }),
+      this.prisma.order.count({ where: preparingWhere }),
+      this.prisma.order.count({ where: readyWhere }),
     ]);
     const branding = branch.chain.branding;
     return {
@@ -175,6 +248,8 @@ export class StationsService {
       },
       preparing,
       ready,
+      counts: { preparing: preparingCount, ready: readyCount },
+      pageLimit: 30,
       serverTime: new Date().toISOString(),
     };
   }
@@ -265,14 +340,7 @@ export class StationsService {
       });
       if (!station) throw new NotFoundException('Active station was not found in your branch');
       const pairing = await tx.pairingCode.findUnique({ where: { codeHash: this.hash(code) } });
-      if (
-        !pairing ||
-        !pairing.deviceTokenHash ||
-        pairing.deviceType !== DisplayDeviceType.CUSTOMER_DISPLAY ||
-        pairing.consumedAt ||
-        pairing.expiresAt <= new Date()
-      )
-        throw new BadRequestException('Pairing code is invalid, used, or expired');
+      this.assertPairingCode(pairing, DisplayDeviceType.CUSTOMER_DISPLAY);
 
       await tx.displayDevice.updateMany({
         where: { stationId, type: DisplayDeviceType.CUSTOMER_DISPLAY, revokedAt: null },
@@ -286,6 +354,7 @@ export class StationsService {
           tokenHash: pairing.deviceTokenHash,
           name: name?.trim(),
           pairedById: actor.employeeId,
+          tokenExpiresAt: new Date(Date.now() + DISPLAY_TOKEN_LIFETIME_MS),
         },
       });
       const consumed = await tx.pairingCode.updateMany({
@@ -302,15 +371,7 @@ export class StationsService {
     await this.branchAccess.assertSubscriptionAllowsWrite(actor.branchId);
     return this.prisma.$transaction(async (tx) => {
       const pairing = await tx.pairingCode.findUnique({ where: { codeHash: this.hash(code) } });
-      if (
-        !pairing ||
-        !pairing.deviceTokenHash ||
-        pairing.deviceType !== DisplayDeviceType.CALLING_DISPLAY ||
-        pairing.consumedAt ||
-        pairing.expiresAt <= new Date()
-      ) {
-        throw new BadRequestException('Pairing code is invalid, used, or expired');
-      }
+      this.assertPairingCode(pairing, DisplayDeviceType.CALLING_DISPLAY);
 
       await tx.displayDevice.updateMany({
         where: {
@@ -327,6 +388,7 @@ export class StationsService {
           tokenHash: pairing.deviceTokenHash,
           name: name?.trim(),
           pairedById: actor.employeeId,
+          tokenExpiresAt: new Date(Date.now() + DISPLAY_TOKEN_LIFETIME_MS),
         },
       });
       const consumed = await tx.pairingCode.updateMany({
@@ -347,11 +409,56 @@ export class StationsService {
     });
     if (!result.count)
       throw new NotFoundException('Active display device was not found in your branch');
+    await this.realtime?.revokeDevice(deviceId);
     return { revoked: true };
   }
 
   private hash(value: string) {
     return createHash('sha256').update(value).digest('hex');
+  }
+
+  private assertPairingCode(
+    pairing: {
+      deviceTokenHash: string | null;
+      deviceType: DisplayDeviceType;
+      consumedAt: Date | null;
+      expiresAt: Date;
+    } | null,
+    expectedType: DisplayDeviceType,
+  ): asserts pairing is NonNullable<typeof pairing> & { deviceTokenHash: string } {
+    if (!pairing || !pairing.deviceTokenHash || pairing.deviceType !== expectedType) {
+      throw new BadRequestException({
+        code: 'PAIRING_CODE_INVALID',
+        message: 'Pairing code is invalid',
+      });
+    }
+    if (pairing.consumedAt) {
+      throw new BadRequestException({
+        code: 'PAIRING_CODE_USED',
+        message: 'Pairing code was used',
+      });
+    }
+    if (pairing.expiresAt <= new Date()) {
+      throw new BadRequestException({
+        code: 'PAIRING_CODE_EXPIRED',
+        message: 'Pairing code has expired',
+      });
+    }
+  }
+
+  private assertPairingRateLimit(key: string) {
+    const now = Date.now();
+    const current = this.pairingAttempts.get(key);
+    if (!current || current.resetAt <= now) {
+      this.pairingAttempts.set(key, { count: 1, resetAt: now + 60_000 });
+      return;
+    }
+    current.count += 1;
+    if (current.count > 10) throw new HttpException('Too many pairing code requests', 429);
+    if (this.pairingAttempts.size > 10_000) {
+      for (const [entry, value] of this.pairingAttempts)
+        if (value.resetAt <= now) this.pairingAttempts.delete(entry);
+    }
   }
 
   private async authenticateDisplayDevice(
@@ -360,17 +467,43 @@ export class StationsService {
   ) {
     const [scheme, token] = authorization?.trim().split(/\s+/) ?? [];
     if (scheme?.toLowerCase() !== 'bearer' || !token) {
-      throw new ForbiddenException('A display device token is required');
+      throw new ForbiddenException({
+        code: 'DEVICE_TOKEN_MISSING',
+        message: 'A display device token is required',
+      });
     }
     const device = await this.prisma.displayDevice.findFirst({
-      where: { tokenHash: this.hash(token), type, revokedAt: null },
-      select: { id: true, branchId: true, stationId: true },
+      where: { tokenHash: this.hash(token), type },
+      select: {
+        id: true,
+        branchId: true,
+        stationId: true,
+        revokedAt: true,
+        tokenExpiresAt: true,
+      },
     });
-    if (!device) throw new ForbiddenException('Display device token is invalid or revoked');
+    if (!device) {
+      throw new ForbiddenException({
+        code: 'DEVICE_TOKEN_INVALID',
+        message: 'Display device token is invalid',
+      });
+    }
+    if (device.revokedAt) {
+      throw new ForbiddenException({
+        code: 'DEVICE_TOKEN_REVOKED',
+        message: 'Display device token has been revoked',
+      });
+    }
+    if (device.tokenExpiresAt <= new Date()) {
+      throw new ForbiddenException({
+        code: 'DEVICE_TOKEN_EXPIRED',
+        message: 'Display device token has expired',
+      });
+    }
     await this.prisma.displayDevice.update({
       where: { id: device.id },
       data: { lastSeenAt: new Date() },
     });
-    return device;
+    return { id: device.id, branchId: device.branchId, stationId: device.stationId };
   }
 }
