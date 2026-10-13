@@ -182,7 +182,7 @@ export class BranchManagerController {
 
   @Post('orders/:orderId/cancel-paid')
   @ApiOperation({
-    summary: 'BM-06: Cancel a paid order or selected lines and record the external refund',
+    summary: 'BM-06: Cancel a paid or late-after-expiry order and record the external refund',
     description:
       'Cash is recorded as refunded immediately. Bank transfer creates a pending refund for an Owner or Manager to complete. No PayOS refund is called.',
   })

@@ -95,12 +95,13 @@ export class PaymentsController {
   @Post('payments/:paymentId/confirm')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Manually confirm a pending or mismatched bank transfer (MANAGER only)',
+    summary:
+      'Manually confirm a pending, mismatched or late-after-expiry bank transfer (MANAGER only)',
     description:
       'BM-05: receivedAmount must cover the expected amount. Confirmation, call number, ' +
       'preparation units, tracking link, print jobs and audit are committed together.',
   })
-  @ApiUuidPath('paymentId', 'Pending payment to confirm')
+  @ApiUuidPath('paymentId', 'Bank-transfer payment requiring confirmation')
   @ApiOkResponse({ type: PaymentResponseDto })
   @ApiStandardMutationErrors({ notFound: 'Payment not found', conflict: 'Payment is not pending' })
   async confirm(

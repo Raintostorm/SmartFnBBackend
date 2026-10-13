@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   HttpException,
   Injectable,
@@ -55,16 +56,21 @@ export class StationsService {
   async create(user: AuthenticatedUser, dto: CreateStationDto) {
     const actor = this.employee(user);
     await this.branchAccess.assertSubscriptionAllowsWrite(actor.branchId);
+    if (!dto.name.trim()) throw new BadRequestException('Station name must not be empty');
     if (dto.printerConnection && dto.printerConnection !== 'NONE' && !dto.printerAddress?.trim())
       throw new BadRequestException('Printer address is required for WiFi or Bluetooth');
-    return this.prisma.posStation.create({
-      data: {
-        branchId: actor.branchId,
-        name: dto.name.trim(),
-        printerConnection: dto.printerConnection,
-        printerAddress: dto.printerAddress?.trim(),
-      },
-    });
+    try {
+      return await this.prisma.posStation.create({
+        data: {
+          branchId: actor.branchId,
+          name: dto.name.trim(),
+          printerConnection: dto.printerConnection,
+          printerAddress: dto.printerAddress?.trim(),
+        },
+      });
+    } catch (error) {
+      this.rethrowStationConflict(error);
+    }
   }
 
   async update(user: AuthenticatedUser, stationId: string, dto: UpdateStationDto) {
@@ -93,17 +99,21 @@ export class StationsService {
       throw new BadRequestException('Station name must not be empty');
     }
 
-    return this.prisma.posStation.update({
-      where: { id: station.id },
-      data: {
-        ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
-        ...(dto.status !== undefined ? { status: dto.status } : {}),
-        ...(dto.printerConnection !== undefined ? { printerConnection } : {}),
-        ...(dto.printerConnection !== undefined || dto.printerAddress !== undefined
-          ? { printerAddress }
-          : {}),
-      },
-    });
+    try {
+      return await this.prisma.posStation.update({
+        where: { id: station.id },
+        data: {
+          ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
+          ...(dto.status !== undefined ? { status: dto.status } : {}),
+          ...(dto.printerConnection !== undefined ? { printerConnection } : {}),
+          ...(dto.printerConnection !== undefined || dto.printerAddress !== undefined
+            ? { printerAddress }
+            : {}),
+        },
+      });
+    } catch (error) {
+      this.rethrowStationConflict(error);
+    }
   }
 
   listDisplayDevices(user: AuthenticatedUser) {
@@ -415,6 +425,16 @@ export class StationsService {
 
   private hash(value: string) {
     return createHash('sha256').update(value).digest('hex');
+  }
+
+  private rethrowStationConflict(error: unknown): never {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      throw new ConflictException({
+        code: 'STATION_NAME_ALREADY_EXISTS',
+        message: 'A station with this name already exists in the branch',
+      });
+    }
+    throw error;
   }
 
   private assertPairingCode(

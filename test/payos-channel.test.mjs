@@ -32,7 +32,9 @@ describe('V9 PayOS channel credentials', () => {
     const encrypted = cipher.encrypt('secret-value');
     assert.notEqual(encrypted, 'secret-value');
     assert.equal(cipher.decrypt(encrypted), 'secret-value');
-    assert.throws(() => cipher.decrypt(`${encrypted.slice(0, -1)}x`));
+    const parts = encrypted.split('.');
+    parts[2] = `${parts[2][0] === 'A' ? 'B' : 'A'}${parts[2].slice(1)}`;
+    assert.throws(() => cipher.decrypt(parts.join('.')));
   });
 
   it('rejects a missing master key before changing the PayOS webhook', async () => {

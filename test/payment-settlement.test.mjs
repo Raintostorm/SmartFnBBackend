@@ -11,7 +11,7 @@ const manager = {
 };
 
 function fixture(overrides = {}) {
-  const calls = { units: 0, printJobs: [], audits: [], events: [] };
+  const calls = { units: 0, printJobs: [], audits: [], events: [], orderUpdates: [] };
   const payment = {
     id: 'payment-id',
     orderId: 'order-id',
@@ -43,12 +43,15 @@ function fixture(overrides = {}) {
       update: async ({ data }) => ({ ...payment, ...data, order: payment.order }),
     },
     order: {
-      update: async ({ data }) => ({
-        ...payment.order,
-        ...data,
-        callNumber: data.callNumber,
-        submittedAt: data.submittedAt,
-      }),
+      update: async ({ data }) => {
+        calls.orderUpdates.push(data);
+        return {
+          ...payment.order,
+          ...data,
+          callNumber: data.callNumber,
+          submittedAt: data.submittedAt,
+        };
+      },
     },
     orderItem: {
       update: async () => {
@@ -157,6 +160,8 @@ describe('Counter payment settlement (#53 and #54)', () => {
     assert.equal(calls.events[0].type, 'manager.order.attention-required');
     assert.equal(calls.events[0].data.expectedAmount, '50000');
     assert.equal(calls.events[0].data.receivedAmount, '40000');
+    assert.equal(calls.orderUpdates[0].attentionReason, 'PAYMENT_AMOUNT_MISMATCH');
+    assert.ok(calls.orderUpdates[0].attentionAt instanceof Date);
   });
 
   it('marks an expired QR and publishes the expiration once', async () => {
@@ -189,8 +194,36 @@ describe('Counter payment settlement (#53 and #54)', () => {
         receivedAmount: 50_000,
       }),
       (error) =>
-        error?.getStatus?.() === 409 &&
-        error?.getResponse?.().error === 'PAYMENT_ALREADY_SETTLED',
+        error?.getStatus?.() === 409 && error?.getResponse?.().error === 'PAYMENT_ALREADY_SETTLED',
     );
+  });
+
+  it('lets a manager accept money received after QR expiry', async () => {
+    const { service, calls } = fixture({
+      status: 'REQUIRES_ATTENTION',
+      receivedAmount: new Prisma.Decimal(50_000),
+      failureReason: 'PAYMENT_RECEIVED_AFTER_EXPIRY',
+      order: {
+        id: 'order-id',
+        orderCode: 'ORD-1',
+        branchId: 'branch-id',
+        type: 'COUNTER_PICKUP',
+        status: 'REQUIRES_ATTENTION',
+        paymentStatus: 'UNPAID',
+        items: [{ id: 'item-id', quantity: 2 }],
+        branch: { timezone: 'Asia/Ho_Chi_Minh' },
+      },
+    });
+    const result = await service.settle({
+      paymentId: 'payment-id',
+      source: 'MANAGER_MANUAL',
+      receivedAmount: 50_000,
+      actor: manager,
+      reason: 'Đã đối chiếu tiền về sau khi QR hết hạn',
+    });
+    assert.equal(result.payment.status, 'SUCCESS');
+    assert.equal(result.order.status, 'SUBMITTED');
+    assert.equal(calls.orderUpdates.at(-1).attentionAt, null);
+    assert.equal(calls.orderUpdates.at(-1).attentionReason, null);
   });
 });

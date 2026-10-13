@@ -446,6 +446,7 @@ export class CounterOperationsService {
           data: {
             paymentCode: `PAY-${Date.now()}-${crypto.randomUUID().slice(0, 6).toUpperCase()}`,
             orderId,
+            stationId: station.id,
             processedById: actor.employeeId,
             method: PaymentMethod.CASH,
             provider: PaymentProvider.CASH,

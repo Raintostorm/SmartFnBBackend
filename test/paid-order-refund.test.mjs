@@ -21,6 +21,7 @@ function fixture({
   paymentStatus = 'SUCCESS',
   orderStatus = 'SUBMITTED',
   receivedAmount = 50_000,
+  failureReason = null,
 } = {}) {
   const calls = {
     audits: [],
@@ -37,6 +38,7 @@ function fixture({
     amount: new Prisma.Decimal(50_000),
     receivedAmount: new Prisma.Decimal(receivedAmount),
     providerTransactionId: null,
+    failureReason,
   };
   const items = [
     {
@@ -183,6 +185,23 @@ describe('Paid order cancellation and external refunds (#43)', () => {
       calls.events.map((event) => event.type),
       ['order.cancelled', 'calling:order.cancelled', 'refund.pending'],
     );
+  });
+
+  it('cancels a late expired payment and refunds the amount actually received', async () => {
+    const { service, calls, order } = fixture({
+      paymentStatus: 'REQUIRES_ATTENTION',
+      orderStatus: 'REQUIRES_ATTENTION',
+      receivedAmount: 45_000,
+      failureReason: 'PAYMENT_RECEIVED_AFTER_EXPIRY',
+    });
+    const result = await service.cancelPaidOrder(manager, order.id, {
+      reason: 'Khách không tiếp tục đơn sau khi chuyển tiền muộn',
+      refundMethod: 'BANK_TRANSFER',
+    });
+    assert.equal(result.order.status, 'CANCELLED');
+    assert.equal(result.refund.status, 'PENDING');
+    assert.equal(result.refund.amount.toString(), '45000');
+    assert.equal(calls.refundCreates.length, 1);
   });
 
   it('cancels one line, keeps the remaining order active and records prepared waste', async () => {

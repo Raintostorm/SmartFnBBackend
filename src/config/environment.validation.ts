@@ -35,6 +35,11 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
     .toLowerCase();
   const emailApiKey = String(config.EMAIL_API_KEY ?? '').trim();
   const emailFrom = String(config.EMAIL_FROM ?? '').trim();
+  const paymentExpiryJobEnabledValue = String(
+    config.PAYMENT_EXPIRY_JOB_ENABLED ?? 'true',
+  ).toLowerCase();
+  const paymentExpiryJobIntervalMs = Number(config.PAYMENT_EXPIRY_JOB_INTERVAL_MS ?? 60_000);
+  const paymentExpiryBatchSize = Number(config.PAYMENT_EXPIRY_BATCH_SIZE ?? 100);
 
   if (!validEnvironments.has(nodeEnv)) {
     throw new Error('NODE_ENV must be development, test, or production.');
@@ -119,6 +124,15 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
   if ((emailApiKey && !emailFrom) || (!emailApiKey && emailFrom)) {
     throw new Error('EMAIL_API_KEY and EMAIL_FROM must be configured together.');
   }
+  if (!['true', 'false'].includes(paymentExpiryJobEnabledValue)) {
+    throw new Error('PAYMENT_EXPIRY_JOB_ENABLED must be true or false.');
+  }
+  if (!Number.isInteger(paymentExpiryJobIntervalMs) || paymentExpiryJobIntervalMs < 10_000) {
+    throw new Error('PAYMENT_EXPIRY_JOB_INTERVAL_MS must be an integer of at least 10000.');
+  }
+  if (!Number.isInteger(paymentExpiryBatchSize) || paymentExpiryBatchSize < 1) {
+    throw new Error('PAYMENT_EXPIRY_BATCH_SIZE must be a positive integer.');
+  }
 
   return {
     ...config,
@@ -149,5 +163,8 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
     EMAIL_PROVIDER: emailProvider,
     EMAIL_API_KEY: emailApiKey,
     EMAIL_FROM: emailFrom,
+    PAYMENT_EXPIRY_JOB_ENABLED: paymentExpiryJobEnabledValue === 'true',
+    PAYMENT_EXPIRY_JOB_INTERVAL_MS: paymentExpiryJobIntervalMs,
+    PAYMENT_EXPIRY_BATCH_SIZE: paymentExpiryBatchSize,
   };
 }

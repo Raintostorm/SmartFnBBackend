@@ -53,7 +53,7 @@ export class CounterPaymentSettlementService {
         });
         return { changed: true, payment: updated };
       },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
     );
     if (result.changed && result.payment.order) {
       this.realtime.branch(result.payment.order.branchId, 'payment.expired', {
@@ -165,9 +165,15 @@ export class CounterPaymentSettlementService {
           payment.order.status === OrderStatus.CONFIRMED ||
           payment.order.status === OrderStatus.REQUIRES_ATTENTION
         ) {
+          const firstAttention = payment.order.status !== OrderStatus.REQUIRES_ATTENTION;
           await tx.order.update({
             where: { id: payment.order.id },
-            data: { status: OrderStatus.REQUIRES_ATTENTION },
+            data: {
+              status: OrderStatus.REQUIRES_ATTENTION,
+              ...(firstAttention
+                ? { attentionAt: new Date(), attentionReason: 'PAYMENT_AMOUNT_MISMATCH' }
+                : {}),
+            },
           });
         }
         return { changed: payment.status !== PaymentStatus.AMOUNT_MISMATCH, payment: updated };
@@ -203,7 +209,12 @@ export class CounterPaymentSettlementService {
         await tx.$queryRaw`SELECT id FROM orders WHERE id = ${payment.order.id}::uuid FOR UPDATE`;
         if (
           payment.status !== PaymentStatus.PENDING &&
-          payment.status !== PaymentStatus.AMOUNT_MISMATCH
+          payment.status !== PaymentStatus.AMOUNT_MISMATCH &&
+          !(
+            input.source === 'MANAGER_MANUAL' &&
+            payment.status === PaymentStatus.REQUIRES_ATTENTION &&
+            payment.failureReason === 'PAYMENT_RECEIVED_AFTER_EXPIRY'
+          )
         ) {
           throw new ConflictException({
             statusCode: 409,
@@ -280,6 +291,8 @@ export class CounterPaymentSettlementService {
             submittedAt: now,
             businessDate,
             callNumber: sequence.nextNumber,
+            attentionAt: null,
+            attentionReason: null,
           },
         });
         const tracking = await this.tracking.ensureForOrder(tx, order.id);
@@ -320,7 +333,7 @@ export class CounterPaymentSettlementService {
           source: input.source,
         };
       },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
     );
     const event = {
       paymentId: result.payment.id,

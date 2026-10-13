@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma } from '../dist/generated/prisma/client.js';
 import { StationsService } from '../dist/modules/counter-operations/stations.service.js';
 
 const cashier = {
@@ -42,6 +48,43 @@ describe('V9 POS stations and display pairing', () => {
     assert.ok(result.deviceToken.length >= 32);
     assert.equal(data.deviceTokenHash.length, 64);
     assert.notEqual(data.deviceTokenHash, result.deviceToken);
+  });
+
+  it('cleans stale pairing codes and limits public code creation per client', async () => {
+    let cleanups = 0;
+    const service = stationsService({
+      pairingCode: {
+        deleteMany: async () => {
+          cleanups += 1;
+          return { count: 0 };
+        },
+        create: async ({ data }) => ({ id: `pairing-${cleanups}`, expiresAt: data.expiresAt }),
+      },
+    });
+    for (let index = 0; index < 10; index += 1)
+      await service.createPairingCode('CUSTOMER_DISPLAY', '203.0.113.10');
+    await assert.rejects(
+      () => service.createPairingCode('CUSTOMER_DISPLAY', '203.0.113.10'),
+      (error) => error?.getStatus?.() === 429,
+    );
+    assert.equal(cleanups, 10);
+  });
+
+  it('returns a stable 409 code when a station name already exists', async () => {
+    const duplicate = new Prisma.PrismaClientKnownRequestError('duplicate', {
+      code: 'P2002',
+      clientVersion: '7.10.0',
+      meta: { target: ['branch_id', 'name'] },
+    });
+    const service = stationsService({
+      posStation: { create: async () => Promise.reject(duplicate) },
+    });
+    await assert.rejects(
+      () => service.create(cashier, { name: 'Quầy 1' }),
+      (error) =>
+        error instanceof ConflictException &&
+        error.getResponse().code === 'STATION_NAME_ALREADY_EXISTS',
+    );
   });
 
   it('requires an employee assigned to a branch', () => {
@@ -129,18 +172,22 @@ describe('V9 POS stations and display pairing', () => {
   it('revokes only an active device from the authenticated branch', async () => {
     let query;
     let disconnected;
-    const service = stationsService({
-      displayDevice: {
-        updateMany: async (args) => {
-          query = args;
-          return { count: 1 };
+    const service = stationsService(
+      {
+        displayDevice: {
+          updateMany: async (args) => {
+            query = args;
+            return { count: 1 };
+          },
         },
       },
-    }, writableBranch, {
-      revokeDevice: async (id) => {
-        disconnected = id;
+      writableBranch,
+      {
+        revokeDevice: async (id) => {
+          disconnected = id;
+        },
       },
-    });
+    );
     assert.deepEqual(await service.revoke(cashier, 'device-id'), { revoked: true });
     assert.deepEqual(query.where, { id: 'device-id', branchId: 'branch-a', revokedAt: null });
     assert.equal(disconnected, 'device-id');
@@ -261,8 +308,7 @@ describe('V9 POS stations and display pairing', () => {
     await assert.rejects(
       service.callingDisplayReadyOrders('Bearer expired-token'),
       (error) =>
-        error instanceof ForbiddenException &&
-        error.getResponse().code === 'DEVICE_TOKEN_EXPIRED',
+        error instanceof ForbiddenException && error.getResponse().code === 'DEVICE_TOKEN_EXPIRED',
     );
   });
 

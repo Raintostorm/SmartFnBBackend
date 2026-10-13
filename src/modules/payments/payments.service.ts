@@ -179,7 +179,11 @@ export class PaymentsService {
       });
       return { ...result.payment, order: result.order, tracking: result.tracking };
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034')
+      const code =
+        typeof error === 'object' && error !== null && 'code' in error
+          ? String(error.code)
+          : undefined;
+      if (code && ['P2002', 'P2028', 'P2034'].includes(code))
         throw new ConflictException('Payment changed concurrently; reload before retrying');
       throw error;
     }
