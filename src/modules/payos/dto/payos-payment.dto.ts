@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsUrl, IsUUID } from 'class-validator';
+import { IsString, IsUrl, IsUUID, MaxLength, MinLength } from 'class-validator';
 
 export class CreatePayosPaymentDto {
   @ApiProperty({
@@ -16,4 +16,12 @@ export class CreatePayosPaymentDto {
   @ApiProperty({ example: 'https://pos.example.com/payment/success' })
   @IsUrl({ require_tld: false })
   returnUrl!: string;
+}
+
+export class CancelPayosPaymentDto {
+  @ApiProperty({ minLength: 3, maxLength: 500 })
+  @IsString()
+  @MinLength(3)
+  @MaxLength(500)
+  reason!: string;
 }

@@ -446,6 +446,7 @@ export class CounterOperationsService {
           data: {
             paymentCode: `PAY-${Date.now()}-${crypto.randomUUID().slice(0, 6).toUpperCase()}`,
             orderId,
+            stationId: station.id,
             processedById: actor.employeeId,
             method: PaymentMethod.CASH,
             provider: PaymentProvider.CASH,
@@ -702,7 +703,12 @@ export class CounterOperationsService {
       const headSize = this.sizeOption(headOptions);
       const headTime = head.orderItem.order.paidAt ?? head.createdAt;
       const selected = [head];
-      for (let index = 0; head.orderItem.menuItem.allowBatching !== false && index < pending.length && selected.length < maxBatchSize;) {
+      for (
+        let index = 0;
+        head.orderItem.menuItem.allowBatching !== false &&
+        index < pending.length &&
+        selected.length < maxBatchSize;
+      ) {
         const candidate = pending[index];
         const candidateOptions = this.optionSnapshots(candidate.orderItem.selectedOptions);
         const candidateSize = this.sizeOption(candidateOptions);
@@ -1039,7 +1045,16 @@ export class CounterOperationsService {
         unavailableById: actor.employeeId,
       },
     });
-    return [...new Set(items.map(({ orderId }) => orderId))];
+    const orderIds = [...new Set(items.map(({ orderId }) => orderId))];
+    await tx.order.updateMany({
+      where: { id: { in: orderIds } },
+      data: {
+        status: OrderStatus.REQUIRES_ATTENTION,
+        attentionAt: now,
+        attentionReason: 'PAID_ITEM_OUT_OF_STOCK',
+      },
+    });
+    return orderIds;
   }
 
   private async transitionUnit(

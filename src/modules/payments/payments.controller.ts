@@ -35,6 +35,8 @@ import {
 } from './dto/payment.dto.js';
 import { PaymentsService } from './payments.service.js';
 import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
+import { PaidOrderRefundService } from './paid-order-refund.service.js';
+import { CompleteRefundDto } from '../branch-manager/manager.dto.js';
 
 @ApiTags('Payments')
 @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
@@ -44,6 +46,7 @@ export class PaymentsController {
   constructor(
     private readonly service: PaymentsService,
     private readonly realtime: RealtimePublisher,
+    private readonly refunds: PaidOrderRefundService,
   ) {}
 
   @Roles(AppRole.OWNER, AppRole.MANAGER, AppRole.CASHIER)
@@ -88,17 +91,17 @@ export class PaymentsController {
     return result;
   }
 
-  @Roles(AppRole.MANAGER, AppRole.CASHIER)
+  @Roles(AppRole.MANAGER)
   @Post('payments/:paymentId/confirm')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Confirm cash or MANAGER-only manual non-cash payment',
+    summary:
+      'Manually confirm a pending, mismatched or late-after-expiry bank transfer (MANAGER only)',
     description:
-      'CASHIER can only confirm CASH. MANAGER must supply reason and receivedAmount for non-cash. ' +
-      'An amount mismatch settles the expected payment amount under Manager responsibility; the actual receipt and variance remain audited. ' +
-      'Confirmation, actor, time, audit and counter preparation queue are committed together.',
+      'BM-05: receivedAmount must cover the expected amount. Confirmation, call number, ' +
+      'preparation units, tracking link, print jobs and audit are committed together.',
   })
-  @ApiUuidPath('paymentId', 'Pending payment to confirm')
+  @ApiUuidPath('paymentId', 'Bank-transfer payment requiring confirmation')
   @ApiOkResponse({ type: PaymentResponseDto })
   @ApiStandardMutationErrors({ notFound: 'Payment not found', conflict: 'Payment is not pending' })
   async confirm(
@@ -106,14 +109,23 @@ export class PaymentsController {
     @Body() dto: ConfirmPaymentDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    const result = await this.service.confirm(paymentId, dto, user);
-    const branchId = result.tableSession?.branchId ?? result.order?.branchId;
-    if (branchId) {
-      this.realtime.branch(branchId, 'payment.confirmed', { id: result.id, status: result.status });
-      if (result.order?.type === 'COUNTER_PICKUP')
-        this.realtime.branch(branchId, 'preparation.order.queued', { orderId: result.orderId });
-    }
-    return result;
+    return this.service.confirm(paymentId, dto, user);
+  }
+
+  @Roles(AppRole.OWNER, AppRole.MANAGER)
+  @Post('refunds/:refundId/complete')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Mark an external bank-transfer refund as completed',
+    description:
+      'The platform records the action only; it does not transfer money or call a PayOS refund API.',
+  })
+  completeRefund(
+    @Param('refundId', new ParseUUIDPipe()) refundId: string,
+    @Body() dto: CompleteRefundDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.refunds.completeRefund(user, refundId, dto);
   }
 
   @Roles(AppRole.OWNER, AppRole.MANAGER, AppRole.CASHIER)

@@ -1,6 +1,10 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsEnum, IsOptional, IsString, IsUUID, Length, MaxLength } from 'class-validator';
-import { DisplayDeviceType, PrinterConnectionType } from '../../../generated/prisma/client.js';
+import {
+  DisplayDeviceType,
+  PosStationStatus,
+  PrinterConnectionType,
+} from '../../../generated/prisma/client.js';
 
 export class CreateStationDto {
   @ApiProperty({ maxLength: 100 })
@@ -18,6 +22,30 @@ export class CreateStationDto {
   @IsString()
   @MaxLength(255)
   printerAddress?: string;
+}
+
+export class UpdateStationDto {
+  @ApiPropertyOptional({ maxLength: 100 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  name?: string;
+
+  @ApiPropertyOptional({ enum: PosStationStatus })
+  @IsOptional()
+  @IsEnum(PosStationStatus)
+  status?: PosStationStatus;
+
+  @ApiPropertyOptional({ enum: PrinterConnectionType })
+  @IsOptional()
+  @IsEnum(PrinterConnectionType)
+  printerConnection?: PrinterConnectionType;
+
+  @ApiPropertyOptional({ maxLength: 255, nullable: true })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  printerAddress?: string | null;
 }
 
 export class CreatePairingCodeDto {

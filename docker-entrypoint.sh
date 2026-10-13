@@ -2,6 +2,9 @@
 set -eu
 
 prisma migrate deploy
-prisma db seed
+
+if [ "${RUN_DEMO_SEED:-false}" = "true" ]; then
+  prisma db seed
+fi
 
 exec node dist/main.js

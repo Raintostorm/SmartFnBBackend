@@ -6,9 +6,11 @@ import { BranchManagerController } from './branch-manager.controller.js';
 import { ManagerStaffService } from './manager-staff.service.js';
 import { ManagerOperationsService } from './manager-operations.service.js';
 import { ManagerReportsService } from './manager-reports.service.js';
+import { EmailModule } from '../email/email.module.js';
+import { PaymentsModule } from '../payments/payments.module.js';
 
 @Module({
-  imports: [AuthModule, BranchesModule, RealtimeModule],
+  imports: [AuthModule, BranchesModule, RealtimeModule, EmailModule, PaymentsModule],
   controllers: [BranchManagerController],
   providers: [ManagerStaffService, ManagerOperationsService, ManagerReportsService],
 })

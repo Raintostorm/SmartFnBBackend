@@ -115,12 +115,29 @@ enum PrintJobStatus {
   PENDING
   PRINTED
   FAILED
+  CANCELLED
+}
+
+enum RefundStatus {
+  PENDING
+  COMPLETED
+}
+
+enum RefundMethod {
+  CASH
+  BANK_TRANSFER
+}
+
+enum RefundSource {
+  MANAGER_CANCELLATION
+  LATE_PAYMENT
 }
 
 enum OrderStatus {
   PENDING
   SUBMITTED
   CONFIRMED
+  REQUIRES_ATTENTION
   PREPARING
   READY
   SERVED
@@ -190,6 +207,9 @@ enum PaymentMethod {
 
 enum PaymentStatus {
   PENDING
+  EXPIRED
+  REQUIRES_ATTENTION
+  AMOUNT_MISMATCH
   SUCCESS
   FAILED
   REFUNDED
@@ -334,19 +354,19 @@ model RestaurantChain {
 }
 
 model PayosChannel {
-  id                String   @id @default(uuid()) @db.Uuid
-  chainId           String   @unique @map("chain_id") @db.Uuid
-  clientIdCipher    String   @map("client_id_cipher") @db.Text
-  apiKeyCipher      String   @map("api_key_cipher") @db.Text
-  checksumKeyCipher String   @map("checksum_key_cipher") @db.Text
-  clientIdLast4     String?  @map("client_id_last4") @db.VarChar(4)
-  apiKeyLast4       String?  @map("api_key_last4") @db.VarChar(4)
+  id                String             @id @default(uuid()) @db.Uuid
+  chainId           String             @unique @map("chain_id") @db.Uuid
+  clientIdCipher    String             @map("client_id_cipher") @db.Text
+  apiKeyCipher      String             @map("api_key_cipher") @db.Text
+  checksumKeyCipher String             @map("checksum_key_cipher") @db.Text
+  clientIdLast4     String?            @map("client_id_last4") @db.VarChar(4)
+  apiKeyLast4       String?            @map("api_key_last4") @db.VarChar(4)
   status            PayosChannelStatus @default(LINKED)
-  lastError         String?  @map("last_error") @db.VarChar(1000)
-  lastVerifiedAt    DateTime? @map("last_verified_at") @db.Timestamptz(6)
-  webhookCode       String   @unique @default(uuid()) @map("webhook_code") @db.Uuid
-  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  lastError         String?            @map("last_error") @db.VarChar(1000)
+  lastVerifiedAt    DateTime?          @map("last_verified_at") @db.Timestamptz(6)
+  webhookCode       String             @unique @default(uuid()) @map("webhook_code") @db.Uuid
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   chain RestaurantChain @relation(fields: [chainId], references: [id], onDelete: Cascade)
 
@@ -1025,6 +1045,8 @@ model Order {
   callNumber         Int?               @map("call_number")
   cancelledAt        DateTime?          @map("cancelled_at") @db.Timestamptz(6)
   cancellationReason String?            @map("cancellation_reason") @db.VarChar(500)
+  attentionAt        DateTime?          @map("attention_at") @db.Timestamptz(6)
+  attentionReason    String?            @map("attention_reason") @db.VarChar(100)
   createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -1044,6 +1066,7 @@ model Order {
   printJobs        PrintJob[]
   displaySessions  CustomerDisplaySession[]
   trackingToken    OrderTrackingToken?
+  refunds          Refund[]
 
   @@unique([branchId, businessDate, callNumber])
   @@index([branchId, placedAt])
@@ -1054,6 +1077,7 @@ model Order {
   @@index([createdByCashierId])
   @@index([cancelledById])
   @@index([status, paymentStatus])
+  @@index([attentionAt])
   @@map("orders")
 }
 
@@ -1107,6 +1131,7 @@ model OrderItem {
   servingTask        ServingTask?
   invoiceItems       InvoiceItem[]
   units              OrderItemUnit[]
+  refundItems        RefundItem[]
 
   @@index([orderId, status])
   @@index([menuItemId])
@@ -1172,6 +1197,7 @@ model Payment {
   station       PosStation?           @relation(fields: [stationId], references: [id], onDelete: SetNull)
   invoiceLinks  InvoicePayment[]
   webhookEvents PaymentWebhookEvent[]
+  refunds       Refund[]
 
   @@index([orderId, status])
   @@index([tableSessionId, status])
@@ -1179,6 +1205,55 @@ model Payment {
   @@index([stationId])
   @@index([transactionRef])
   @@map("payments")
+}
+
+model Refund {
+  id                    String       @id @default(uuid()) @db.Uuid
+  orderId               String       @map("order_id") @db.Uuid
+  paymentId             String       @map("payment_id") @db.Uuid
+  amount                Decimal      @db.Decimal(14, 2)
+  status                RefundStatus @default(PENDING)
+  method                RefundMethod
+  source                RefundSource @default(MANAGER_CANCELLATION)
+  sourceReference       String?      @unique @map("source_reference") @db.VarChar(255)
+  reason                String       @db.VarChar(500)
+  requestedByUserId     String?      @map("requested_by_user_id") @db.Uuid
+  requestedByEmployeeId String?      @map("requested_by_employee_id") @db.Uuid
+  requestedByRole       String       @map("requested_by_role") @db.VarChar(50)
+  requestedAt           DateTime     @default(now()) @map("requested_at") @db.Timestamptz(6)
+  completedByUserId     String?      @map("completed_by_user_id") @db.Uuid
+  completedByEmployeeId String?      @map("completed_by_employee_id") @db.Uuid
+  completedByRole       String?      @map("completed_by_role") @db.VarChar(50)
+  completedAt           DateTime?    @map("completed_at") @db.Timestamptz(6)
+  cancellationDate      DateTime     @map("cancellation_date") @db.Date
+  note                  String?      @db.VarChar(500)
+  createdAt             DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  order   Order        @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  payment Payment      @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  items   RefundItem[]
+
+  @@index([orderId, status])
+  @@index([paymentId, status])
+  @@index([cancellationDate, status])
+  @@map("refunds")
+}
+
+model RefundItem {
+  id           String  @id @default(uuid()) @db.Uuid
+  refundId     String  @map("refund_id") @db.Uuid
+  orderItemId  String  @map("order_item_id") @db.Uuid
+  quantity     Int
+  refundAmount Decimal @map("refund_amount") @db.Decimal(14, 2)
+  isWastage    Boolean @default(false) @map("is_wastage")
+
+  refund    Refund    @relation(fields: [refundId], references: [id], onDelete: Cascade)
+  orderItem OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+
+  @@unique([orderItemId])
+  @@index([refundId])
+  @@map("refund_items")
 }
 
 // Immutable actor identifiers survive account archival. No API updates or deletes these rows.
@@ -1351,18 +1426,19 @@ model PairingCode {
 }
 
 model DisplayDevice {
-  id         String            @id @default(uuid()) @db.Uuid
-  type       DisplayDeviceType
-  branchId   String            @map("branch_id") @db.Uuid
-  stationId  String?           @map("station_id") @db.Uuid
-  tokenHash  String            @unique @map("token_hash") @db.VarChar(64)
-  name       String?           @db.VarChar(150)
-  pairedById String            @map("paired_by_id") @db.Uuid
-  pairedAt   DateTime          @default(now()) @map("paired_at") @db.Timestamptz(6)
-  lastSeenAt DateTime?         @map("last_seen_at") @db.Timestamptz(6)
-  revokedAt  DateTime?         @map("revoked_at") @db.Timestamptz(6)
-  createdAt  DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt  DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id             String            @id @default(uuid()) @db.Uuid
+  type           DisplayDeviceType
+  branchId       String            @map("branch_id") @db.Uuid
+  stationId      String?           @map("station_id") @db.Uuid
+  tokenHash      String            @unique @map("token_hash") @db.VarChar(64)
+  name           String?           @db.VarChar(150)
+  pairedById     String            @map("paired_by_id") @db.Uuid
+  pairedAt       DateTime          @default(now()) @map("paired_at") @db.Timestamptz(6)
+  lastSeenAt     DateTime?         @map("last_seen_at") @db.Timestamptz(6)
+  tokenExpiresAt DateTime          @map("token_expires_at") @db.Timestamptz(6)
+  revokedAt      DateTime?         @map("revoked_at") @db.Timestamptz(6)
+  createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   branch   Branch      @relation(fields: [branchId], references: [id], onDelete: Cascade)
   station  PosStation? @relation(fields: [stationId], references: [id], onDelete: Cascade)
@@ -1370,6 +1446,7 @@ model DisplayDevice {
 
   @@index([branchId, type, revokedAt])
   @@index([stationId, revokedAt])
+  @@index([tokenExpiresAt, revokedAt])
   @@map("display_devices")
 }
 

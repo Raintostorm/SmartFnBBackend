@@ -46,6 +46,9 @@ export class PayosChannelService {
 
   async save(chainId: string, dto: SavePayosChannelDto, user: AuthenticatedUser) {
     await this.branchAccess.assertCanManageChain(user, chainId);
+    // Check local encryption readiness before asking PayOS to change its webhook.
+    // Otherwise a missing master key could update PayOS successfully and only then fail to persist.
+    this.cipher.assertConfigured();
     const credentials = {
       clientId: dto.clientId.trim(),
       apiKey: dto.apiKey.trim(),

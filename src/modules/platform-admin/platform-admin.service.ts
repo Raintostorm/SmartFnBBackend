@@ -346,7 +346,10 @@ export class PlatformAdminService {
 
   async createServicePlan(dto: CreateServicePlanDto) {
     try {
-      return await this.prisma.servicePlan.create({ data: dto, select: servicePlanSelect });
+      return await this.prisma.servicePlan.create({
+        data: { ...dto, maxTables: dto.maxTables ?? 1 },
+        select: servicePlanSelect,
+      });
     } catch (error) {
       this.rethrowUniqueConflict(error, 'Service plan code already exists');
     }

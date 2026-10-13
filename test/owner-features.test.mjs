@@ -362,7 +362,10 @@ describe('Owner staff administration', () => {
         count: async () => 1,
         create: async ({ data }) => {
           created.push(data);
-          return { id: 'employee-one', user: { id: 'manager-user', email: data.user.create.email } };
+          return {
+            id: 'employee-one',
+            user: { id: 'manager-user', email: data.user.create.email },
+          };
         },
       },
       ownerChainAssignment: { count: async () => 1 },
@@ -372,13 +375,19 @@ describe('Owner staff administration', () => {
     };
     const service = new EmployeesService(
       {
-        branch: { findFirst: async () => ({ id: 'branch-one', name: 'Chi nhánh 1', chainId: 'chain-one' }) },
+        branch: {
+          findFirst: async () => ({ id: 'branch-one', name: 'Chi nhánh 1', chainId: 'chain-one' }),
+        },
         $transaction: async (work) => work(transaction),
       },
       { assertCanManageChain: async () => undefined },
       { hash: async () => 'hashed-random-password' },
     );
-    const result = await service.inviteManager(owner, { branchId: 'branch-one', name: 'Nguyễn Văn An', email: ' AN@example.com ' });
+    const result = await service.inviteManager(owner, {
+      branchId: 'branch-one',
+      name: 'Nguyễn Văn An',
+      email: ' AN@example.com ',
+    });
     assert.equal(result.account.user.email, 'an@example.com');
     assert.equal(created[0].user.create.status, UserStatus.INACTIVE);
     assert.equal(created[0].user.create.passwordHash, 'hashed-random-password');
@@ -510,10 +519,12 @@ describe('Chain menu boundaries', () => {
     const service = new MenuService(
       {
         branch: { findFirst: async () => ({ id: 'branch-one' }) },
-        menuOption: { findMany: async () => [
-          { id: 'size-m', branchAvailability: [] },
-          { id: 'size-l', branchAvailability: [{ isAvailable: false }] },
-        ] },
+        menuOption: {
+          findMany: async () => [
+            { id: 'size-m', branchAvailability: [] },
+            { id: 'size-l', branchAvailability: [{ isAvailable: false }] },
+          ],
+        },
       },
       { assertCanManageChain: async () => undefined },
     );
@@ -695,6 +706,12 @@ describe('Report range validation', () => {
       branchId: { in: ['branch-id'] },
       paymentStatus: 'PAID',
       paidAt: { gte: from, lt: to },
+    });
+    assert.deepEqual(service.countableOrdersWhere({ branchIds: ['branch-id'], from, to }), {
+      branchId: { in: ['branch-id'] },
+      paymentStatus: 'PAID',
+      paidAt: { gte: from, lt: to },
+      status: { not: 'CANCELLED' },
     });
   });
 });

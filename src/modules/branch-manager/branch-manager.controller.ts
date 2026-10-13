@@ -22,6 +22,7 @@ import { ManagerReportsService } from './manager-reports.service.js';
 import {
   ManagerAuditQueryDto,
   ManagerAvailabilityDto,
+  CancelPaidOrderDto,
   ManagerCreateStaffDto,
   ManagerOrderQueryDto,
   ManagerReportQueryDto,
@@ -31,6 +32,7 @@ import {
   ManagerUpdateStaffDto,
 } from './manager.dto.js';
 import { ApiAuthenticatedOperation } from '../../common/swagger/swagger.decorators.js';
+import { PaidOrderRefundService } from '../payments/paid-order-refund.service.js';
 
 @Roles(AppRole.MANAGER)
 @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
@@ -43,6 +45,7 @@ export class BranchManagerController {
     private readonly operations: ManagerOperationsService,
     private readonly reports: ManagerReportsService,
     private readonly realtime: RealtimePublisher,
+    private readonly refunds: PaidOrderRefundService,
   ) {}
 
   @Get('staff')
@@ -96,13 +99,26 @@ export class BranchManagerController {
 
   @Post('staff/:employeeId/reset-password')
   @HttpCode(200)
-  @ApiOperation({ summary: 'BM-01: Set a new password and revoke all sessions; requires a reason' })
+  @ApiOperation({
+    summary: 'BM-01: Send a one-time password setup link and revoke all sessions',
+  })
   resetPassword(
     @CurrentUser() user: AuthenticatedUser,
     @Param('employeeId', new ParseUUIDPipe()) id: string,
     @Body() dto: ManagerResetPasswordDto,
   ) {
     return this.staff.resetPassword(user, id, dto);
+  }
+
+  @Post('staff/:employeeId/invitation/cancel')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Cancel an unused Cashier/Barista account invitation' })
+  cancelInvitation(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('employeeId', new ParseUUIDPipe()) id: string,
+    @Body() dto: ManagerResetPasswordDto,
+  ) {
+    return this.staff.cancelInvitation(user, id, dto.reason);
   }
 
   @Get('menu-options')
@@ -162,6 +178,20 @@ export class BranchManagerController {
   })
   order(@CurrentUser() user: AuthenticatedUser, @Param('orderId', new ParseUUIDPipe()) id: string) {
     return this.operations.order(user, id);
+  }
+
+  @Post('orders/:orderId/cancel-paid')
+  @ApiOperation({
+    summary: 'BM-06: Cancel a paid or late-after-expiry order and record the external refund',
+    description:
+      'Cash is recorded as refunded immediately. Bank transfer creates a pending refund for an Owner or Manager to complete. No PayOS refund is called.',
+  })
+  cancelPaidOrder(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('orderId', new ParseUUIDPipe()) id: string,
+    @Body() dto: CancelPaidOrderDto,
+  ) {
+    return this.refunds.cancelPaidOrder(user, id, dto);
   }
 
   @Get('audit-logs')

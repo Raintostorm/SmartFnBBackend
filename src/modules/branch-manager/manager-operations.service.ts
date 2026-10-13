@@ -14,7 +14,11 @@ const paymentSelect = {
   provider: true,
   status: true,
   amount: true,
+  tenderedAmount: true,
+  changeAmount: true,
   receivedAmount: true,
+  expiresAt: true,
+  stationId: true,
   transactionRef: true,
   confirmationReason: true,
   confirmedAt: true,
@@ -22,7 +26,36 @@ const paymentSelect = {
   createdAt: true,
   failureReason: true,
   processedBy: { select: actorSelect },
+  station: { select: { id: true, name: true, status: true } },
 } satisfies Prisma.PaymentSelect;
+const refundSelect = {
+  id: true,
+  paymentId: true,
+  amount: true,
+  status: true,
+  method: true,
+  source: true,
+  sourceReference: true,
+  reason: true,
+  requestedByUserId: true,
+  requestedByEmployeeId: true,
+  requestedByRole: true,
+  requestedAt: true,
+  completedByUserId: true,
+  completedByEmployeeId: true,
+  completedByRole: true,
+  completedAt: true,
+  cancellationDate: true,
+  note: true,
+  items: {
+    select: {
+      orderItemId: true,
+      quantity: true,
+      refundAmount: true,
+      isWastage: true,
+    },
+  },
+} satisfies Prisma.RefundSelect;
 const summarySelect = {
   id: true,
   orderCode: true,
@@ -35,9 +68,12 @@ const summarySelect = {
   paidAt: true,
   cancelledAt: true,
   cancellationReason: true,
+  attentionAt: true,
+  attentionReason: true,
   createdByCashier: { select: actorSelect },
   createdByWaiter: { select: actorSelect },
   payments: { select: paymentSelect },
+  refunds: { select: refundSelect, orderBy: { requestedAt: 'asc' } },
   tableSession: { select: { id: true, sessionCode: true, payments: { select: paymentSelect } } },
 } satisfies Prisma.OrderSelect;
 
@@ -78,6 +114,7 @@ export class ManagerOperationsService {
             },
           }
         : {}),
+      ...(query.refundStatus ? { refunds: { some: { status: query.refundStatus } } } : {}),
       AND: [
         ...(search
           ? [
@@ -99,13 +136,30 @@ export class ManagerOperationsService {
               },
             ]
           : []),
+        ...(query.paymentRecordStatus
+          ? [
+              {
+                OR: [
+                  { payments: { some: { status: query.paymentRecordStatus } } },
+                  {
+                    tableSession: {
+                      payments: { some: { status: query.paymentRecordStatus } },
+                    },
+                  },
+                ],
+              },
+            ]
+          : []),
       ],
     };
     const [items, total] = await this.prisma.$transaction([
       this.prisma.order.findMany({
         where,
         select: summarySelect,
-        orderBy: [{ placedAt: 'desc' }, { id: 'desc' }],
+        orderBy: [
+          { [query.sortBy ?? 'placedAt']: query.sortOrder ?? 'desc' },
+          { id: query.sortOrder ?? 'desc' },
+        ],
         skip: (query.page - 1) * query.limit,
         take: query.limit,
       }),
@@ -157,11 +211,56 @@ export class ManagerOperationsService {
     const paymentIds = [...order.payments, ...(order.tableSession?.payments ?? [])].map(
       (p) => p.id,
     );
-    const audit = await this.prisma.branchAuditLog.findMany({
-      where: { branchId, entityId: { in: [id, ...paymentIds] } },
-      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    });
-    return { ...order, audit };
+    const refundIds = order.refunds.map((refund) => refund.id);
+    const actorUserIds = [
+      ...new Set(
+        order.refunds.flatMap((refund) =>
+          [refund.requestedByUserId, refund.completedByUserId].filter(
+            (userId): userId is string => userId !== null,
+          ),
+        ),
+      ),
+    ];
+    const [audit, actorUsers] = await Promise.all([
+      this.prisma.branchAuditLog.findMany({
+        where: { branchId, entityId: { in: [id, ...paymentIds, ...refundIds] } },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      }),
+      actorUserIds.length
+        ? this.prisma.user.findMany({
+            where: { id: { in: actorUserIds } },
+            select: {
+              id: true,
+              email: true,
+              employee: { select: actorSelect },
+              owner: { select: { id: true, ownerCode: true, firstName: true, lastName: true } },
+            },
+          })
+        : [],
+    ]);
+    const actors = new Map(
+      actorUsers.map((actor) => [
+        actor.id,
+        {
+          id: actor.id,
+          email: actor.email,
+          profile: actor.employee ?? actor.owner,
+        },
+      ]),
+    );
+    return {
+      ...order,
+      refunds: order.refunds.map((refund) => ({
+        ...refund,
+        requestedBy: refund.requestedByUserId
+          ? (actors.get(refund.requestedByUserId) ?? null)
+          : null,
+        completedBy: refund.completedByUserId
+          ? (actors.get(refund.completedByUserId) ?? null)
+          : null,
+      })),
+      audit,
+    };
   }
 
   async audit(user: AuthenticatedUser, query: ManagerAuditQueryDto) {
@@ -229,6 +328,8 @@ export class ManagerOperationsService {
               select: { id: true, orderId: true },
             });
         if (items.length) {
+          const now = new Date();
+          const orderIds = [...new Set(items.map((item) => item.orderId))];
           await tx.orderItemUnit.updateMany({
             where: {
               orderItemId: { in: items.map((i) => i.id) },
@@ -240,8 +341,16 @@ export class ManagerOperationsService {
             where: { id: { in: items.map((i) => i.id) } },
             data: {
               status: 'OUT_OF_STOCK',
-              unavailableAt: new Date(),
+              unavailableAt: now,
               unavailableById: employeeId,
+            },
+          });
+          await tx.order.updateMany({
+            where: { id: { in: orderIds } },
+            data: {
+              status: 'REQUIRES_ATTENTION',
+              attentionAt: now,
+              attentionReason: 'PAID_OPTION_OUT_OF_STOCK',
             },
           });
         }

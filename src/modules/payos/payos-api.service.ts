@@ -16,6 +16,16 @@ export interface PayosPaymentRequest {
   expiredAt?: number;
 }
 
+export interface PayosPaymentState {
+  id?: string;
+  orderCode?: number;
+  amount?: number;
+  amountPaid?: number;
+  amountRemaining?: number;
+  status?: string;
+  transactions?: Array<{ reference?: string; amount?: number }>;
+}
+
 export class PayosApiError extends Error {
   constructor(
     message: string,
@@ -64,17 +74,51 @@ export class PayosApiService {
     return data;
   }
 
-  private async request(credentials: PayosCredentials, url: string, body: unknown) {
+  async getPayment(credentials: PayosCredentials, paymentLinkIdOrOrderCode: string) {
+    const payload = await this.request(
+      credentials,
+      `https://api-merchant.payos.vn/v2/payment-requests/${encodeURIComponent(paymentLinkIdOrOrderCode)}`,
+      undefined,
+      'GET',
+    );
+    if (payload.code !== '00' || !payload.data) {
+      throw new PayosApiError(payload.desc || 'PayOS payment was not found', false);
+    }
+    return payload.data as PayosPaymentState;
+  }
+
+  async cancelPayment(
+    credentials: PayosCredentials,
+    paymentLinkIdOrOrderCode: string,
+    cancellationReason: string,
+  ) {
+    const payload = await this.request(
+      credentials,
+      `https://api-merchant.payos.vn/v2/payment-requests/${encodeURIComponent(paymentLinkIdOrOrderCode)}/cancel`,
+      { cancellationReason },
+    );
+    if (payload.code !== '00') {
+      throw new PayosApiError(payload.desc || 'PayOS rejected the cancellation', false);
+    }
+    return payload.data as PayosPaymentState | undefined;
+  }
+
+  private async request(
+    credentials: PayosCredentials,
+    url: string,
+    body: unknown,
+    method: 'GET' | 'POST' = 'POST',
+  ) {
     let response: Response;
     try {
       response = await fetch(url, {
-        method: 'POST',
+        method,
         headers: {
           'Content-Type': 'application/json',
           'x-client-id': credentials.clientId,
           'x-api-key': credentials.apiKey,
         },
-        body: JSON.stringify(body),
+        body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.timeout(10_000),
       });
     } catch {

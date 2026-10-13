@@ -39,4 +39,8 @@ export class RealtimePublisher {
       data,
     });
   }
+
+  revokeDevice(deviceId: string) {
+    return this.gateway.disconnectDevice(deviceId);
+  }
 }

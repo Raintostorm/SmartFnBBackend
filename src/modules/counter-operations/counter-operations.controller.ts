@@ -12,7 +12,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { Roles } from '../auth/decorators/roles.decorator.js';
 import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
 import { CounterOperationsService } from './counter-operations.service.js';
-import { CreatePayosPaymentDto } from '../payos/dto/payos-payment.dto.js';
+import { CancelPayosPaymentDto, CreatePayosPaymentDto } from '../payos/dto/payos-payment.dto.js';
 import { PayosPaymentService } from '../payos/payos-payment.service.js';
 import {
   AddCounterOrderItemDto,
@@ -53,8 +53,13 @@ export class CashierController {
   @ApiOperation({
     summary: 'Validate a local cart and create one immutable order awaiting payment',
   })
-  checkout(@CurrentUser() user: AuthenticatedUser, @Body() dto: CheckoutCounterOrderDto) {
-    return this.service.checkout(user, dto);
+  async checkout(@CurrentUser() user: AuthenticatedUser, @Body() dto: CheckoutCounterOrderDto) {
+    const result = await this.service.checkout(user, dto);
+    this.publish(user, 'cashier.order.updated', {
+      orderId: result.id,
+      status: result.status,
+    });
+    return result;
   }
 
   @Get('orders')
@@ -131,11 +136,13 @@ export class CashierController {
 
   @Post('orders/:orderId/finalize')
   @ApiOperation({ summary: 'Lock an order for payment' })
-  finalize(
+  async finalize(
     @CurrentUser() user: AuthenticatedUser,
     @Param('orderId', new ParseUUIDPipe()) id: string,
   ) {
-    return this.service.finalize(user, id);
+    const result = await this.service.finalize(user, id);
+    this.publish(user, 'order.finalized', { orderId: id, status: result.status });
+    return result;
   }
 
   @Post('orders/:orderId/payments/cash')
@@ -176,14 +183,43 @@ export class CashierController {
     return this.payosPayments.create(user, id, dto);
   }
 
+  @Post('payments/:paymentId/payos/recheck')
+  @ApiTags('Cashier · Payments')
+  @ApiOperation({ summary: 'Recheck a pending PayOS payment without waiting for its webhook' })
+  recheckPayos(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('paymentId', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.payosPayments.recheck(user, id);
+  }
+
+  @Post('payments/:paymentId/payos/cancel')
+  @ApiTags('Cashier · Payments')
+  @ApiOperation({ summary: 'Cancel a pending PayOS payment at PayOS and locally' })
+  async cancelPayos(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('paymentId', new ParseUUIDPipe()) id: string,
+    @Body() dto: CancelPayosPaymentDto,
+  ) {
+    const result = await this.payosPayments.cancel(user, id, dto.reason);
+    this.publish(user, 'payment.cancelled', {
+      orderId: result.orderId,
+      paymentId: result.id,
+      status: result.status,
+    });
+    return result;
+  }
+
   @Post('orders/:orderId/cancel')
   @ApiOperation({ summary: 'Cancel an unpaid counter order before preparation begins' })
-  cancel(
+  async cancel(
     @CurrentUser() user: AuthenticatedUser,
     @Param('orderId', new ParseUUIDPipe()) id: string,
     @Body() dto: CancelCounterOrderDto,
   ) {
-    return this.service.cancelUnpaid(user, id, dto.reason);
+    const result = await this.service.cancelUnpaid(user, id, dto.reason);
+    this.publish(user, 'order.cancelled', { orderId: id, reason: dto.reason });
+    return result;
   }
 
   private publish(user: AuthenticatedUser, type: string, data: unknown) {

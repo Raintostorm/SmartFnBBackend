@@ -28,7 +28,12 @@ import type { SetupPasswordDto } from './dto/setup-password.dto.js';
 import { PasswordService } from './password.service.js';
 
 // Roles onboarded or recovered through a one-time setup link rather than a password reset form.
-const PASSWORD_SETUP_ROLES: readonly AppRole[] = [AppRole.OWNER, AppRole.MANAGER];
+const PASSWORD_SETUP_ROLES: readonly AppRole[] = [
+  AppRole.OWNER,
+  AppRole.MANAGER,
+  AppRole.CASHIER,
+  AppRole.BARISTA,
+];
 
 interface TokenPair {
   accessToken: string;

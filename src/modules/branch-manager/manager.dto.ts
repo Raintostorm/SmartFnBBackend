@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional, OmitType, PartialType, PickType } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, OmitType, PartialType } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
   IsBoolean,
@@ -19,22 +19,36 @@ import {
   OrderStatus,
   OrderType,
   PaymentMethod,
+  PaymentStatus,
+  RefundMethod,
+  RefundStatus,
   UserStatus,
 } from '../../generated/prisma/client.js';
 import { AppRole } from '../auth/app-role.enum.js';
 import { CreateStaffDto } from '../auth/dto/create-staff.dto.js';
 
-export class ManagerCreateStaffDto extends OmitType(CreateStaffDto, ['role', 'branchId'] as const) {
+export class ManagerCreateStaffDto extends OmitType(CreateStaffDto, [
+  'role',
+  'branchId',
+  'password',
+] as const) {
   @ApiProperty({ enum: [AppRole.CASHIER, AppRole.BARISTA] })
   @IsIn([AppRole.CASHIER, AppRole.BARISTA])
   role!: AppRole.CASHIER | AppRole.BARISTA;
 }
 
-export class ManagerUpdateStaffDto extends PartialType(
-  OmitType(ManagerCreateStaffDto, ['password'] as const),
-) {}
+class ManagerUpdateStaffBaseDto extends OmitType(PartialType(ManagerCreateStaffDto), [
+  'phone',
+] as const) {}
 
-export class ManagerResetPasswordDto extends PickType(CreateStaffDto, ['password'] as const) {
+export class ManagerUpdateStaffDto extends ManagerUpdateStaffBaseDto {
+  @ApiPropertyOptional({ nullable: true, example: '+84901234567' })
+  @IsOptional()
+  @IsString()
+  phone?: string | null;
+}
+
+export class ManagerResetPasswordDto {
   @ApiProperty({ minLength: 3, maxLength: 500 })
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
@@ -96,6 +110,16 @@ export class ManagerAvailabilityDto {
 }
 
 export class ManagerOrderQueryDto extends ManagerPageDto {
+  @ApiPropertyOptional({ enum: ['placedAt', 'attentionAt', 'status', 'totalAmount'] })
+  @IsOptional()
+  @IsIn(['placedAt', 'attentionAt', 'status', 'totalAmount'])
+  sortBy?: 'placedAt' | 'attentionAt' | 'status' | 'totalAmount';
+
+  @ApiPropertyOptional({ enum: ['asc', 'desc'], default: 'desc' })
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortOrder?: 'asc' | 'desc';
+
   @ApiPropertyOptional({
     description: 'Partial order code or exact numeric call number',
     maxLength: 100,
@@ -146,6 +170,19 @@ export class ManagerOrderQueryDto extends ManagerPageDto {
   paymentStatus?: OrderPaymentStatus;
 
   @ApiPropertyOptional({
+    enum: PaymentStatus,
+    description: 'Status of a payment record, including AMOUNT_MISMATCH',
+  })
+  @IsOptional()
+  @IsEnum(PaymentStatus)
+  paymentRecordStatus?: PaymentStatus;
+
+  @ApiPropertyOptional({ enum: RefundStatus })
+  @IsOptional()
+  @IsEnum(RefundStatus)
+  refundStatus?: RefundStatus;
+
+  @ApiPropertyOptional({
     enum: PaymentMethod,
     description: 'Matches payment attempts on the order or its table session',
   })
@@ -157,6 +194,37 @@ export class ManagerOrderQueryDto extends ManagerPageDto {
   @IsOptional()
   @IsEnum(OrderType)
   type?: OrderType;
+}
+
+export class CancelPaidOrderDto {
+  @ApiProperty({ minLength: 3, maxLength: 500 })
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @MinLength(3)
+  @MaxLength(500)
+  reason!: string;
+
+  @ApiProperty({ enum: RefundMethod })
+  @IsEnum(RefundMethod)
+  refundMethod!: RefundMethod;
+
+  @ApiPropertyOptional({
+    type: [String],
+    format: 'uuid',
+    description: 'Omit or send an empty array to cancel the whole order',
+  })
+  @IsOptional()
+  @IsUUID('4', { each: true })
+  orderItemIds?: string[];
+}
+
+export class CompleteRefundDto {
+  @ApiPropertyOptional({ maxLength: 500 })
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @MaxLength(500)
+  note?: string;
 }
 
 export class ManagerReportQueryDto {
