@@ -11,6 +11,8 @@ import {
   Post,
   Put,
   Query,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
@@ -22,9 +24,13 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiParam,
+  ApiConsumes,
+  ApiBody,
+  ApiPayloadTooLargeResponse,
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { AppRole } from '../auth/app-role.enum.js';
 import { SWAGGER_ACCESS_TOKEN } from '../auth/auth.constants.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
@@ -45,6 +51,7 @@ import {
   UpdateMenuOptionGroupDto,
 } from './dto/menu.dto.js';
 import { MenuService } from './menu.service.js';
+import { MENU_IMAGE_MAX_BYTES } from './menu-image.js';
 
 @Roles(AppRole.OWNER)
 @ApiTags('Menu - chain wide (OWNER)')
@@ -270,6 +277,24 @@ export class ChainMenuController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.menuService.updateItem(chainId, itemId, dto, user);
+  }
+
+  @Post('items/:itemId/image')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(FileInterceptor('file', { limits: { files: 1, fileSize: MENU_IMAGE_MAX_BYTES } }))
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({ schema: { type: 'object', required: ['file'], properties: { file: { type: 'string', format: 'binary' } } } })
+  @ApiOperation({ summary: 'Upload a menu item image (JPEG, PNG, or WebP; maximum 5 MB)' })
+  @ApiOkResponse({ description: 'Menu item image updated' })
+  @ApiBadRequestResponse({ description: 'Missing or invalid image' })
+  @ApiPayloadTooLargeResponse({ description: 'Image exceeds 5 MB' })
+  uploadItemImage(
+    @Param('chainId', new ParseUUIDPipe()) chainId: string,
+    @Param('itemId', new ParseUUIDPipe()) itemId: string,
+    @UploadedFile() file: { buffer: Buffer; mimetype: string; size: number } | undefined,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.menuService.uploadItemImage(chainId, itemId, file, user);
   }
 
   @Patch('items/:itemId/active')

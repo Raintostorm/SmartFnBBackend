@@ -4,6 +4,9 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { basename, join } from 'node:path';
 import { BranchStatus, Prisma } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
@@ -23,6 +26,7 @@ import type {
   UpdateMenuOptionDto,
   UpdateMenuOptionGroupDto,
 } from './dto/menu.dto.js';
+import { getMenuImageDirectory, MENU_IMAGE_MAX_BYTES, MENU_IMAGE_PUBLIC_PREFIX } from './menu-image.js';
 
 const categorySelect = {
   id: true,
@@ -390,6 +394,48 @@ export class MenuService {
       data: dto,
       select: itemSelect,
     });
+  }
+
+  async uploadItemImage(
+    chainId: string,
+    itemId: string,
+    file: { buffer: Buffer; mimetype: string; size: number } | undefined,
+    user: AuthenticatedUser,
+  ) {
+    await this.branchAccess.assertCanManageChain(user, chainId);
+    const item = await this.getItemOrFail(chainId, itemId);
+    if (!file?.buffer?.length) throw new BadRequestException('An image file is required');
+    if (file.size > MENU_IMAGE_MAX_BYTES || file.buffer.length > MENU_IMAGE_MAX_BYTES) {
+      throw new BadRequestException('Menu image must not exceed 5 MB');
+    }
+    const signatures = [
+      { mime: 'image/jpeg', ext: 'jpg', valid: file.buffer.length >= 3 && file.buffer.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff])) },
+      { mime: 'image/png', ext: 'png', valid: file.buffer.length >= 8 && file.buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) },
+      { mime: 'image/webp', ext: 'webp', valid: file.buffer.length >= 12 && file.buffer.subarray(0, 4).toString('ascii') === 'RIFF' && file.buffer.subarray(8, 12).toString('ascii') === 'WEBP' },
+    ];
+    const format = signatures.find(({ mime, valid }) => mime === file.mimetype && valid);
+    if (!format) throw new BadRequestException('Menu image must be a valid JPEG, PNG, or WebP file');
+
+    const directory = getMenuImageDirectory();
+    await mkdir(directory, { recursive: true });
+    const fileName = `${chainId}-${itemId}-${randomUUID()}.${format.ext}`;
+    const filePath = join(directory, fileName);
+    const imageUrl = `${MENU_IMAGE_PUBLIC_PREFIX}/${fileName}`;
+    await writeFile(filePath, file.buffer, { flag: 'wx' });
+    let saved;
+    try {
+      saved = await this.prisma.menuItem.update({ where: { id: itemId }, data: { imageUrl }, select: itemSelect });
+    } catch (error) {
+      await rm(filePath, { force: true }).catch(() => undefined);
+      throw error;
+    }
+    if (item.imageUrl?.startsWith(`${MENU_IMAGE_PUBLIC_PREFIX}/`)) {
+      const oldName = item.imageUrl.slice(MENU_IMAGE_PUBLIC_PREFIX.length + 1);
+      if (oldName && basename(oldName) === oldName) {
+        await rm(join(directory, oldName), { force: true }).catch(() => undefined);
+      }
+    }
+    return saved;
   }
 
   /**

@@ -576,6 +576,35 @@ describe('Owner branding logo upload', () => {
 });
 
 describe('Chain menu boundaries', () => {
+  it('uploads a menu PNG and rejects mismatched image content', async () => {
+    const previousDirectory = process.env.UPLOAD_DIR;
+    const uploadDirectory = await mkdtemp(join(tmpdir(), 'smart-fnb-menu-'));
+    process.env.UPLOAD_DIR = uploadDirectory;
+    const saved = { imageUrl: null };
+    const service = new MenuService(
+      {
+        menuItem: {
+          findFirst: async () => ({ id: 'item-one', imageUrl: saved.imageUrl }),
+          update: async ({ data }) => ({ id: 'item-one', imageUrl: (saved.imageUrl = data.imageUrl) }),
+        },
+      },
+      { assertCanManageChain: async () => undefined },
+    );
+    try {
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      const result = await service.uploadItemImage('chain-one', 'item-one', { buffer: png, mimetype: 'image/png', size: png.length }, owner);
+      assert.match(result.imageUrl, /^\/uploads\/menu\/chain-one-item-one-.+\.png$/);
+      assert.deepEqual(await readFile(join(uploadDirectory, 'menu', result.imageUrl.split('/').at(-1))), png);
+      await assert.rejects(
+        service.uploadItemImage('chain-one', 'item-one', { buffer: Buffer.from('bad'), mimetype: 'image/png', size: 3 }, owner),
+        (error) => error?.getStatus?.() === 400,
+      );
+    } finally {
+      if (previousDirectory === undefined) delete process.env.UPLOAD_DIR;
+      else process.env.UPLOAD_DIR = previousDirectory;
+      await rm(uploadDirectory, { recursive: true, force: true });
+    }
+  });
   it('returns branch availability with true as the default for untouched options', async () => {
     const service = new MenuService(
       {
