@@ -26,15 +26,17 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
   const payosWebhookBaseUrl = String(config.PAYOS_WEBHOOK_BASE_URL ?? '')
     .trim()
     .replace(/\/+$/, '');
-  const publicWebUrl = String(config.PUBLIC_WEB_URL ?? 'http://localhost:8443')
+  const publicWebUrl = String(config.PUBLIC_WEB_URL || config.FRONTEND_URL || 'http://localhost:8443')
     .trim()
     .replace(/\/+$/, '');
   const orderTrackingSecret = String(config.ORDER_TRACKING_SECRET ?? '').trim();
   const emailProvider = String(config.EMAIL_PROVIDER ?? 'resend')
     .trim()
     .toLowerCase();
-  const emailApiKey = String(config.EMAIL_API_KEY ?? '').trim();
-  const emailFrom = String(config.EMAIL_FROM ?? '').trim();
+  const emailApiKey = String(config.EMAIL_API_KEY || config.RESEND_API_KEY || '').trim();
+  const emailFrom = String(
+    config.EMAIL_FROM || config.RESEND_FROM_EMAIL || (emailApiKey ? 'Smart FnB <no-reply@mail.smartfnb.tech>' : ''),
+  ).trim();
   const paymentExpiryJobEnabledValue = String(
     config.PAYMENT_EXPIRY_JOB_ENABLED ?? 'true',
   ).toLowerCase();

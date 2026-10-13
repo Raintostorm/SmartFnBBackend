@@ -15,6 +15,7 @@ import {
 import { PrismaService } from '../../database/prisma.service.js';
 import { AppRole } from '../auth/app-role.enum.js';
 import { PasswordService } from '../auth/password.service.js';
+import { EmailOutboxService } from '../email/email-outbox.service.js';
 import type {
   ApproveRegistrationApplicationDto,
   ChangeSubscriptionPlanDto,
@@ -62,6 +63,7 @@ export class PlatformAdminService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly passwordService: PasswordService,
+    private readonly emails: EmailOutboxService,
   ) {}
 
   async submitRegistrationApplication(dto: SubmitRegistrationApplicationDto) {
@@ -187,8 +189,9 @@ export class PlatformAdminService {
     );
     const names = this.splitName(application.representativeName);
 
+    let emailId: string;
     try {
-      await this.prisma.$transaction(async (transaction) => {
+      emailId = await this.prisma.$transaction(async (transaction) => {
         const chain = await transaction.restaurantChain.create({
           data: {
             code: this.generateCode('BIZ'),
@@ -246,17 +249,17 @@ export class PlatformAdminService {
             expiresAt: setupExpiresAt,
           },
         });
-        await transaction.emailOutbox.create({
+        const email = await transaction.emailOutbox.create({
           data: {
             recipient: ownerUser.email,
             subject: 'Thiết lập tài khoản Owner Smart F&B',
             template: 'OWNER_ACCOUNT_CREATED',
             payload: {
               businessName: application.businessName,
-              ownerName: application.representativeName,
+              employeeName: application.representativeName,
               loginEmail: ownerUser.email,
               setupToken,
-              setupPath: '/auth/setup-password',
+              setupPath: '/setup-password',
               expiresAt: setupExpiresAt.toISOString(),
             },
           },
@@ -272,6 +275,7 @@ export class PlatformAdminService {
             ownerUserId: ownerUser.id,
           },
         });
+        return email.id;
       });
     } catch (error) {
       this.rethrowUniqueConflict(
@@ -279,6 +283,8 @@ export class PlatformAdminService {
         'Business code, Owner code, email, or phone already exists',
       );
     }
+
+    await this.emails.deliver(emailId);
 
     return this.getRegistrationApplication(id);
   }
