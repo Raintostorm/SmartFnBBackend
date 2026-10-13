@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { BranchStatus, UserStatus } from '../dist/generated/prisma/client.js';
 import { AppRole } from '../dist/modules/auth/app-role.enum.js';
+import { AuthService } from '../dist/modules/auth/auth.service.js';
 import { BranchesService } from '../dist/modules/branches/branches.service.js';
 import { BrandingService } from '../dist/modules/branding/branding.service.js';
 import { EmployeesService } from '../dist/modules/employees/employees.service.js';
@@ -353,6 +354,66 @@ describe('Service plan quota', () => {
 });
 
 describe('Owner staff administration', () => {
+  it('authenticates a numeric-password staff username case-insensitively', async () => {
+    let lookedUp;
+    const staff = { id: 'staff-user', email: 'cashier_01', passwordHash: 'hashed-password', status: UserStatus.ACTIVE, deletedAt: null, role: { code: AppRole.CASHIER } };
+    const auth = new AuthService(
+      { findByEmailForAuth: async (value) => { lookedUp = value; return staff; }, updateLastLogin: async () => undefined },
+      {},
+      {},
+      { getOrThrow: () => 'test-secret' },
+      { verify: async (hash, password) => hash === 'hashed-password' && password === '12345678' },
+    );
+    auth.createSession = async (user) => ({ user: { email: user.email } });
+    const result = await auth.login({ email: ' CASHIER_01 ', password: '12345678' }, {});
+    assert.equal(lookedUp, 'cashier_01');
+    assert.equal(result.user.email, 'cashier_01');
+  });
+
+  it('creates active Manager, Cashier and Barista usernames with hashed numeric passwords', async () => {
+    const created = [];
+    const transaction = {
+      $queryRaw: async () => [],
+      businessSubscription: { findFirst: async () => ({ plan: { maxAccounts: 10 } }) },
+      employee: { count: async () => 1, create: async ({ data }) => { created.push(data); return { id: 'new-employee', user: { email: data.user.create.email } }; } },
+      ownerChainAssignment: { count: async () => 1 },
+      role: { findUnique: async () => ({ id: 'role-id' }) },
+    };
+    const service = new EmployeesService(
+      { branch: { findFirst: async () => ({ id: 'branch-one', chainId: 'chain-one' }) }, $transaction: async (work) => work(transaction) },
+      { assertCanManageChain: async () => undefined },
+      { hash: async (password) => `hashed:${password}` },
+    );
+    for (const role of [AppRole.MANAGER, AppRole.CASHIER, AppRole.BARISTA]) {
+      const result = await service.createDirectAccount(owner, { branchId: 'branch-one', name: 'Nguyễn Văn An', username: `staff_${role.toLowerCase()}`, password: '12345678', role });
+      assert.equal(result.user.email, `staff_${role.toLowerCase()}`);
+    }
+    assert.equal(created.length, 3);
+    for (const data of created) {
+      assert.equal(data.user.create.status, UserStatus.ACTIVE);
+      assert.equal(data.user.create.passwordHash, 'hashed:12345678');
+      assert.equal(data.branch.connect.id, 'branch-one');
+    }
+  });
+
+  it('replaces a direct-login password and revokes sessions', async () => {
+    const calls = [];
+    const service = new EmployeesService(
+      {
+        employee: { findFirst: async () => ({ id: 'employee-one', user: { id: 'staff-user', email: 'cashier_1', role: { code: AppRole.CASHIER } } }) },
+        $transaction: async (work) => work({
+          user: { update: async (args) => calls.push(args) },
+          authSession: { updateMany: async (args) => calls.push(args) },
+        }),
+      },
+      { getAccessibleBranchIds: async () => ['branch-one'] },
+      { hash: async () => 'hashed-password' },
+    );
+    await service.setDirectPassword(owner, 'employee-one', { password: '87654321' });
+    assert.equal(calls[0].data.passwordHash, 'hashed-password');
+    assert.equal(calls[1].where.userId, 'staff-user');
+  });
+
   it('invites an inactive manager without returning the setup token', async () => {
     const created = [];
     const transaction = {

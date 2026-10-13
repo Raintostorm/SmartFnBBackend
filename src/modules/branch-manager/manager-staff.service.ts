@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -309,6 +310,9 @@ export class ManagerStaffService {
     const expiresAt = new Date(Date.now() + PASSWORD_SETUP_TTL_MS);
     const invitation = await this.mutate(async (tx) => {
       const staff = await this.target(tx, branchId, id);
+      if (!staff.user.email.includes('@')) {
+        throw new ForbiddenException('Username accounts are reset directly by the Owner');
+      }
       await this.revoke(tx, staff.user.id);
       await tx.passwordSetupToken.updateMany({
         where: { userId: staff.user.id, usedAt: null },

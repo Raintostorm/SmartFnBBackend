@@ -96,7 +96,7 @@ export class AuthController {
   @Public()
   @HttpCode(HttpStatus.OK)
   @Post('login')
-  @ApiOperation({ summary: 'Log in with email and password' })
+  @ApiOperation({ summary: 'Log in with email or staff username and password' })
   @ApiOkResponse({ type: AuthResponseDto })
   @ApiBadRequestResponse({ description: 'Request validation failed' })
   @ApiUnauthorizedResponse({ description: 'Credentials are invalid or the account is not active' })

@@ -16,7 +16,9 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { Roles } from '../auth/decorators/roles.decorator.js';
 import {
   InviteManagerDto,
+  CreateDirectStaffDto,
   ListEmployeesQueryDto,
+  SetDirectStaffPasswordDto,
   TransferEmployeeBranchDto,
   UpdateEmployeeAccountStatusDto,
 } from './dto/employee.dto.js';
@@ -38,12 +40,18 @@ export class EmployeesController {
     return this.employeesService.inviteManager(user, dto);
   }
 
+  @Post('accounts')
+  @ApiOperation({ summary: 'Create an active Manager, Cashier or Barista with username and password' })
+  createAccount(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateDirectStaffDto) {
+    return this.employeesService.createDirectAccount(user, dto);
+  }
+
   @Get()
   @ApiOperation({
     summary: 'List the staff of every branch the OWNER is assigned to',
     description:
-      'Read-only roster covering all roles. Creating waiter and kitchen accounts is the Branch ' +
-      'Manager job; the OWNER invites managers through POST /employees/managers.',
+      'Roster covering all roles. The OWNER can create Manager, Cashier and Barista accounts ' +
+      'through POST /employees/accounts; email invitations remain available for Managers.',
   })
   @ApiOkResponse({ description: 'Paginated staff roster' })
   list(@CurrentUser() user: AuthenticatedUser, @Query() query: ListEmployeesQueryDto) {
@@ -95,6 +103,16 @@ export class EmployeesController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.employeesService.resetManagerPassword(user, employeeId);
+  }
+
+  @Patch(':employeeId/password')
+  @ApiOperation({ summary: 'Set password for an Owner-created staff account and revoke its sessions' })
+  setPassword(
+    @Param('employeeId', new ParseUUIDPipe()) employeeId: string,
+    @Body() dto: SetDirectStaffPasswordDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.employeesService.setDirectPassword(user, employeeId, dto);
   }
 
   @Patch(':employeeId/branch')

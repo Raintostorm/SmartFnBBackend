@@ -7,8 +7,10 @@ import { PasswordService } from '../auth/password.service.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
 import type {
+  CreateDirectStaffDto,
   InviteManagerDto,
   ListEmployeesQueryDto,
+  SetDirectStaffPasswordDto,
   TransferEmployeeBranchDto,
   UpdateEmployeeAccountStatusDto,
 } from './dto/employee.dto.js';
@@ -39,9 +41,9 @@ const employeeSelect = {
 } satisfies Prisma.EmployeeSelect;
 
 /**
- * Staff administration from the Owner side. An Owner sees every employee in the
- * chains they are assigned to, but only acts on MANAGER accounts — waiter and
- * kitchen accounts belong to the Branch Manager.
+ * Staff administration from the Owner side. The Owner can create direct-login
+ * Manager, Cashier and Barista accounts in assigned branches. Legacy manager
+ * invitations and management actions remain available.
  */
 @Injectable()
 export class EmployeesService {
@@ -50,6 +52,72 @@ export class EmployeesService {
     private readonly branchAccess: BranchAccessService,
     private readonly passwords: PasswordService,
   ) {}
+
+  /** Creates an immediately usable staff account. The legacy `email` column also stores
+   * staff usernames; no email is queued for these accounts. */
+  async createDirectAccount(user: AuthenticatedUser, dto: CreateDirectStaffDto) {
+    const branch = await this.prisma.branch.findFirst({
+      where: { id: dto.branchId, deletedAt: null },
+      select: { id: true, chainId: true },
+    });
+    if (!branch) throw new NotFoundException('Branch not found');
+    await this.branchAccess.assertCanManageChain(user, branch.chainId);
+    const passwordHash = await this.passwords.hash(dto.password);
+    const nameParts = dto.name.trim().split(/\s+/);
+    const firstName = nameParts.shift()!;
+    const lastName = nameParts.join(' ');
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM restaurant_chains WHERE id = ${branch.chainId}::uuid FOR UPDATE`;
+        const subscription = await tx.businessSubscription.findFirst({
+          where: { chainId: branch.chainId, status: 'ACTIVE', expiresAt: { gt: new Date() } },
+          select: { plan: { select: { maxAccounts: true } } },
+        });
+        if (!subscription) throw new ForbiddenException('Business subscription is not active');
+        const [employees, owners] = await Promise.all([
+          tx.employee.count({ where: { branch: { chainId: branch.chainId }, deletedAt: null, user: { deletedAt: null } } }),
+          tx.ownerChainAssignment.count({ where: { chainId: branch.chainId, owner: { deletedAt: null, user: { deletedAt: null } } } }),
+        ]);
+        if (employees + owners >= subscription.plan.maxAccounts) {
+          throw new ConflictException({ statusCode: 409, error: 'PLAN_LIMIT_REACHED', message: 'Service plan account limit has been reached' });
+        }
+        const role = await tx.role.findUnique({ where: { code: dto.role }, select: { id: true } });
+        if (!role) throw new ConflictException('Staff role is not configured');
+        return tx.employee.create({
+          data: {
+            branch: { connect: { id: branch.id } },
+            employeeCode: `${dto.role.slice(0, 3)}-${randomUUID().replace(/-/g, '').slice(0, 16).toUpperCase()}`,
+            firstName,
+            lastName,
+            user: { create: { email: dto.username, passwordHash, roleId: role.id, status: UserStatus.ACTIVE } },
+          },
+          select: employeeSelect,
+        });
+      });
+    } catch (error) {
+      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2002') {
+        throw new ConflictException('Username already exists');
+      }
+      throw error;
+    }
+  }
+
+  async setDirectPassword(user: AuthenticatedUser, employeeId: string, dto: SetDirectStaffPasswordDto) {
+    const employee = await this.getEmployee(user, employeeId);
+    if (![AppRole.MANAGER, AppRole.CASHIER, AppRole.BARISTA].includes(employee.user.role.code as AppRole)) {
+      throw new ForbiddenException('Only Manager, Cashier and Barista passwords can be set here');
+    }
+    if (employee.user.email.includes('@')) {
+      throw new ForbiddenException('Email-invited accounts use email password setup');
+    }
+    const passwordHash = await this.passwords.hash(dto.password);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({ where: { id: employee.user.id }, data: { passwordHash } });
+      await tx.authSession.updateMany({ where: { userId: employee.user.id, revokedAt: null }, data: { revokedAt: new Date() } });
+    });
+    return { message: 'Password updated; active sessions revoked' };
+  }
 
   /** Creates an inactive manager and queues a one-time password setup email atomically. */
   async inviteManager(user: AuthenticatedUser, dto: InviteManagerDto) {
@@ -222,6 +290,9 @@ export class EmployeesService {
    */
   async resetManagerPassword(user: AuthenticatedUser, employeeId: string) {
     const manager = await this.getManagerOrFail(user, employeeId);
+    if (!manager.user.email.includes('@')) {
+      throw new ForbiddenException('Username accounts use direct password reset');
+    }
     const token = randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + PASSWORD_SETUP_TTL_MS);
     const now = new Date();

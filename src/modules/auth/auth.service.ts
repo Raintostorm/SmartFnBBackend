@@ -175,7 +175,7 @@ export class AuthService {
     const user = await this.usersService.findByEmailForAuth(this.normalizeEmail(dto.email));
 
     if (!user || !(await this.passwordService.verify(user.passwordHash, dto.password))) {
-      throw new UnauthorizedException('Invalid email or password');
+      throw new UnauthorizedException('Invalid username/email or password');
     }
 
     this.assertUserCanAuthenticate(user);
