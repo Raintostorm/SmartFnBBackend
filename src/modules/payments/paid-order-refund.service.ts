@@ -133,7 +133,13 @@ export class PaidOrderRefundService {
         const candidate = await tx.payment.findFirst({
           where: {
             orderId,
-            status: { in: [PaymentStatus.SUCCESS, PaymentStatus.AMOUNT_MISMATCH] },
+            status: {
+              in: [
+                PaymentStatus.SUCCESS,
+                PaymentStatus.AMOUNT_MISMATCH,
+                PaymentStatus.REQUIRES_ATTENTION,
+              ],
+            },
           },
           orderBy: [{ status: 'desc' }, { createdAt: 'desc' }],
           select: { id: true },
@@ -145,7 +151,11 @@ export class PaidOrderRefundService {
         const payment = await tx.payment.findUniqueOrThrow({ where: { id: candidate.id } });
         if (
           payment.status !== PaymentStatus.SUCCESS &&
-          payment.status !== PaymentStatus.AMOUNT_MISMATCH
+          payment.status !== PaymentStatus.AMOUNT_MISMATCH &&
+          !(
+            payment.status === PaymentStatus.REQUIRES_ATTENTION &&
+            payment.failureReason === 'PAYMENT_RECEIVED_AFTER_EXPIRY'
+          )
         ) {
           throw new ConflictException('Payment is no longer eligible for a refund');
         }
@@ -177,7 +187,7 @@ export class PaidOrderRefundService {
           (item) => item.status !== OrderItemStatus.CANCELLED && item.refundItems.length === 0,
         );
         const cancelWholeOrder = requestedItemIds.length === 0;
-        if (payment.status === PaymentStatus.AMOUNT_MISMATCH && !cancelWholeOrder) {
+        if (payment.status !== PaymentStatus.SUCCESS && !cancelWholeOrder) {
           throw new ConflictException('An underpaid order must be cancelled in full');
         }
         const selectedItems = cancelWholeOrder

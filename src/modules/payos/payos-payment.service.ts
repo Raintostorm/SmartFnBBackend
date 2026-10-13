@@ -183,13 +183,19 @@ export class PayosPaymentService {
     const idempotencyKey = `${data.orderCode}:${data.reference || data.paymentLinkId || signature}`;
     const eventResult = await this.prisma.$transaction(
       async (tx) => {
+        // Serialize the same provider event before checking the unique key. This prevents two
+        // Render instances from both processing one PayOS webhook at the same time.
+        if (typeof tx.$queryRaw === 'function') {
+          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${idempotencyKey}))`;
+        }
         const existing = await tx.paymentWebhookEvent.findUnique({
           where: { provider_idempotencyKey: { provider: PaymentProvider.PAYOS, idempotencyKey } },
         });
         if (existing) {
           if (
             existing.status === WebhookProcessingStatus.PROCESSED ||
-            existing.status === WebhookProcessingStatus.REJECTED
+            existing.status === WebhookProcessingStatus.REJECTED ||
+            existing.status === WebhookProcessingStatus.RECEIVED
           )
             return { duplicate: true };
           return {

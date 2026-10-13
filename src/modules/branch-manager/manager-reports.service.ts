@@ -21,8 +21,12 @@ export class ManagerReportsService {
       select: { id: true, name: true, timezone: true },
     });
     const { from, to } = this.range(query, branch.timezone);
-    const bounds = Prisma.sql`bounds AS (SELECT ${from}::date::timestamp AT TIME ZONE ${branch.timezone} AS start_at,
-      (${to}::date + 1)::timestamp AT TIME ZONE ${branch.timezone} AS end_at)`;
+    const startAt = this.zonedMidnight(from, branch.timezone);
+    const nextDate = new Date(`${to}T00:00:00.000Z`);
+    nextDate.setUTCDate(nextDate.getUTCDate() + 1);
+    const endAt = this.zonedMidnight(nextDate.toISOString().slice(0, 10), branch.timezone);
+    const bounds = Prisma.sql`bounds AS (SELECT ${startAt}::timestamptz AS start_at,
+      ${endAt}::timestamptz AS end_at)`;
     const sales = Prisma.sql`sales AS (SELECT o.* FROM orders o, bounds b WHERE o.branch_id = ${branchId}::uuid
       AND o.payment_status = 'PAID' AND o.paid_at >= b.start_at AND o.paid_at < b.end_at)`;
     const result = await this.prisma.$transaction(
@@ -75,15 +79,13 @@ export class ManagerReportsService {
           LEFT JOIN sale_totals s ON s.bucket = b.bucket LEFT JOIN refund_totals r ON r.bucket = b.bucket
           ORDER BY b.bucket`;
         const payments = await tx.$queryRaw`
-        WITH ${bounds}, payment_totals AS (
+        WITH ${bounds}, ${sales}, payment_totals AS (
           SELECT p.method, SUM(p.amount) AS gross_settled,
             SUM(COALESCE(p.received_amount,p.amount)) AS gross_received,
-            COUNT(*) FILTER (WHERE po.id IS NULL OR po.status <> 'CANCELLED')::int AS successful_count,
+            COUNT(*) FILTER (WHERE po.status <> 'CANCELLED')::int AS successful_count,
             COUNT(*) FILTER (WHERE po.status = 'CANCELLED')::int AS cancelled_count
-          FROM payments p LEFT JOIN orders po ON po.id = p.order_id, bounds b
+          FROM payments p JOIN sales po ON po.id = p.order_id, bounds b
           WHERE p.status = 'SUCCESS' AND p.paid_at >= b.start_at AND p.paid_at < b.end_at
-            AND ((po.id IS NOT NULL AND po.branch_id = ${branchId}::uuid)
-              OR EXISTS (SELECT 1 FROM table_sessions s WHERE s.id = p.table_session_id AND s.branch_id = ${branchId}::uuid))
           GROUP BY p.method
         ), refund_totals AS (
           SELECT p.method, SUM(r.amount) AS refunds
@@ -212,5 +214,39 @@ export class ManagerReportsService {
     if (days < 1 || days > 366)
       throw new BadRequestException('Report range must contain 1 to 366 days');
     return { from, to };
+  }
+
+  private zonedMidnight(date: string, timezone: string) {
+    const [year, month, day] = date.split('-').map(Number);
+    const desired = Date.UTC(year, month - 1, day);
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    });
+    let instant = desired;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const parts = Object.fromEntries(
+        formatter
+          .formatToParts(new Date(instant))
+          .filter((part) => part.type !== 'literal')
+          .map((part) => [part.type, Number(part.value)]),
+      );
+      const represented = Date.UTC(
+        parts.year,
+        parts.month - 1,
+        parts.day,
+        parts.hour,
+        parts.minute,
+        parts.second,
+      );
+      instant += desired - represented;
+    }
+    return new Date(instant);
   }
 }

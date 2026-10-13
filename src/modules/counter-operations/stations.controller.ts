@@ -10,7 +10,13 @@ import {
   Post,
   Req,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiSecurity, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiConflictResponse,
+  ApiOperation,
+  ApiSecurity,
+  ApiTags,
+} from '@nestjs/swagger';
 import { ApiAuthenticatedOperation } from '../../common/swagger/swagger.decorators.js';
 import { SWAGGER_DEVICE_TOKEN } from '../../swagger.setup.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
@@ -84,6 +90,7 @@ export class StationsController {
   @ApiAuthenticatedOperation()
   @Roles(AppRole.MANAGER)
   @ApiOperation({ summary: 'Create a POS station in the assigned branch' })
+  @ApiConflictResponse({ description: 'STATION_NAME_ALREADY_EXISTS' })
   create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateStationDto) {
     return this.stations.create(user, dto);
   }
@@ -93,6 +100,7 @@ export class StationsController {
   @ApiAuthenticatedOperation()
   @Roles(AppRole.MANAGER)
   @ApiOperation({ summary: 'Rename, activate, deactivate, or update a POS station' })
+  @ApiConflictResponse({ description: 'STATION_NAME_ALREADY_EXISTS' })
   update(
     @CurrentUser() user: AuthenticatedUser,
     @Param('stationId', new ParseUUIDPipe()) stationId: string,

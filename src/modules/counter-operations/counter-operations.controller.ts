@@ -53,8 +53,13 @@ export class CashierController {
   @ApiOperation({
     summary: 'Validate a local cart and create one immutable order awaiting payment',
   })
-  checkout(@CurrentUser() user: AuthenticatedUser, @Body() dto: CheckoutCounterOrderDto) {
-    return this.service.checkout(user, dto);
+  async checkout(@CurrentUser() user: AuthenticatedUser, @Body() dto: CheckoutCounterOrderDto) {
+    const result = await this.service.checkout(user, dto);
+    this.publish(user, 'cashier.order.updated', {
+      orderId: result.id,
+      status: result.status,
+    });
+    return result;
   }
 
   @Get('orders')
