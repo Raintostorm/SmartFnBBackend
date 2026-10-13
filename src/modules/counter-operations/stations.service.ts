@@ -302,6 +302,12 @@ export class StationsService {
                 name: true,
                 logoUrl: true,
                 currency: true,
+                displayPosters: {
+                  where: { enabled: true, deletedAt: null },
+                  orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+                  take: 10,
+                  select: { id: true, title: true, imageUrl: true, durationSeconds: true },
+                },
                 branding: {
                   select: {
                     displayName: true,
@@ -324,6 +330,7 @@ export class StationsService {
       station: { id: station.id, name: station.name },
       branch: { id: station.branch.id, name: station.branch.name },
       currency: station.branch.chain.currency,
+      posters: station.branch.chain.displayPosters ?? [],
       branding: {
         displayName: branding?.displayName ?? station.branch.chain.name,
         logoUrl: branding?.logoUrl ?? station.branch.chain.logoUrl,

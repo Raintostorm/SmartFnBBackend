@@ -23,6 +23,7 @@ export const SWAGGER_TAGS = [
     'Quản lý Cashier/Barista, tùy chọn, báo cáo, tra cứu đơn và audit trong chi nhánh được gán.',
   ],
   ['Restaurant branding', 'Cấu hình thương hiệu của chuỗi.'],
+  ['Owner display posters', 'Owner quản lý poster cho màn hình phụ thu ngân của chuỗi.'],
   ['PayOS channel', 'OWNER cấu hình kênh PayOS; khóa bí mật không được trả lại.'],
   ['Branches - internal', 'Quản lý chi nhánh, giờ mở cửa và khu vực phục vụ.'],
   ['Menu - branch', 'Bật/tắt món và giá riêng tại từng chi nhánh.'],

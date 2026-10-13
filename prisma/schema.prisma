@@ -344,6 +344,7 @@ model RestaurantChain {
   registrationApplication RegistrationApplication?
   subscription            BusinessSubscription?
   branding                BusinessBranding?
+  displayPosters          DisplayPoster[]
   invoices                Invoice[]
   menuOptionGroups        MenuOptionGroup[]
   payosChannel            PayosChannel?
@@ -351,6 +352,24 @@ model RestaurantChain {
 
   @@index([status])
   @@map("restaurant_chains")
+}
+
+model DisplayPoster {
+  id              String   @id @default(uuid()) @db.Uuid
+  chainId         String   @map("chain_id") @db.Uuid
+  title           String   @db.VarChar(120)
+  imageUrl        String   @map("image_url") @db.VarChar(500)
+  enabled         Boolean  @default(true)
+  sortOrder       Int      @default(0) @map("sort_order")
+  durationSeconds Int      @default(8) @map("duration_seconds")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt       DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  chain RestaurantChain @relation(fields: [chainId], references: [id], onDelete: Restrict)
+
+  @@index([chainId, deletedAt, enabled, sortOrder])
+  @@map("display_posters")
 }
 
 model PayosChannel {
