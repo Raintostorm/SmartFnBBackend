@@ -109,12 +109,6 @@ export class CreateMenuItemDto {
   @Max(1440)
   preparationMinutes?: number;
 
-  @ApiPropertyOptional({ example: true, description: 'Whether identical items may be prepared together' })
-  @IsOptional()
-  @Transform(toBoolean)
-  @IsBoolean()
-  allowBatching?: boolean;
-
   @ApiPropertyOptional({
     default: true,
     description: 'Whether identical item and size units may be grouped for preparation',
