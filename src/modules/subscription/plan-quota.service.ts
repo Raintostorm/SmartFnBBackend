@@ -3,6 +3,7 @@ import { BusinessSubscriptionStatus, Prisma } from '../../generated/prisma/clien
 import { PrismaService } from '../../database/prisma.service.js';
 
 export type QuotaResource = 'branches' | 'accounts' | 'tables';
+export type PlanFeature = 'BRANDING' | 'MULTI_BRANCH_COMPARISON';
 
 export interface QuotaUsage {
   resource: QuotaResource;
@@ -69,6 +70,29 @@ export class PlanQuotaService {
     }
 
     return subscription.plan;
+  }
+
+  async assertFeatureEnabled(chainId: string, feature: PlanFeature): Promise<void> {
+    const subscription = await this.prisma.businessSubscription.findUnique({
+      where: { chainId },
+      select: { plan: { select: planSelect } },
+    });
+    if (!subscription) {
+      throw new ForbiddenException('The business subscription was not found');
+    }
+    const plan = subscription.plan;
+    const enabled =
+      feature === 'BRANDING' ? plan.brandingEnabled : plan.multiBranchComparisonEnabled;
+    if (enabled) return;
+    throw new ForbiddenException({
+      statusCode: 403,
+      error: 'PLAN_FEATURE_NOT_ENABLED',
+      feature,
+      message:
+        feature === 'BRANDING'
+          ? 'Gói hiện tại không hỗ trợ nhận diện thương hiệu.'
+          : 'Gói hiện tại không hỗ trợ so sánh nhiều chi nhánh.',
+    });
   }
 
   async getUsage(chainId: string) {

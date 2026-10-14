@@ -5,9 +5,10 @@ import { BrandingService } from './branding.service.js';
 import { RealtimeModule } from '../../realtime/realtime.module.js';
 import { DisplayPostersController } from './display-posters.controller.js';
 import { DisplayPostersService } from './display-posters.service.js';
+import { SubscriptionModule } from '../subscription/subscription.module.js';
 
 @Module({
-  imports: [BranchesModule, RealtimeModule],
+  imports: [BranchesModule, RealtimeModule, SubscriptionModule],
   controllers: [BrandingController, DisplayPostersController],
   providers: [BrandingService, DisplayPostersService],
   exports: [BrandingService],

@@ -725,6 +725,17 @@ model PasswordSetupToken {
   @@map("password_setup_tokens")
 }
 
+model PasswordSetupAttempt {
+  subjectHash    String    @id @map("subject_hash") @db.VarChar(64)
+  failedAttempts Int       @default(0) @map("failed_attempts")
+  lockedUntil    DateTime? @map("locked_until") @db.Timestamptz(6)
+  lastAttemptAt  DateTime  @default(now()) @map("last_attempt_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([lockedUntil])
+  @@map("password_setup_attempts")
+}
+
 model EmailOutbox {
   id        String            @id @default(uuid()) @db.Uuid
   recipient String            @db.VarChar(255)

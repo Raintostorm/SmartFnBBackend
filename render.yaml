@@ -45,6 +45,12 @@ services:
         sync: false
       - key: PAYOS_WEBHOOK_BASE_URL
         value: https://smart-fnb-be.onrender.com/api/v1
+      - key: PAYMENT_EXPIRY_JOB_ENABLED
+        value: 'true'
+      - key: PAYMENT_EXPIRY_JOB_INTERVAL_MS
+        value: '60000'
+      - key: PAYMENT_EXPIRY_BATCH_SIZE
+        value: '100'
       - key: PUBLIC_WEB_URL
         sync: false
       - key: ORDER_TRACKING_SECRET

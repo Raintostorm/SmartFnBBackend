@@ -10,6 +10,7 @@ import {
   OrderPaymentStatus,
   OrderStatus,
   OrderType,
+  PaymentMethod,
   PaymentStatus,
   PrintJobStatus,
   Prisma,
@@ -23,6 +24,8 @@ import { AppRole } from '../auth/app-role.enum.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { writeBranchAudit } from '../branch-manager/manager-scope.js';
 import type { CancelPaidOrderDto, CompleteRefundDto } from '../branch-manager/manager.dto.js';
+import type { RefundListQueryDto } from './dto/payment.dto.js';
+import { BranchAccessService } from '../branches/branch-access.service.js';
 
 const cancellableOrderStatuses = [
   OrderStatus.SUBMITTED,
@@ -45,7 +48,58 @@ export class PaidOrderRefundService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly realtime: RealtimePublisher,
+    private readonly branchAccess: BranchAccessService,
   ) {}
+
+  async listRefunds(user: AuthenticatedUser, query: RefundListQueryDto) {
+    if (![AppRole.OWNER, AppRole.MANAGER].includes(user.role)) {
+      throw new ForbiddenException('Only an Owner or Branch Manager can list refunds');
+    }
+    const accessible = await this.branchAccess.getAccessibleBranchIds(user);
+    const allowed = new Set(accessible ?? []);
+    const selected = query.branchIds?.length ? query.branchIds : [...allowed];
+    if (selected.some((id) => !allowed.has(id))) {
+      throw new ForbiddenException('A requested branch is outside your scope');
+    }
+    const requestedAt = {
+      ...(query.from ? { gte: new Date(query.from) } : {}),
+      ...(query.to ? { lte: new Date(query.to) } : {}),
+    };
+    const where: Prisma.RefundWhereInput = {
+      status: query.status ?? RefundStatus.PENDING,
+      ...(query.method ? { method: query.method } : {}),
+      ...(query.from || query.to ? { requestedAt } : {}),
+      order: {
+        branchId: { in: selected },
+        ...(query.chainId ? { branch: { chainId: query.chainId } } : {}),
+      },
+    };
+    const include = {
+      order: {
+        select: {
+          id: true,
+          orderCode: true,
+          callNumber: true,
+          branch: { select: { id: true, code: true, name: true, chainId: true } },
+        },
+      },
+      payment: {
+        select: { id: true, method: true, transactionRef: true, providerTransactionId: true },
+      },
+      ...refundInclude,
+    } satisfies Prisma.RefundInclude;
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.refund.findMany({
+        where,
+        include,
+        orderBy: [{ requestedAt: 'desc' }, { id: 'desc' }],
+        skip: (query.page - 1) * query.limit,
+        take: query.limit,
+      }),
+      this.prisma.refund.count({ where }),
+    ]);
+    return { items, total, page: query.page, limit: query.limit };
+  }
 
   async recordLatePayosPayment(
     paymentId: string,
@@ -66,8 +120,28 @@ export class PaidOrderRefundService {
             order: { include: { branch: { select: { timezone: true } } } },
           },
         });
-        if (!payment?.order || payment.order.status !== OrderStatus.CANCELLED) {
-          throw new ConflictException('Late payment is not linked to a cancelled order');
+        if (!payment?.order) {
+          throw new ConflictException('Late payment is not linked to an order');
+        }
+        const switchedToCash = payment.failureReason === 'PAYOS_CANCELLED_SWITCH_TO_CASH';
+        const replacementCashPayment = switchedToCash
+          ? await tx.payment.findFirst({
+              where: {
+                orderId: payment.order.id,
+                id: { not: payment.id },
+                method: PaymentMethod.CASH,
+                status: PaymentStatus.SUCCESS,
+              },
+              select: { id: true },
+            })
+          : null;
+        if (
+          payment.order.status !== OrderStatus.CANCELLED &&
+          !(switchedToCash && replacementCashPayment)
+        ) {
+          throw new ConflictException(
+            'Late payment is not linked to a cancelled order or a completed cash switch',
+          );
         }
         const now = new Date();
         await tx.payment.update({
@@ -97,7 +171,9 @@ export class PaidOrderRefundService {
             method: RefundMethod.BANK_TRANSFER,
             source: RefundSource.LATE_PAYMENT,
             sourceReference,
-            reason: 'PayOS payment received after order cancellation',
+            reason: replacementCashPayment
+              ? 'PayOS payment received after the order was paid in cash'
+              : 'PayOS payment received after order cancellation',
             requestedByRole: 'SYSTEM',
             cancellationDate: this.businessDate(payment.order.branch.timezone, now),
           },
@@ -108,8 +184,12 @@ export class PaidOrderRefundService {
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
     if (result.changed && result.branchId) {
+      const receivedAfterCash =
+        result.refund.reason === 'PayOS payment received after the order was paid in cash';
       const payload = {
-        reason: 'PAYMENT_RECEIVED_AFTER_CANCELLATION',
+        reason: receivedAfterCash
+          ? 'PAYMENT_RECEIVED_AFTER_SWITCH_TO_CASH'
+          : 'PAYMENT_RECEIVED_AFTER_CANCELLATION',
         orderId: result.refund.orderId,
         paymentId,
         refundId: result.refund.id,

@@ -12,6 +12,7 @@ import { AppRole } from '../auth/app-role.enum.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
 import type { UpdateBrandingDto } from './dto/branding.dto.js';
+import { PlanQuotaService } from '../subscription/plan-quota.service.js';
 import {
   BRANDING_LOGO_MAX_BYTES,
   BRANDING_LOGO_PUBLIC_PREFIX,
@@ -59,10 +60,12 @@ export class BrandingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly branchAccess: BranchAccessService,
+    private readonly plans: PlanQuotaService,
   ) {}
 
   async get(chainId: string, user: AuthenticatedUser) {
     await this.assertCanRead(chainId, user);
+    await this.plans.assertFeatureEnabled(chainId, 'BRANDING');
     const chain = await this.getChain(chainId);
     return (
       chain.branding ?? {
@@ -76,6 +79,7 @@ export class BrandingService {
 
   async update(chainId: string, dto: UpdateBrandingDto, user: AuthenticatedUser) {
     await this.branchAccess.assertCanManageChain(user, chainId);
+    await this.plans.assertFeatureEnabled(chainId, 'BRANDING');
     const chain = await this.getChain(chainId);
     const previousLogoUrl = chain.branding?.logoUrl ?? chain.logoUrl;
     const branding = await this.prisma.$transaction(async (tx) => {
@@ -104,6 +108,7 @@ export class BrandingService {
 
   async uploadLogo(chainId: string, file: BrandingLogoFile | undefined, user: AuthenticatedUser) {
     await this.branchAccess.assertCanManageChain(user, chainId);
+    await this.plans.assertFeatureEnabled(chainId, 'BRANDING');
     const chain = await this.getChain(chainId);
     const extension = this.validateLogo(file);
     const directory = getBrandingLogoDirectory();
@@ -141,6 +146,7 @@ export class BrandingService {
 
   async reset(chainId: string, user: AuthenticatedUser) {
     await this.branchAccess.assertCanManageChain(user, chainId);
+    await this.plans.assertFeatureEnabled(chainId, 'BRANDING');
     const chain = await this.getChain(chainId);
     const previousLogoUrl = chain.branding?.logoUrl ?? chain.logoUrl;
     const branding = await this.prisma.$transaction(async (tx) => {

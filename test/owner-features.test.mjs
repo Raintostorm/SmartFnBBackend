@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { BranchStatus, UserStatus } from '../dist/generated/prisma/client.js';
+import { BranchStatus, Prisma, UserStatus } from '../dist/generated/prisma/client.js';
 import { AppRole } from '../dist/modules/auth/app-role.enum.js';
 import { AuthService } from '../dist/modules/auth/auth.service.js';
 import { BranchesService } from '../dist/modules/branches/branches.service.js';
@@ -207,7 +207,13 @@ describe('Branch overview open state', () => {
 });
 
 describe('Service plan quota', () => {
-  function quotaService({ maxBranches, branchCount, upgradePlans = [] }) {
+  function quotaService({
+    maxBranches,
+    branchCount,
+    upgradePlans = [],
+    brandingEnabled = true,
+    multiBranchComparisonEnabled = true,
+  }) {
     return new PlanQuotaService({
       businessSubscription: {
         findFirst: async () => ({
@@ -220,6 +226,22 @@ describe('Service plan quota', () => {
             maxBranches,
             maxAccounts: 10,
             maxTables: 20,
+            brandingEnabled,
+            multiBranchComparisonEnabled,
+          },
+        }),
+        findUnique: async () => ({
+          plan: {
+            id: 'plan-basic',
+            code: 'BASIC',
+            name: 'Basic',
+            description: null,
+            monthlyPrice: {},
+            maxBranches,
+            maxAccounts: 10,
+            maxTables: 20,
+            brandingEnabled,
+            multiBranchComparisonEnabled,
           },
         }),
       },
@@ -235,6 +257,24 @@ describe('Service plan quota', () => {
     await quotaService({ maxBranches: 3, branchCount: 2 }).assertWithinQuota(
       'chain-one',
       'branches',
+    );
+  });
+
+  it('enforces disabled plan features with a stable error code', async () => {
+    const service = quotaService({
+      maxBranches: 3,
+      branchCount: 1,
+      multiBranchComparisonEnabled: false,
+    });
+    await service.assertFeatureEnabled('chain-one', 'BRANDING');
+    await assert.rejects(
+      service.assertFeatureEnabled('chain-one', 'MULTI_BRANCH_COMPARISON'),
+      (error) => {
+        assert.equal(error.getStatus(), 403);
+        assert.equal(error.getResponse().error, 'PLAN_FEATURE_NOT_ENABLED');
+        assert.equal(error.getResponse().feature, 'MULTI_BRANCH_COMPARISON');
+        return true;
+      },
     );
   });
 
@@ -356,9 +396,22 @@ describe('Service plan quota', () => {
 describe('Owner staff administration', () => {
   it('authenticates a numeric-password staff username case-insensitively', async () => {
     let lookedUp;
-    const staff = { id: 'staff-user', email: 'cashier_01', passwordHash: 'hashed-password', status: UserStatus.ACTIVE, deletedAt: null, role: { code: AppRole.CASHIER } };
+    const staff = {
+      id: 'staff-user',
+      email: 'cashier_01',
+      passwordHash: 'hashed-password',
+      status: UserStatus.ACTIVE,
+      deletedAt: null,
+      role: { code: AppRole.CASHIER },
+    };
     const auth = new AuthService(
-      { findByEmailForAuth: async (value) => { lookedUp = value; return staff; }, updateLastLogin: async () => undefined },
+      {
+        findByEmailForAuth: async (value) => {
+          lookedUp = value;
+          return staff;
+        },
+        updateLastLogin: async () => undefined,
+      },
       {},
       {},
       { getOrThrow: () => 'test-secret' },
@@ -370,22 +423,68 @@ describe('Owner staff administration', () => {
     assert.equal(result.user.email, 'cashier_01');
   });
 
+  it('locks a repeatedly invalid password setup token on the fifth attempt', async () => {
+    let attempt = null;
+    const auth = new AuthService(
+      {},
+      {
+        passwordSetupAttempt: {
+          findUnique: async () => attempt,
+          upsert: async ({ create, update }) => {
+            attempt = attempt ? { ...attempt, ...update } : create;
+            return attempt;
+          },
+        },
+        passwordSetupToken: { findFirst: async () => null },
+      },
+      {},
+      { getOrThrow: () => 'test-secret' },
+      {},
+    );
+    const dto = { token: 'x'.repeat(32), password: 'StrongPass123' };
+    for (let index = 1; index < 5; index += 1) {
+      await assert.rejects(auth.setupPassword(dto), (error) => error?.getStatus?.() === 401);
+    }
+    await assert.rejects(auth.setupPassword(dto), (error) => {
+      assert.equal(error.getStatus(), 429);
+      assert.equal(error.getResponse().error, 'PASSWORD_SETUP_ATTEMPTS_EXCEEDED');
+      return true;
+    });
+    assert.equal(attempt.failedAttempts, 5);
+    assert.ok(attempt.lockedUntil instanceof Date);
+  });
+
   it('creates active Manager, Cashier and Barista usernames with hashed numeric passwords', async () => {
     const created = [];
     const transaction = {
       $queryRaw: async () => [],
       businessSubscription: { findFirst: async () => ({ plan: { maxAccounts: 10 } }) },
-      employee: { count: async () => 1, create: async ({ data }) => { created.push(data); return { id: 'new-employee', user: { email: data.user.create.email } }; } },
+      employee: {
+        count: async () => 1,
+        create: async ({ data }) => {
+          created.push(data);
+          return { id: 'new-employee', user: { email: data.user.create.email } };
+        },
+      },
       ownerChainAssignment: { count: async () => 1 },
       role: { findUnique: async () => ({ id: 'role-id' }) },
     };
     const service = new EmployeesService(
-      { branch: { findFirst: async () => ({ id: 'branch-one', chainId: 'chain-one' }) }, $transaction: async (work) => work(transaction) },
+      {
+        branch: { findFirst: async () => ({ id: 'branch-one', chainId: 'chain-one' }) },
+        $transaction: async (work) => work(transaction),
+      },
       { assertCanManageChain: async () => undefined },
       { hash: async (password) => `hashed:${password}` },
     );
     for (const role of [AppRole.MANAGER, AppRole.CASHIER, AppRole.BARISTA]) {
-      const result = await service.createDirectAccount(owner, { branchId: 'branch-one', name: 'Nguyễn Văn An', username: `staff_${role.toLowerCase()}`, password: '12345678', role });
+      const result = await service.createDirectAccount(owner, {
+        branchId: 'branch-one',
+        name: 'Nguyễn Văn An',
+        username: `staff_${role.toLowerCase()}`,
+        password: '12345678',
+        role,
+      });
       assert.equal(result.user.email, `staff_${role.toLowerCase()}`);
     }
     assert.equal(created.length, 3);
@@ -400,11 +499,17 @@ describe('Owner staff administration', () => {
     const calls = [];
     const service = new EmployeesService(
       {
-        employee: { findFirst: async () => ({ id: 'employee-one', user: { id: 'staff-user', email: 'cashier_1', role: { code: AppRole.CASHIER } } }) },
-        $transaction: async (work) => work({
-          user: { update: async (args) => calls.push(args) },
-          authSession: { updateMany: async (args) => calls.push(args) },
-        }),
+        employee: {
+          findFirst: async () => ({
+            id: 'employee-one',
+            user: { id: 'staff-user', email: 'cashier_1', role: { code: AppRole.CASHIER } },
+          }),
+        },
+        $transaction: async (work) =>
+          work({
+            user: { update: async (args) => calls.push(args) },
+            authSession: { updateMany: async (args) => calls.push(args) },
+          }),
       },
       { getAccessibleBranchIds: async () => ['branch-one'] },
       { hash: async () => 'hashed-password' },
@@ -536,6 +641,7 @@ describe('Owner branding logo upload', () => {
         $transaction: async (action) => action(transaction),
       },
       { assertCanManageChain: async () => undefined },
+      { assertFeatureEnabled: async () => undefined },
     );
   }
 
@@ -585,18 +691,34 @@ describe('Chain menu boundaries', () => {
       {
         menuItem: {
           findFirst: async () => ({ id: 'item-one', imageUrl: saved.imageUrl }),
-          update: async ({ data }) => ({ id: 'item-one', imageUrl: (saved.imageUrl = data.imageUrl) }),
+          update: async ({ data }) => ({
+            id: 'item-one',
+            imageUrl: (saved.imageUrl = data.imageUrl),
+          }),
         },
       },
       { assertCanManageChain: async () => undefined },
     );
     try {
       const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-      const result = await service.uploadItemImage('chain-one', 'item-one', { buffer: png, mimetype: 'image/png', size: png.length }, owner);
+      const result = await service.uploadItemImage(
+        'chain-one',
+        'item-one',
+        { buffer: png, mimetype: 'image/png', size: png.length },
+        owner,
+      );
       assert.match(result.imageUrl, /^\/uploads\/menu\/chain-one-item-one-.+\.png$/);
-      assert.deepEqual(await readFile(join(uploadDirectory, 'menu', result.imageUrl.split('/').at(-1))), png);
+      assert.deepEqual(
+        await readFile(join(uploadDirectory, 'menu', result.imageUrl.split('/').at(-1))),
+        png,
+      );
       await assert.rejects(
-        service.uploadItemImage('chain-one', 'item-one', { buffer: Buffer.from('bad'), mimetype: 'image/png', size: 3 }, owner),
+        service.uploadItemImage(
+          'chain-one',
+          'item-one',
+          { buffer: Buffer.from('bad'), mimetype: 'image/png', size: 3 },
+          owner,
+        ),
         (error) => error?.getStatus?.() === 400,
       );
     } finally {
@@ -743,7 +865,7 @@ describe('Chain menu boundaries', () => {
 });
 
 describe('Report range validation', () => {
-  const service = new ReportsService({}, {});
+  const service = new ReportsService({}, {}, { assertFeatureEnabled: async () => undefined });
 
   it('defaults to the last 30 days', () => {
     const { fromDate, toDate } = service.resolveRange({ to: '2026-09-30' }, 'UTC');
@@ -794,20 +916,75 @@ describe('Report range validation', () => {
     const to = new Date('2026-10-01T00:00:00.000Z');
     assert.deepEqual(service.completedOrdersWhere({ branchIds: ['branch-id'], from, to }), {
       branchId: { in: ['branch-id'] },
+      type: 'COUNTER_PICKUP',
       paymentStatus: 'PAID',
       paidAt: { gte: from, lt: to },
     });
     assert.deepEqual(service.countableOrdersWhere({ branchIds: ['branch-id'], from, to }), {
       branchId: { in: ['branch-id'] },
+      type: 'COUNTER_PICKUP',
       paymentStatus: 'PAID',
       paidAt: { gte: from, lt: to },
       status: { not: 'CANCELLED' },
     });
   });
+
+  it('calculates total average order value from total net revenue', async () => {
+    let groupCall = 0;
+    const report = new ReportsService(
+      {
+        branch: {
+          findMany: async () => [
+            {
+              id: 'branch-one',
+              code: 'B1',
+              name: 'Branch 1',
+              city: 'HCM',
+              chainId: 'chain-one',
+              chain: { timezone: 'UTC' },
+            },
+          ],
+        },
+        order: {
+          groupBy: async () =>
+            ++groupCall === 1
+              ? [
+                  {
+                    branchId: 'branch-one',
+                    _sum: {
+                      totalAmount: new Prisma.Decimal(300),
+                      discountAmount: new Prisma.Decimal(0),
+                    },
+                    _count: { _all: 3 },
+                  },
+                ]
+              : [{ branchId: 'branch-one', _count: { _all: 2 } }],
+        },
+        tableSession: { groupBy: async () => [] },
+        $queryRaw: async () => [
+          {
+            branch_id: 'branch-one',
+            refund_amount: '100',
+            pending_refund_amount: '0',
+            paid_cancellation_count: 1n,
+          },
+        ],
+      },
+      { getAccessibleBranchIds: async () => ['branch-one'] },
+      { assertFeatureEnabled: async () => undefined },
+    );
+    const result = await report.compareBranches(owner, {
+      from: '2026-10-01',
+      to: '2026-10-01',
+    });
+    assert.equal(result.totals.netRevenue, '200.00');
+    assert.equal(result.totals.orderCount, 2);
+    assert.equal(result.totals.averageOrderValue, '100.00');
+  });
 });
 
 describe('Report chart buckets', () => {
-  const service = new ReportsService({}, {});
+  const service = new ReportsService({}, {}, { assertFeatureEnabled: async () => undefined });
   const scope = (fromDate, toDate) => ({ fromDate, toDate });
 
   it('fills every day in the range, including days with no sales', () => {

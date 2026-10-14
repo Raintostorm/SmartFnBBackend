@@ -155,7 +155,19 @@ export class CashierController {
     @Param('orderId', new ParseUUIDPipe()) id: string,
     @Body() dto: CashPaymentDto,
   ) {
+    const cancelledQr = await this.payosPayments.cancelPendingForOrder(
+      user,
+      id,
+      'Khách đổi sang tiền mặt',
+    );
     const result = await this.service.collectCash(user, id, dto);
+    if (cancelledQr) {
+      this.publish(user, 'payment.cancelled', {
+        orderId: id,
+        paymentId: cancelledQr.id,
+        status: cancelledQr.status,
+      });
+    }
     this.publish(user, 'payment.confirmed', { orderId: id, callNumber: result.order.callNumber });
     this.publish(user, 'preparation.order.queued', {
       orderId: id,

@@ -1,6 +1,7 @@
 import {
   ConflictException,
   ForbiddenException,
+  HttpException,
   Injectable,
   InternalServerErrorException,
   NotFoundException,
@@ -34,6 +35,8 @@ const PASSWORD_SETUP_ROLES: readonly AppRole[] = [
   AppRole.CASHIER,
   AppRole.BARISTA,
 ];
+const PASSWORD_SETUP_MAX_ATTEMPTS = 5;
+const PASSWORD_SETUP_LOCK_MS = 15 * 60 * 1000;
 
 interface TokenPair {
   accessToken: string;
@@ -126,6 +129,20 @@ export class AuthService {
 
   async setupPassword(dto: SetupPasswordDto): Promise<{ message: string }> {
     const tokenHash = this.hashToken(dto.token);
+    const now = new Date();
+    const attempt = await this.prisma.passwordSetupAttempt.findUnique({
+      where: { subjectHash: tokenHash },
+    });
+    if (attempt?.lockedUntil && attempt.lockedUntil > now) {
+      throw new HttpException(
+        {
+          statusCode: 429,
+          error: 'PASSWORD_SETUP_ATTEMPTS_EXCEEDED',
+          message: 'Quá nhiều lần thử. Vui lòng yêu cầu liên kết mới.',
+        },
+        429,
+      );
+    }
     const setupToken = await this.prisma.passwordSetupToken.findFirst({
       where: { tokenHash, usedAt: null, expiresAt: { gt: new Date() } },
       select: {
@@ -139,11 +156,30 @@ export class AuthService {
       setupToken.user.deletedAt ||
       !PASSWORD_SETUP_ROLES.includes(setupToken.user.role.code as AppRole)
     ) {
+      const failedAttempts = (attempt?.failedAttempts ?? 0) + 1;
+      const lockedUntil =
+        failedAttempts >= PASSWORD_SETUP_MAX_ATTEMPTS
+          ? new Date(now.getTime() + PASSWORD_SETUP_LOCK_MS)
+          : null;
+      await this.prisma.passwordSetupAttempt.upsert({
+        where: { subjectHash: tokenHash },
+        create: { subjectHash: tokenHash, failedAttempts, lockedUntil, lastAttemptAt: now },
+        update: { failedAttempts, lockedUntil, lastAttemptAt: now },
+      });
+      if (lockedUntil) {
+        throw new HttpException(
+          {
+            statusCode: 429,
+            error: 'PASSWORD_SETUP_ATTEMPTS_EXCEEDED',
+            message: 'Quá nhiều lần thử. Vui lòng yêu cầu liên kết mới.',
+          },
+          429,
+        );
+      }
       throw new UnauthorizedException('Password setup token is invalid or expired');
     }
 
     const passwordHash = await this.passwordService.hash(dto.password);
-    const now = new Date();
     await this.prisma.$transaction(async (transaction) => {
       const consumed = await transaction.passwordSetupToken.updateMany({
         where: { id: setupToken.id, usedAt: null, expiresAt: { gt: now } },
@@ -167,6 +203,7 @@ export class AuthService {
         where: { userId: setupToken.userId, revokedAt: null },
         data: { revokedAt: now },
       });
+      await transaction.passwordSetupAttempt.deleteMany({ where: { subjectHash: tokenHash } });
     });
     return { message: 'Password configured successfully' };
   }

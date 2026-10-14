@@ -32,6 +32,7 @@ import {
   PaymentListQueryDto,
   PaymentListResponseDto,
   PaymentResponseDto,
+  RefundListQueryDto,
 } from './dto/payment.dto.js';
 import { PaymentsService } from './payments.service.js';
 import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
@@ -110,6 +111,13 @@ export class PaymentsController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.service.confirm(paymentId, dto, user);
+  }
+
+  @Roles(AppRole.OWNER, AppRole.MANAGER)
+  @Get('refunds')
+  @ApiOperation({ summary: 'List pending or historical refunds within the caller scope' })
+  listRefunds(@Query() query: RefundListQueryDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.refunds.listRefunds(user, query);
   }
 
   @Roles(AppRole.OWNER, AppRole.MANAGER)

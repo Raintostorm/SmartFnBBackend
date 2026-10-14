@@ -1,18 +1,26 @@
 import { Transform, Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  ArrayUnique,
+  IsArray,
   IsDateString,
   IsEnum,
   IsInt,
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   Max,
   MaxLength,
   Min,
   MinLength,
 } from 'class-validator';
-import { PaymentMethod, PaymentStatus } from '../../../generated/prisma/client.js';
+import {
+  PaymentMethod,
+  PaymentStatus,
+  RefundMethod,
+  RefundStatus,
+} from '../../../generated/prisma/client.js';
 
 export class CreateTableSessionPaymentDto {
   @ApiProperty({ enum: PaymentMethod, enumName: 'PaymentMethod' })
@@ -94,6 +102,63 @@ export class PaymentListQueryDto {
   page = 1;
 
   @ApiPropertyOptional({ type: Number, minimum: 1, maximum: 100, default: 20 })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit = 20;
+}
+
+export class RefundListQueryDto {
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  chainId?: string;
+
+  @ApiPropertyOptional({ type: [String], format: 'uuid' })
+  @IsOptional()
+  @Transform(({ value }) =>
+    Array.isArray(value)
+      ? value
+      : typeof value === 'string'
+        ? value
+            .split(',')
+            .map((item) => item.trim())
+            .filter(Boolean)
+        : value,
+  )
+  @IsArray()
+  @ArrayUnique()
+  @IsUUID('4', { each: true })
+  branchIds?: string[];
+
+  @ApiPropertyOptional({ enum: RefundStatus, default: RefundStatus.PENDING })
+  @IsOptional()
+  @IsEnum(RefundStatus)
+  status?: RefundStatus;
+
+  @ApiPropertyOptional({ enum: RefundMethod })
+  @IsOptional()
+  @IsEnum(RefundMethod)
+  method?: RefundMethod;
+
+  @ApiPropertyOptional({ format: 'date-time', description: 'requestedAt inclusive' })
+  @IsOptional()
+  @IsDateString()
+  from?: string;
+
+  @ApiPropertyOptional({ format: 'date-time', description: 'requestedAt inclusive' })
+  @IsOptional()
+  @IsDateString()
+  to?: string;
+
+  @ApiPropertyOptional({ minimum: 1, default: 1 })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page = 1;
+
+  @ApiPropertyOptional({ minimum: 1, maximum: 100, default: 20 })
   @Type(() => Number)
   @IsInt()
   @Min(1)

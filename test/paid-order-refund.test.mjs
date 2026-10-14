@@ -150,6 +150,42 @@ function fixture({
 }
 
 describe('Paid order cancellation and external refunds (#43)', () => {
+  it('lists pending refunds only inside the Owner branch scope', async () => {
+    let capturedWhere;
+    const service = new PaidOrderRefundService(
+      {
+        refund: {
+          findMany: async ({ where }) => {
+            capturedWhere = where;
+            return [{ id: 'refund-one' }];
+          },
+          count: async () => 1,
+        },
+        $transaction: async (queries) => Promise.all(queries),
+      },
+      {},
+      { getAccessibleBranchIds: async () => [manager.branchId] },
+    );
+    const result = await service.listRefunds(owner, {
+      chainId: '44444444-4444-4444-8444-444444444444',
+      page: 1,
+      limit: 20,
+    });
+    assert.equal(result.total, 1);
+    assert.deepEqual(capturedWhere.order.branchId.in, [manager.branchId]);
+    assert.equal(capturedWhere.status, 'PENDING');
+    assert.equal(capturedWhere.order.branch.chainId, '44444444-4444-4444-8444-444444444444');
+
+    await assert.rejects(
+      service.listRefunds(owner, {
+        branchIds: ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'],
+        page: 1,
+        limit: 20,
+      }),
+      (error) => error?.getStatus?.() === 403,
+    );
+  });
+
   it('cancels a paid cash order, completes its refund and removes pending print jobs', async () => {
     const { service, calls, order } = fixture();
     const result = await service.cancelPaidOrder(manager, order.id, {
@@ -339,5 +375,22 @@ describe('Paid order cancellation and external refunds (#43)', () => {
       calls.events.map((event) => event.type),
       ['manager.order.attention-required', 'refund.pending'],
     );
+  });
+
+  it('records a pending refund when PayOS arrives after the cashier switched to cash', async () => {
+    const { service, calls, tx, payment } = fixture({
+      paymentStatus: 'FAILED',
+      orderStatus: 'PREPARING',
+      failureReason: 'PAYOS_CANCELLED_SWITCH_TO_CASH',
+    });
+    tx.payment.findFirst = async ({ where }) =>
+      where.method === 'CASH' ? { id: 'cash-payment-id' } : { id: payment.id };
+
+    const refund = await service.recordLatePayosPayment(payment.id, 50_000, 'late-after-cash');
+
+    assert.equal(refund.status, 'PENDING');
+    assert.equal(refund.reason, 'PayOS payment received after the order was paid in cash');
+    assert.equal(calls.refundCreates[0].source, 'LATE_PAYMENT');
+    assert.equal(calls.events[0].data.reason, 'PAYMENT_RECEIVED_AFTER_SWITCH_TO_CASH');
   });
 });

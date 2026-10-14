@@ -3,6 +3,7 @@ import {
   OrderItemStatus,
   OrderPaymentStatus,
   OrderStatus,
+  OrderType,
   Prisma,
   TableSessionStatus,
 } from '../../generated/prisma/client.js';
@@ -16,6 +17,7 @@ import {
   type RevenueTimeseriesQueryDto,
   type TopItemsQueryDto,
 } from './dto/report.dto.js';
+import { PlanQuotaService } from '../subscription/plan-quota.service.js';
 
 const DEFAULT_RANGE_DAYS = 30;
 const MAX_RANGE_DAYS = 366;
@@ -74,6 +76,7 @@ export class ReportsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly branchAccess: BranchAccessService,
+    private readonly plans: PlanQuotaService,
   ) {}
 
   /** Revenue side by side per branch, for the single comparison chart. */
@@ -115,6 +118,7 @@ export class ReportsService {
           COUNT(DISTINCT r.order_id) AS paid_cancellation_count
         FROM refunds r JOIN orders o ON o.id = r.order_id
         WHERE o.branch_id = ANY(${scope.branchIds}::uuid[])
+          AND o.type = 'COUNTER_PICKUP'
           AND r.cancellation_date >= ${scope.fromDate}::date
           AND r.cancellation_date <= ${scope.toDate}::date
         GROUP BY o.branch_id
@@ -170,9 +174,137 @@ export class ReportsService {
           0,
         ),
         orderCount: branches.reduce((total, { orderCount }) => total + orderCount, 0),
+        averageOrderValue: this.money(
+          branches.reduce((total, { orderCount }) => total + orderCount, 0) > 0
+            ? new Prisma.Decimal(
+                this.sumMoney(branches.map(({ netRevenue }) => netRevenue)),
+              ).dividedBy(branches.reduce((total, { orderCount }) => total + orderCount, 0))
+            : new Prisma.Decimal(0),
+        ),
         guestCount: branches.reduce((total, { guestCount }) => total + guestCount, 0),
       },
       branches,
+    };
+  }
+
+  async getPaymentMethods(user: AuthenticatedUser, query: ReportRangeQueryDto) {
+    const scope = await this.resolveScope(user, query);
+    if (!scope.branchIds.length) return { ...this.emptyReport(scope), methods: [], branches: [] };
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        branch_id: string;
+        method: string;
+        gross_settled: string;
+        gross_received: string;
+        refunds: string;
+        payment_count: bigint;
+        cancelled_count: bigint;
+      }>
+    >`
+      WITH sales AS (
+        SELECT * FROM orders WHERE branch_id = ANY(${scope.branchIds}::uuid[])
+          AND type = 'COUNTER_PICKUP' AND payment_status = 'PAID'
+          AND paid_at >= ${scope.from} AND paid_at < ${scope.to}
+      ), paid AS (
+        SELECT o.branch_id,p.method,SUM(p.amount) gross_settled,
+          SUM(COALESCE(p.received_amount,p.amount)) gross_received,
+          COUNT(*) FILTER (WHERE o.status <> 'CANCELLED') payment_count,
+          COUNT(*) FILTER (WHERE o.status = 'CANCELLED') cancelled_count
+        FROM payments p JOIN sales o ON o.id=p.order_id WHERE p.status='SUCCESS'
+        GROUP BY o.branch_id,p.method
+      ), refunded AS (
+        SELECT o.branch_id,p.method,SUM(r.amount) refunds
+        FROM refunds r JOIN orders o ON o.id=r.order_id JOIN payments p ON p.id=r.payment_id
+        WHERE o.branch_id = ANY(${scope.branchIds}::uuid[])
+          AND o.type = 'COUNTER_PICKUP'
+          AND r.cancellation_date >= ${scope.fromDate}::date
+          AND r.cancellation_date <= ${scope.toDate}::date GROUP BY o.branch_id,p.method
+      ) SELECT COALESCE(p.branch_id,r.branch_id) branch_id,
+        COALESCE(p.method,r.method)::text method,
+        COALESCE(p.gross_settled,0)::text gross_settled,
+        COALESCE(p.gross_received,0)::text gross_received,
+        COALESCE(r.refunds,0)::text refunds,
+        COALESCE(p.payment_count,0) payment_count,
+        COALESCE(p.cancelled_count,0) cancelled_count
+      FROM paid p FULL OUTER JOIN refunded r
+        ON r.branch_id=p.branch_id AND r.method=p.method ORDER BY 2,1`;
+    const map = (row: (typeof rows)[number]) => ({
+      method: row.method,
+      grossSettledAmount: this.money(new Prisma.Decimal(row.gross_settled)),
+      grossReceivedAmount: this.money(new Prisma.Decimal(row.gross_received)),
+      refundAmount: this.money(new Prisma.Decimal(row.refunds)),
+      netAmount: this.money(new Prisma.Decimal(row.gross_settled).sub(row.refunds)),
+      receivedAmount: this.money(new Prisma.Decimal(row.gross_received).sub(row.refunds)),
+      paymentCount: Number(row.payment_count),
+      cancelledAfterPaymentCount: Number(row.cancelled_count),
+    });
+    const methods = new Map<string, ReturnType<typeof map>>();
+    for (const row of rows) {
+      const current = methods.get(row.method);
+      const item = map(row);
+      if (!current) methods.set(row.method, item);
+      else {
+        current.grossSettledAmount = this.sumMoney([
+          current.grossSettledAmount,
+          item.grossSettledAmount,
+        ]);
+        current.grossReceivedAmount = this.sumMoney([
+          current.grossReceivedAmount,
+          item.grossReceivedAmount,
+        ]);
+        current.refundAmount = this.sumMoney([current.refundAmount, item.refundAmount]);
+        current.netAmount = this.sumMoney([current.netAmount, item.netAmount]);
+        current.receivedAmount = this.sumMoney([current.receivedAmount, item.receivedAmount]);
+        current.paymentCount += item.paymentCount;
+        current.cancelledAfterPaymentCount += item.cancelledAfterPaymentCount;
+      }
+    }
+    return {
+      range: this.describeRange(scope),
+      methods: [...methods.values()],
+      branches: scope.branches.map((branch) => ({
+        branch,
+        methods: rows.filter((row) => row.branch_id === branch.id).map(map),
+      })),
+    };
+  }
+
+  async getTopToppings(user: AuthenticatedUser, query: TopItemsQueryDto) {
+    const scope = await this.resolveScope(user, query);
+    if (!scope.branchIds.length) return { range: this.describeRange(scope), items: [] };
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        option_id: string;
+        name: string;
+        group_code: string;
+        group_name: string;
+        quantity: bigint;
+        revenue: string;
+      }>
+    >`
+      WITH sales AS (SELECT id FROM orders WHERE branch_id = ANY(${scope.branchIds}::uuid[])
+        AND type='COUNTER_PICKUP' AND payment_status='PAID'
+        AND paid_at >= ${scope.from} AND paid_at < ${scope.to})
+      SELECT COALESCE(opt->>'id',opt->>'code',opt->>'name') option_id,opt->>'name' name,
+        opt->>'groupCode' group_code,opt->>'groupName' group_name,
+        SUM(i.quantity)::bigint quantity,
+        SUM(i.quantity * COALESCE((opt->>'priceDelta')::numeric,0))::text revenue
+      FROM order_items i JOIN sales s ON s.id=i.order_id
+        CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(i.selected_options)='array'
+          THEN i.selected_options ELSE '[]'::jsonb END) opt
+      WHERE i.status <> 'CANCELLED' AND upper(opt->>'groupCode') IN ('TOPPING','TOPPINGS')
+      GROUP BY 1,2,3,4 ORDER BY SUM(i.quantity) DESC,1 LIMIT ${query.limit}`;
+    return {
+      range: this.describeRange(scope),
+      items: rows.map((row, index) => ({
+        rank: index + 1,
+        optionId: row.option_id,
+        name: row.name,
+        groupCode: row.group_code,
+        groupName: row.group_name,
+        quantity: Number(row.quantity),
+        additionalRevenue: this.money(new Prisma.Decimal(row.revenue)),
+      })),
     };
   }
 
@@ -191,6 +323,7 @@ export class ReportsService {
           COUNT(*) FILTER (WHERE o.status <> 'CANCELLED') AS order_count,
           SUM(o.total_amount) AS gross_revenue
         FROM orders o WHERE o.branch_id = ANY(${scope.branchIds}::uuid[])
+          AND o.type = 'COUNTER_PICKUP'
           AND o.payment_status = ${OrderPaymentStatus.PAID}::"OrderPaymentStatus"
           AND o.paid_at >= ${scope.from} AND o.paid_at < ${scope.to}
         GROUP BY 1,2
@@ -199,6 +332,7 @@ export class ReportsService {
           SUM(r.amount) AS refund_amount
         FROM refunds r JOIN orders o ON o.id=r.order_id
         WHERE o.branch_id = ANY(${scope.branchIds}::uuid[])
+          AND o.type = 'COUNTER_PICKUP'
           AND r.cancellation_date >= ${scope.fromDate}::date
           AND r.cancellation_date <= ${scope.toDate}::date
         GROUP BY 1,2
@@ -378,6 +512,12 @@ export class ReportsService {
     // Chains are single-timezone in practice; the first one drives the buckets.
     const timezone = branches[0]?.chain.timezone ?? DEFAULT_TIMEZONE;
 
+    if (branches.length > 1) {
+      for (const chainId of new Set(branches.map(({ chainId }) => chainId))) {
+        await this.plans.assertFeatureEnabled(chainId, 'MULTI_BRANCH_COMPARISON');
+      }
+    }
+
     return {
       branches: branches.map(({ chain: _chain, ...branch }) => branch),
       branchIds: branches.map(({ id }) => id),
@@ -529,6 +669,7 @@ export class ReportsService {
   private completedOrdersWhere(scope: ReportScope): Prisma.OrderWhereInput {
     return {
       branchId: { in: scope.branchIds },
+      type: OrderType.COUNTER_PICKUP,
       paymentStatus: OrderPaymentStatus.PAID,
       paidAt: { gte: scope.from, lt: scope.to },
     };
@@ -569,6 +710,7 @@ export class ReportsService {
         netRevenue: '0.00',
         paidCancellationCount: 0,
         orderCount: 0,
+        averageOrderValue: '0.00',
         guestCount: 0,
         sessionCount: 0,
       },

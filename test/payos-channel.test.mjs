@@ -121,6 +121,55 @@ describe('V9 PayOS channel credentials', () => {
     }
   });
 
+  it('marks a pending QR with a stable reason before switching to cash', async () => {
+    let update;
+    let cancelled;
+    const payment = {
+      id: 'payment-id',
+      status: 'PENDING',
+      transactionRef: 'payos-link-id',
+      providerOrderCode: '123',
+      order: { branch: { chainId: 'chain-id' } },
+    };
+    const service = new PayosPaymentService(
+      {
+        payment: {
+          findFirst: async (args) => (args.include ? payment : { id: payment.id }),
+          updateMany: async ({ data }) => {
+            update = data;
+            return { count: 1 };
+          },
+          findUniqueOrThrow: async () => ({ ...payment, ...update }),
+        },
+        payosChannel: {
+          findUnique: async () => ({
+            clientIdCipher: cipher.encrypt('client'),
+            apiKeyCipher: cipher.encrypt('api'),
+            checksumKeyCipher: cipher.encrypt('checksum'),
+          }),
+        },
+      },
+      {},
+      cipher,
+      {
+        cancelPayment: async (...args) => {
+          cancelled = args;
+        },
+      },
+      {},
+      {},
+      {},
+    );
+    const result = await service.cancelPendingForOrder(
+      { employeeId: 'cashier-id', branchId: 'branch-id' },
+      'order-id',
+      'Khách đổi sang tiền mặt',
+    );
+    assert.equal(update.failureReason, 'PAYOS_CANCELLED_SWITCH_TO_CASH');
+    assert.equal(result.status, 'FAILED');
+    assert.equal(cancelled[1], 'payos-link-id');
+  });
+
   it('accepts a correctly signed PayOS verification callback without an order', async () => {
     const store = new PayosVerificationStore();
     const webhookCode = '123e4567-e89b-12d3-a456-426614174000';

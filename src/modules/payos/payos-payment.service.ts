@@ -236,6 +236,11 @@ export class PayosPaymentService {
       if (payment.order.status === OrderStatus.CANCELLED) {
         await this.refunds.recordLatePayosPayment(payment.id, data.amount ?? -1, data.reference);
       } else if (
+        payment.status === PaymentStatus.FAILED &&
+        payment.failureReason === 'PAYOS_CANCELLED_SWITCH_TO_CASH'
+      ) {
+        await this.refunds.recordLatePayosPayment(payment.id, data.amount ?? -1, data.reference);
+      } else if (
         payment.status === PaymentStatus.EXPIRED ||
         (payment.status === PaymentStatus.FAILED && payment.failureReason === 'PAYOS_EXPIRED') ||
         this.isExpired(payment.expiresAt)
@@ -303,12 +308,16 @@ export class PayosPaymentService {
     if (payment.status === PaymentStatus.REQUIRES_ATTENTION) return payment;
     const legacyExpired =
       payment.status === PaymentStatus.FAILED && payment.failureReason === 'PAYOS_EXPIRED';
+    const switchedToCash =
+      payment.status === PaymentStatus.FAILED &&
+      payment.failureReason === 'PAYOS_CANCELLED_SWITCH_TO_CASH';
     const expiredByTime = this.isExpired(payment.expiresAt);
     if (
       payment.status !== PaymentStatus.PENDING &&
       payment.status !== PaymentStatus.AMOUNT_MISMATCH &&
       payment.status !== PaymentStatus.EXPIRED &&
-      !legacyExpired
+      !legacyExpired &&
+      !switchedToCash
     )
       throw new ConflictException(
         'Only a pending, expired, mismatched or attention-required PayOS payment can be rechecked',
@@ -329,6 +338,9 @@ export class PayosPaymentService {
       if (amount == null) throw new BadGatewayException('PayOS did not return the paid amount');
       const reference = transaction?.reference ?? state!.id;
       try {
+        if (switchedToCash) {
+          return this.refunds.recordLatePayosPayment(payment.id, amount, reference);
+        }
         if (payment.status === PaymentStatus.EXPIRED || legacyExpired || expiredByTime) {
           if (payment.status === PaymentStatus.PENDING) {
             await this.settlement.markExpired(payment.id);
@@ -362,7 +374,12 @@ export class PayosPaymentService {
     return payment;
   }
 
-  async cancel(user: AuthenticatedUser, paymentId: string, reason: string) {
+  async cancel(
+    user: AuthenticatedUser,
+    paymentId: string,
+    reason: string,
+    failureReason = `PAYOS_CANCELLED: ${reason.trim()}`,
+  ) {
     const { payment, credentials } = await this.scopedPayment(user, paymentId);
     if (payment.status !== PaymentStatus.PENDING)
       throw new ConflictException('Only a pending PayOS payment can be cancelled');
@@ -375,10 +392,32 @@ export class PayosPaymentService {
     } catch (error) {
       this.rethrowPayos(error);
     }
-    return this.prisma.payment.update({
-      where: { id: payment.id },
-      data: { status: PaymentStatus.FAILED, failureReason: `PAYOS_CANCELLED: ${reason.trim()}` },
+    const changed = await this.prisma.payment.updateMany({
+      where: { id: payment.id, status: PaymentStatus.PENDING },
+      data: { status: PaymentStatus.FAILED, failureReason },
     });
+    if (changed.count !== 1) {
+      throw new ConflictException('Payment changed while PayOS cancellation was in progress');
+    }
+    return this.prisma.payment.findUniqueOrThrow({ where: { id: payment.id } });
+  }
+
+  async cancelPendingForOrder(user: AuthenticatedUser, orderId: string, reason: string) {
+    if (!user.branchId || !user.employeeId) {
+      throw new ForbiddenException('An assigned employee profile is required');
+    }
+    const payment = await this.prisma.payment.findFirst({
+      where: {
+        orderId,
+        provider: PaymentProvider.PAYOS,
+        status: PaymentStatus.PENDING,
+        order: { branchId: user.branchId, type: OrderType.COUNTER_PICKUP },
+      },
+      select: { id: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!payment) return null;
+    return this.cancel(user, payment.id, reason, 'PAYOS_CANCELLED_SWITCH_TO_CASH');
   }
 
   private async scopedPayment(user: AuthenticatedUser, paymentId: string) {

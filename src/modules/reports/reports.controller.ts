@@ -67,6 +67,18 @@ export class ReportsController {
     return this.reportsService.getTopItems(user, query);
   }
 
+  @Get('payment-methods')
+  @ApiOperation({ summary: 'Payment-method totals across the Owner report scope' })
+  getPaymentMethods(@CurrentUser() user: AuthenticatedUser, @Query() query: ReportRangeQueryDto) {
+    return this.reportsService.getPaymentMethods(user, query);
+  }
+
+  @Get('top-toppings')
+  @ApiOperation({ summary: 'Best-selling toppings over the period' })
+  getTopToppings(@CurrentUser() user: AuthenticatedUser, @Query() query: TopItemsQueryDto) {
+    return this.reportsService.getTopToppings(user, query);
+  }
+
   @Get('customers')
   @ApiOperation({
     summary: 'Guests served per branch',

@@ -12,6 +12,7 @@ import { BranchAccessService } from '../branches/branch-access.service.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { getUploadRootDirectory } from './branding-upload.js';
 import type { UpdateDisplayPosterDto } from './dto/display-poster.dto.js';
+import { PlanQuotaService } from '../subscription/plan-quota.service.js';
 
 export const POSTER_MAX_BYTES = 5 * 1024 * 1024;
 export const POSTER_LIMIT = 10;
@@ -27,10 +28,12 @@ export class DisplayPostersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly access: BranchAccessService,
+    private readonly plans: PlanQuotaService,
   ) {}
 
   async list(chainId: string, user: AuthenticatedUser) {
     await this.access.assertCanAccessChain(user, chainId);
+    await this.plans.assertFeatureEnabled(chainId, 'BRANDING');
     return this.prisma.displayPoster.findMany({
       where: { chainId, deletedAt: null },
       orderBy: [...posterOrder],
@@ -39,6 +42,7 @@ export class DisplayPostersService {
 
   async upload(chainId: string, file: PosterFile | undefined, user: AuthenticatedUser) {
     await this.access.assertCanManageChain(user, chainId);
+    await this.plans.assertFeatureEnabled(chainId, 'BRANDING');
     const extension = this.validateImage(file);
     const fileName = `${chainId}-${randomUUID()}.${extension}`;
     const directory = join(getUploadRootDirectory(), 'posters');
@@ -71,6 +75,7 @@ export class DisplayPostersService {
 
   async update(chainId: string, id: string, dto: UpdateDisplayPosterDto, user: AuthenticatedUser) {
     await this.access.assertCanManageChain(user, chainId);
+    await this.plans.assertFeatureEnabled(chainId, 'BRANDING');
     if (!Object.values(dto).some((value) => value !== undefined))
       throw new BadRequestException('At least one poster field is required');
     // Scoped unique update: never mutate an ID from another chain or a removed poster.
@@ -84,6 +89,7 @@ export class DisplayPostersService {
 
   async remove(chainId: string, id: string, user: AuthenticatedUser) {
     await this.access.assertCanManageChain(user, chainId);
+    await this.plans.assertFeatureEnabled(chainId, 'BRANDING');
     const result = await this.prisma.displayPoster.updateMany({
       where: { id, chainId, deletedAt: null },
       data: { deletedAt: new Date(), enabled: false },
