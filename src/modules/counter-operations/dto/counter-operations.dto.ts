@@ -5,6 +5,7 @@ import {
   IsArray,
   IsBoolean,
   IsInt,
+  IsIn,
   IsNumber,
   IsOptional,
   IsString,
@@ -14,6 +15,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import { PrintJobStatus } from '../../../generated/prisma/client.js';
 
 export class CreateCounterOrderDto {
   @ApiPropertyOptional({ maxLength: 2000 })
@@ -71,7 +73,10 @@ export class StartPreparationBatchDto {
 }
 
 export class CashPaymentDto {
-  @ApiProperty({ format: 'uuid', description: 'POS station collecting this payment and printing its documents' })
+  @ApiProperty({
+    format: 'uuid',
+    description: 'POS station collecting this payment and printing its documents',
+  })
   @IsUUID()
   stationId!: string;
 
@@ -93,6 +98,18 @@ export class ReprintDto {
   @IsString()
   @MaxLength(500)
   reason!: string;
+}
+
+export class PrintJobResultDto {
+  @ApiProperty({ enum: [PrintJobStatus.PRINTED, PrintJobStatus.FAILED] })
+  @IsIn([PrintJobStatus.PRINTED, PrintJobStatus.FAILED])
+  status!: typeof PrintJobStatus.PRINTED | typeof PrintJobStatus.FAILED;
+
+  @ApiPropertyOptional({ maxLength: 500 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  errorMessage?: string;
 }
 
 export class CancelCounterOrderDto {

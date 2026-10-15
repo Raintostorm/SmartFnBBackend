@@ -14,6 +14,7 @@ import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
 import { CounterOperationsService } from './counter-operations.service.js';
 import { CancelPayosPaymentDto, CreatePayosPaymentDto } from '../payos/dto/payos-payment.dto.js';
 import { PayosPaymentService } from '../payos/payos-payment.service.js';
+import { ReceiptDocumentsService } from '../receipt-documents/receipt-documents.service.js';
 import {
   AddCounterOrderItemDto,
   AvailabilityDto,
@@ -22,6 +23,7 @@ import {
   CheckoutCounterOrderDto,
   CreateCounterOrderDto,
   ReprintDto,
+  PrintJobResultDto,
   StartPreparationBatchDto,
 } from './dto/counter-operations.dto.js';
 
@@ -35,6 +37,7 @@ export class CashierController {
     private readonly service: CounterOperationsService,
     private readonly realtime: RealtimePublisher,
     private readonly payosPayments: PayosPaymentService,
+    private readonly receiptDocuments: ReceiptDocumentsService,
   ) {}
 
   @Get('context')
@@ -85,6 +88,25 @@ export class CashierController {
     @Body() dto: ReprintDto,
   ) {
     return this.service.reprint(user, id, dto.reason);
+  }
+
+  @Get('orders/:orderId/print-jobs')
+  @ApiOperation({ summary: 'List receipt and queue-ticket print jobs for an order' })
+  printJobs(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('orderId', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.service.printJobs(user, id);
+  }
+
+  @Post('print-jobs/:printJobId/result')
+  @ApiOperation({ summary: 'Report a physical printer success or failure' })
+  printResult(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('printJobId', new ParseUUIDPipe()) id: string,
+    @Body() dto: PrintJobResultDto,
+  ) {
+    return this.service.recordPrintResult(user, id, dto);
   }
 
   @Get('orders/:orderId')
@@ -161,6 +183,7 @@ export class CashierController {
       'Khách đổi sang tiền mặt',
     );
     const result = await this.service.collectCash(user, id, dto);
+    await this.receiptDocuments.ensureReady(id).catch(() => undefined);
     if (cancelledQr) {
       this.publish(user, 'payment.cancelled', {
         orderId: id,

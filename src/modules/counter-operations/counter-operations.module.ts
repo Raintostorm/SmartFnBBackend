@@ -7,9 +7,10 @@ import { StationsController } from './stations.controller.js';
 import { StationsService } from './stations.service.js';
 import { PayosModule } from '../payos/payos.module.js';
 import { OrderTrackingModule } from '../order-tracking/order-tracking.module.js';
+import { ReceiptDocumentsModule } from '../receipt-documents/receipt-documents.module.js';
 
 @Module({
-  imports: [RealtimeModule, BranchesModule, PayosModule, OrderTrackingModule],
+  imports: [RealtimeModule, BranchesModule, PayosModule, OrderTrackingModule, ReceiptDocumentsModule],
   controllers: [CashierController, BaristaController, StationsController],
   providers: [CounterOperationsService, StationsService],
   exports: [CounterOperationsService],

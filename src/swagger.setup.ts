@@ -31,6 +31,7 @@ export const SWAGGER_TAGS = [
   ['Public order tracking', 'Trang công khai chỉ trả số gọi và trạng thái nhận món qua token.'],
   ['Cashier · Orders', 'Cashier tạo, sửa, chốt, hủy và in lại đơn tại quầy.'],
   ['Cashier · Payments', 'Cashier thu tiền mặt hoặc tạo thanh toán QR PayOS.'],
+  ['Cashier receipt documents', 'PDF biên nhận bất biến để xem lại và in từ lịch sử đơn quầy.'],
   ['Barista · Queue', 'Barista nhận mẻ, pha chế, hoàn tác và giao đơn.'],
   ['Barista · Availability', 'Barista báo hết món hoặc tùy chọn tại chi nhánh.'],
   ['Waiter · Orders', 'Waiter tạo và gửi đơn tại bàn.'],

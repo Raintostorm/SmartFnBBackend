@@ -14,6 +14,7 @@ import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { writeBranchAudit } from '../branch-manager/manager-scope.js';
 import { OrderTrackingService } from '../order-tracking/order-tracking.service.js';
+import { ReceiptDocumentsService } from '../receipt-documents/receipt-documents.service.js';
 
 export type CounterSettlementSource = 'PAYOS_WEBHOOK' | 'PAYOS_RECHECK' | 'MANAGER_MANUAL';
 
@@ -33,6 +34,7 @@ export class CounterPaymentSettlementService {
     private readonly prisma: PrismaService,
     private readonly tracking: OrderTrackingService,
     private readonly realtime: RealtimePublisher,
+    private readonly receiptDocuments: ReceiptDocumentsService,
   ) {}
 
   async markExpired(paymentId: string) {
@@ -351,6 +353,9 @@ export class CounterPaymentSettlementService {
       status: result.order.status,
       submittedAt: result.order.submittedAt,
     });
+    // Optional chaining keeps direct unit construction backward compatible;
+    // Nest always injects the service in the running application.
+    await this.receiptDocuments?.ensureReady(result.order.id).catch(() => undefined);
     return result;
   }
 

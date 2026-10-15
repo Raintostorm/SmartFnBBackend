@@ -61,3 +61,19 @@ services:
         sync: false
       - key: EMAIL_FROM
         sync: false
+      # Keep disabled until the S3-compatible secrets below are configured.
+      # Render's local filesystem is ephemeral and must not store receipt history.
+      - key: RECEIPT_PDF_ENABLED
+        value: 'false'
+      - key: RECEIPT_STORAGE_PROVIDER
+        value: s3
+      - key: RECEIPT_STORAGE_ENDPOINT
+        sync: false
+      - key: RECEIPT_STORAGE_REGION
+        value: auto
+      - key: RECEIPT_STORAGE_BUCKET
+        sync: false
+      - key: RECEIPT_STORAGE_ACCESS_KEY_ID
+        sync: false
+      - key: RECEIPT_STORAGE_SECRET_ACCESS_KEY
+        sync: false

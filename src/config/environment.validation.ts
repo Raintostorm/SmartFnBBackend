@@ -26,7 +26,9 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
   const payosWebhookBaseUrl = String(config.PAYOS_WEBHOOK_BASE_URL ?? '')
     .trim()
     .replace(/\/+$/, '');
-  const publicWebUrl = String(config.PUBLIC_WEB_URL || config.FRONTEND_URL || 'http://localhost:8443')
+  const publicWebUrl = String(
+    config.PUBLIC_WEB_URL || config.FRONTEND_URL || 'http://localhost:8443',
+  )
     .trim()
     .replace(/\/+$/, '');
   const orderTrackingSecret = String(config.ORDER_TRACKING_SECRET ?? '').trim();
@@ -35,13 +37,19 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
     .toLowerCase();
   const emailApiKey = String(config.EMAIL_API_KEY || config.RESEND_API_KEY || '').trim();
   const emailFrom = String(
-    config.EMAIL_FROM || config.RESEND_FROM_EMAIL || (emailApiKey ? 'Smart FnB <no-reply@mail.smartfnb.tech>' : ''),
+    config.EMAIL_FROM ||
+      config.RESEND_FROM_EMAIL ||
+      (emailApiKey ? 'Smart FnB <no-reply@mail.smartfnb.tech>' : ''),
   ).trim();
   const paymentExpiryJobEnabledValue = String(
     config.PAYMENT_EXPIRY_JOB_ENABLED ?? 'true',
   ).toLowerCase();
   const paymentExpiryJobIntervalMs = Number(config.PAYMENT_EXPIRY_JOB_INTERVAL_MS ?? 60_000);
   const paymentExpiryBatchSize = Number(config.PAYMENT_EXPIRY_BATCH_SIZE ?? 100);
+  const receiptPdfEnabledValue = String(
+    config.RECEIPT_PDF_ENABLED ?? (nodeEnv === 'production' ? 'false' : 'true'),
+  ).toLowerCase();
+  const receiptStorageProvider = String(config.RECEIPT_STORAGE_PROVIDER ?? 'local').toLowerCase();
 
   if (!validEnvironments.has(nodeEnv)) {
     throw new Error('NODE_ENV must be development, test, or production.');
@@ -135,6 +143,21 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
   if (!Number.isInteger(paymentExpiryBatchSize) || paymentExpiryBatchSize < 1) {
     throw new Error('PAYMENT_EXPIRY_BATCH_SIZE must be a positive integer.');
   }
+  if (!['true', 'false'].includes(receiptPdfEnabledValue)) {
+    throw new Error('RECEIPT_PDF_ENABLED must be true or false.');
+  }
+  if (!['local', 's3'].includes(receiptStorageProvider)) {
+    throw new Error('RECEIPT_STORAGE_PROVIDER must be local or s3.');
+  }
+  if (receiptPdfEnabledValue === 'true' && receiptStorageProvider === 's3') {
+    for (const key of [
+      'RECEIPT_STORAGE_BUCKET',
+      'RECEIPT_STORAGE_ACCESS_KEY_ID',
+      'RECEIPT_STORAGE_SECRET_ACCESS_KEY',
+    ]) {
+      if (!String(config[key] ?? '').trim()) throw new Error(`${key} is required for S3 storage.`);
+    }
+  }
 
   return {
     ...config,
@@ -168,5 +191,15 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
     PAYMENT_EXPIRY_JOB_ENABLED: paymentExpiryJobEnabledValue === 'true',
     PAYMENT_EXPIRY_JOB_INTERVAL_MS: paymentExpiryJobIntervalMs,
     PAYMENT_EXPIRY_BATCH_SIZE: paymentExpiryBatchSize,
+    RECEIPT_PDF_ENABLED: receiptPdfEnabledValue === 'true',
+    RECEIPT_STORAGE_PROVIDER: receiptStorageProvider,
+    RECEIPT_STORAGE_LOCAL_DIR: String(config.RECEIPT_STORAGE_LOCAL_DIR ?? 'uploads/receipts'),
+    RECEIPT_STORAGE_ENDPOINT: String(config.RECEIPT_STORAGE_ENDPOINT ?? '').trim(),
+    RECEIPT_STORAGE_REGION: String(config.RECEIPT_STORAGE_REGION ?? 'auto').trim(),
+    RECEIPT_STORAGE_BUCKET: String(config.RECEIPT_STORAGE_BUCKET ?? '').trim(),
+    RECEIPT_STORAGE_ACCESS_KEY_ID: String(config.RECEIPT_STORAGE_ACCESS_KEY_ID ?? '').trim(),
+    RECEIPT_STORAGE_SECRET_ACCESS_KEY: String(
+      config.RECEIPT_STORAGE_SECRET_ACCESS_KEY ?? '',
+    ).trim(),
   };
 }

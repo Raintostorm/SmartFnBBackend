@@ -546,4 +546,45 @@ describe('V9 counter operations', () => {
     assert.equal(orderMutation.data.status, 'REQUIRES_ATTENTION');
     assert.equal(orderMutation.data.attentionReason, 'PAID_ITEM_OUT_OF_STOCK');
   });
+
+  it('records printer success idempotently and never downgrades it to failed', async () => {
+    let status = 'PENDING';
+    const prisma = {
+      printJob: {
+        findFirst: async () => ({ id: 'job-id', branchId: 'branch-id', status }),
+        updateMany: async ({ data }) => {
+          status = data.status;
+          return { count: 1 };
+        },
+        findUniqueOrThrow: async () => ({
+          id: 'job-id',
+          branchId: 'branch-id',
+          status,
+          printedAt: status === 'PRINTED' ? new Date() : null,
+        }),
+      },
+    };
+    const service = counterService(prisma);
+    const printed = await service.recordPrintResult(cashier, 'job-id', { status: 'PRINTED' });
+    assert.equal(printed.status, 'PRINTED');
+    assert.ok(printed.printedAt instanceof Date);
+
+    status = 'PRINTED';
+    await assert.rejects(
+      () => service.recordPrintResult(cashier, 'job-id', { status: 'FAILED', errorMessage: 'jam' }),
+      ConflictException,
+    );
+  });
+
+  it('requires a useful error when physical printing fails', async () => {
+    const service = counterService({
+      printJob: {
+        findFirst: async () => ({ id: 'job-id', branchId: 'branch-id', status: 'PENDING' }),
+      },
+    });
+    await assert.rejects(
+      () => service.recordPrintResult(cashier, 'job-id', { status: 'FAILED' }),
+      BadRequestException,
+    );
+  });
 });

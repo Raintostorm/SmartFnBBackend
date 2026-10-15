@@ -118,6 +118,12 @@ enum PrintJobStatus {
   CANCELLED
 }
 
+enum ReceiptDocumentStatus {
+  PENDING
+  READY
+  FAILED
+}
+
 enum RefundStatus {
   PENDING
   COMPLETED
@@ -450,6 +456,7 @@ model Branch {
   branchMenuOptions BranchMenuOption[]
   customerDisplays  CustomerDisplaySession[]
   printJobs         PrintJob[]
+  receiptDocuments  ReceiptDocument[]
   dailySequences    BranchDailySequence[]
   posStations       PosStation[]
   displayDevices    DisplayDevice[]
@@ -1097,6 +1104,7 @@ model Order {
   displaySessions  CustomerDisplaySession[]
   trackingToken    OrderTrackingToken?
   refunds          Refund[]
+  receiptDocuments ReceiptDocument[]
 
   @@unique([branchId, businessDate, callNumber])
   @@index([branchId, placedAt])
@@ -1400,6 +1408,31 @@ model PrintJob {
   @@index([orderId, printedAt])
   @@index([branchId, printedAt])
   @@map("print_jobs")
+}
+
+model ReceiptDocument {
+  id           String                @id @default(uuid()) @db.Uuid
+  orderId      String                @map("order_id") @db.Uuid
+  branchId     String                @map("branch_id") @db.Uuid
+  version      Int                   @default(1)
+  status       ReceiptDocumentStatus @default(PENDING)
+  storageKey   String?               @map("storage_key") @db.VarChar(1000)
+  fileName     String?               @map("file_name") @db.VarChar(255)
+  mimeType     String?               @map("mime_type") @db.VarChar(100)
+  fileSize     Int?                  @map("file_size")
+  checksum     String?               @db.VarChar(64)
+  generatedAt  DateTime?             @map("generated_at") @db.Timestamptz(6)
+  errorMessage String?               @map("error_message") @db.VarChar(1000)
+  createdAt    DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Restrict)
+
+  @@unique([orderId, version])
+  @@index([branchId, createdAt])
+  @@index([status, updatedAt])
+  @@map("receipt_documents")
 }
 
 model PosStation {

@@ -14,6 +14,7 @@ import {
   PaymentProvider,
   PaymentStatus,
   PrintDocumentType,
+  PrintJobStatus,
   Prisma,
 } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
@@ -26,6 +27,7 @@ import type {
   CashPaymentDto,
   CheckoutCounterOrderDto,
   CreateCounterOrderDto,
+  PrintJobResultDto,
 } from './dto/counter-operations.dto.js';
 
 const counterOrderInclude = {
@@ -640,17 +642,72 @@ export class CounterOperationsService {
     const actor = this.employee(user);
     if (reason.trim().length < 3) throw new BadRequestException('A reprint reason is required');
     const receipt = await this.receipt(user, orderId);
-    await this.prisma.printJob.createMany({
-      data: [PrintDocumentType.RECEIPT, PrintDocumentType.QUEUE_TICKET].map((type) => ({
-        orderId,
-        branchId: actor.branchId,
-        type,
-        printedById: actor.employeeId,
-        isReprint: true,
-        reason: reason.trim(),
-      })),
+    const printJobs = await Promise.all(
+      [PrintDocumentType.RECEIPT, PrintDocumentType.QUEUE_TICKET].map((type) =>
+        this.prisma.printJob.create({
+          data: {
+            orderId,
+            branchId: actor.branchId,
+            type,
+            printedById: actor.employeeId,
+            isReprint: true,
+            reason: reason.trim(),
+          },
+        }),
+      ),
+    );
+    return { ...receipt, printJobs };
+  }
+
+  async printJobs(user: AuthenticatedUser, orderId: string) {
+    const actor = this.employee(user);
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, branchId: actor.branchId, type: OrderType.COUNTER_PICKUP },
+      select: { id: true },
     });
-    return receipt;
+    if (!order) throw new NotFoundException('Counter order was not found in your branch');
+    return this.prisma.printJob.findMany({
+      where: { orderId, branchId: actor.branchId },
+      orderBy: [{ printedAt: 'desc' }, { id: 'desc' }],
+    });
+  }
+
+  async recordPrintResult(user: AuthenticatedUser, printJobId: string, dto: PrintJobResultDto) {
+    const actor = this.employee(user);
+    const job = await this.prisma.printJob.findFirst({
+      where: { id: printJobId, branchId: actor.branchId },
+    });
+    if (!job) throw new NotFoundException('Print job was not found in your branch');
+    if (job.status === PrintJobStatus.CANCELLED) {
+      throw new ConflictException('Cancelled print job cannot be updated');
+    }
+    if (job.status === PrintJobStatus.PRINTED) {
+      if (dto.status === PrintJobStatus.PRINTED) return job;
+      throw new ConflictException('Printed job cannot be changed to failed');
+    }
+    const errorMessage = dto.errorMessage?.trim();
+    if (dto.status === PrintJobStatus.FAILED && !errorMessage) {
+      throw new BadRequestException('A printer error message is required');
+    }
+    const result = await this.prisma.printJob.updateMany({
+      where: {
+        id: job.id,
+        status: { in: [PrintJobStatus.PENDING, PrintJobStatus.FAILED] },
+      },
+      data: {
+        status: dto.status,
+        printedAt: dto.status === PrintJobStatus.PRINTED ? new Date() : null,
+        errorMessage: dto.status === PrintJobStatus.FAILED ? errorMessage : null,
+      },
+    });
+    if (!result.count) {
+      const current = await this.prisma.printJob.findUniqueOrThrow({ where: { id: job.id } });
+      if (current.status === PrintJobStatus.PRINTED && dto.status === PrintJobStatus.PRINTED) {
+        return current;
+      }
+      throw new ConflictException('Print job was finalized concurrently');
+    }
+    return this.prisma.printJob.findUniqueOrThrow({ where: { id: job.id } });
   }
 
   async baristaQueue(user: AuthenticatedUser) {
