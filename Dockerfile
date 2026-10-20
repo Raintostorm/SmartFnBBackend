@@ -45,6 +45,8 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/src/generated ./src/generated
+# Receipt PDF renderer loads these fonts at runtime from <app root>/assets/fonts (see receipt-pdf.service.ts).
+COPY --chown=node:node assets ./assets
 COPY --chown=node:node docker-entrypoint.sh ./docker-entrypoint.sh
 
 RUN chmod +x ./docker-entrypoint.sh \
