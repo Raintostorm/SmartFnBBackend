@@ -1,10 +1,24 @@
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { ReceiptPdfService } from '../dist/modules/receipt-documents/receipt-pdf.service.js';
 
 const money = (value) => ({ toString: () => String(value) });
+const require = createRequire(import.meta.url);
+const fontkit = createRequire(require.resolve('pdfkit'))('fontkit');
 
 describe('Cashier archived receipt PDF', () => {
+  it('embeds complete regular and bold fonts with Latin, Vietnamese, digits, and đồng glyphs', () => {
+    for (const weight of ['Regular', 'Bold']) {
+      const path = fileURLToPath(new URL(`../assets/fonts/HarmonyOS_Sans_${weight}.ttf`, import.meta.url));
+      const font = fontkit.openSync(path);
+      for (const character of 'Smart FnB Cà phê Trà sữa 123.000 ₫ Độ') {
+        assert.ok(font.hasGlyphForCodePoint(character.codePointAt(0)), `${weight}: missing ${character}`);
+      }
+    }
+  });
+
   it('renders a non-empty PDF with Vietnamese receipt data and tracking QR', async () => {
     const result = await new ReceiptPdfService().render({
       orderCode: 'CTR-001',

@@ -1,13 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import PDFDocument from 'pdfkit';
 import QRCode from 'qrcode';
-import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 
-const require = createRequire(import.meta.url);
-const regularFont =
-  require.resolve('@fontsource/noto-sans/files/noto-sans-vietnamese-400-normal.woff');
-const boldFont =
-  require.resolve('@fontsource/noto-sans/files/noto-sans-vietnamese-700-normal.woff');
+// Use the same complete font files as the web app. The old Vietnamese-only
+// WOFF subset omitted basic Latin glyphs, which PDF viewers showed as boxes.
+const regularFont = fileURLToPath(
+  new URL('../../../assets/fonts/HarmonyOS_Sans_Regular.ttf', import.meta.url),
+);
+const boldFont = fileURLToPath(
+  new URL('../../../assets/fonts/HarmonyOS_Sans_Bold.ttf', import.meta.url),
+);
 
 export interface ReceiptPdfSnapshot {
   orderCode: string;

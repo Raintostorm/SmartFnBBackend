@@ -269,3 +269,9 @@ pnpm build                 # Build production
 ```
 
 Thông tin kết nối local nằm trong `.env`. Khi triển khai thật, thay toàn bộ mật khẩu mặc định.
+
+## Font cho PDF
+
+PDF phiếu thanh toán sử dụng HarmonyOS Sans (Copyright © 2021–2025 Huawei Device Co., Ltd.).
+Bản font được giữ nguyên để hiển thị tiếng Việt đồng nhất với web; xem điều khoản tại
+`assets/fonts/LICENSE_HarmonyOS_Sans.txt`.
