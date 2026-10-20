@@ -48,7 +48,14 @@ export class BrandingController {
     private readonly realtime: RealtimePublisher,
   ) {}
 
-  @Roles(AppRole.OWNER, AppRole.MANAGER, AppRole.WAITER, AppRole.KITCHEN, AppRole.CASHIER)
+  @Roles(
+    AppRole.OWNER,
+    AppRole.MANAGER,
+    AppRole.WAITER,
+    AppRole.KITCHEN,
+    AppRole.CASHIER,
+    AppRole.BARISTA,
+  )
   @Get()
   @ApiOperation({ summary: 'Get the branding visible to apps and printed bills' })
   get(
