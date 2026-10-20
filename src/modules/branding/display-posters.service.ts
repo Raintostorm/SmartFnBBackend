@@ -5,12 +5,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { PrismaService } from '../../database/prisma.service.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
+import { deleteAsset, putAsset } from '../assets/asset-storage.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
-import { getUploadRootDirectory } from './branding-upload.js';
 import type { UpdateDisplayPosterDto } from './dto/display-poster.dto.js';
 import { PlanQuotaService } from '../subscription/plan-quota.service.js';
 
@@ -45,10 +43,8 @@ export class DisplayPostersService {
     await this.plans.assertFeatureEnabled(chainId, 'BRANDING');
     const extension = this.validateImage(file);
     const fileName = `${chainId}-${randomUUID()}.${extension}`;
-    const directory = join(getUploadRootDirectory(), 'posters');
-    const filePath = join(directory, fileName);
-    await mkdir(directory, { recursive: true });
-    await writeFile(filePath, file!.buffer, { flag: 'wx' });
+    const key = `posters/${fileName}`;
+    await putAsset(key, file!.buffer);
     try {
       return await this.prisma.$transaction(async (tx) => {
         // Serialize uploads for one tenant so parallel requests cannot bypass the limit.
@@ -68,7 +64,7 @@ export class DisplayPostersService {
         });
       });
     } catch (error) {
-      await rm(filePath, { force: true }).catch(() => undefined);
+      await deleteAsset(key).catch(() => undefined);
       throw error;
     }
   }

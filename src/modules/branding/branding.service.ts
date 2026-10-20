@@ -5,19 +5,15 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename } from 'node:path';
 import { PrismaService } from '../../database/prisma.service.js';
 import { AppRole } from '../auth/app-role.enum.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
+import { deleteAsset, putAsset } from '../assets/asset-storage.js';
 import type { UpdateBrandingDto } from './dto/branding.dto.js';
 import { PlanQuotaService } from '../subscription/plan-quota.service.js';
-import {
-  BRANDING_LOGO_MAX_BYTES,
-  BRANDING_LOGO_PUBLIC_PREFIX,
-  getBrandingLogoDirectory,
-} from './branding-upload.js';
+import { BRANDING_LOGO_MAX_BYTES, BRANDING_LOGO_PUBLIC_PREFIX } from './branding-upload.js';
 
 const DEFAULT_BRANDING = {
   primaryColor: '#0F172A',
@@ -111,13 +107,10 @@ export class BrandingService {
     await this.plans.assertFeatureEnabled(chainId, 'BRANDING');
     const chain = await this.getChain(chainId);
     const extension = this.validateLogo(file);
-    const directory = getBrandingLogoDirectory();
-    await mkdir(directory, { recursive: true });
-
     const fileName = `${chainId}-${Date.now()}-${randomUUID()}.${extension}`;
-    const filePath = join(directory, fileName);
+    const key = `branding/${fileName}`;
     const logoUrl = `${BRANDING_LOGO_PUBLIC_PREFIX}/${fileName}`;
-    await writeFile(filePath, file!.buffer, { flag: 'wx' });
+    await putAsset(key, file!.buffer);
 
     let branding;
     try {
@@ -136,7 +129,7 @@ export class BrandingService {
         return saved;
       });
     } catch (error) {
-      await rm(filePath, { force: true }).catch(() => undefined);
+      await deleteAsset(key).catch(() => undefined);
       throw error;
     }
 
@@ -179,7 +172,7 @@ export class BrandingService {
     if (!logoUrl?.startsWith(`${BRANDING_LOGO_PUBLIC_PREFIX}/`)) return;
     const fileName = logoUrl.slice(BRANDING_LOGO_PUBLIC_PREFIX.length + 1);
     if (!fileName || basename(fileName) !== fileName) return;
-    await rm(join(getBrandingLogoDirectory(), fileName), { force: true }).catch(() => undefined);
+    await deleteAsset(`branding/${fileName}`).catch(() => undefined);
   }
 
   private async assertCanRead(chainId: string, user: AuthenticatedUser) {

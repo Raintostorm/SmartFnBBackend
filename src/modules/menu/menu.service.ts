@@ -5,12 +5,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename } from 'node:path';
 import { BranchStatus, Prisma } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
+import { deleteAsset, putAsset } from '../assets/asset-storage.js';
 import type {
   CreateMenuCategoryDto,
   CreateMenuItemDto,
@@ -26,7 +26,7 @@ import type {
   UpdateMenuOptionDto,
   UpdateMenuOptionGroupDto,
 } from './dto/menu.dto.js';
-import { getMenuImageDirectory, MENU_IMAGE_MAX_BYTES, MENU_IMAGE_PUBLIC_PREFIX } from './menu-image.js';
+import { MENU_IMAGE_MAX_BYTES, MENU_IMAGE_PUBLIC_PREFIX } from './menu-image.js';
 
 const categorySelect = {
   id: true,
@@ -170,7 +170,10 @@ export class MenuService {
     if (!branch) throw new NotFoundException('Branch not found in this chain');
     const options = await this.prisma.menuOption.findMany({
       where: { group: { chainId } },
-      select: { id: true, branchAvailability: { where: { branchId }, select: { isAvailable: true } } },
+      select: {
+        id: true,
+        branchAvailability: { where: { branchId }, select: { isAvailable: true } },
+      },
     });
     return options.map((option) => ({
       branchId,
@@ -280,15 +283,23 @@ export class MenuService {
   ) {
     await this.branchAccess.assertCanManageChain(user, chainId);
     const current = await this.getOptionOrFail(chainId, groupId, optionId);
-    if (dto.isDefault && (dto.isActive === false || (dto.isActive === undefined && !current.isActive))) {
+    if (
+      dto.isDefault &&
+      (dto.isActive === false || (dto.isActive === undefined && !current.isActive))
+    ) {
       throw new BadRequestException('An inactive option cannot be the default');
     }
     return this.withUniqueConflict('An option with this code already exists in the group', () =>
       this.prisma.$transaction(async (tx) => {
         if (dto.isDefault) {
           await tx.$queryRaw`SELECT id FROM menu_option_groups WHERE id = ${groupId}::uuid FOR UPDATE`;
-          const group = await tx.menuOptionGroup.findUniqueOrThrow({ where: { id: groupId }, select: { maxSelections: true } });
-          const defaults = await tx.menuOption.count({ where: { groupId, isDefault: true, id: { not: optionId } } });
+          const group = await tx.menuOptionGroup.findUniqueOrThrow({
+            where: { id: groupId },
+            select: { maxSelections: true },
+          });
+          const defaults = await tx.menuOption.count({
+            where: { groupId, isDefault: true, id: { not: optionId } },
+          });
           if (defaults >= group.maxSelections) {
             throw new BadRequestException('Default options exceed maxSelections');
           }
@@ -409,30 +420,54 @@ export class MenuService {
       throw new BadRequestException('Menu image must not exceed 5 MB');
     }
     const signatures = [
-      { mime: 'image/jpeg', ext: 'jpg', valid: file.buffer.length >= 3 && file.buffer.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff])) },
-      { mime: 'image/png', ext: 'png', valid: file.buffer.length >= 8 && file.buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) },
-      { mime: 'image/webp', ext: 'webp', valid: file.buffer.length >= 12 && file.buffer.subarray(0, 4).toString('ascii') === 'RIFF' && file.buffer.subarray(8, 12).toString('ascii') === 'WEBP' },
+      {
+        mime: 'image/jpeg',
+        ext: 'jpg',
+        valid:
+          file.buffer.length >= 3 &&
+          file.buffer.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff])),
+      },
+      {
+        mime: 'image/png',
+        ext: 'png',
+        valid:
+          file.buffer.length >= 8 &&
+          file.buffer
+            .subarray(0, 8)
+            .equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+      },
+      {
+        mime: 'image/webp',
+        ext: 'webp',
+        valid:
+          file.buffer.length >= 12 &&
+          file.buffer.subarray(0, 4).toString('ascii') === 'RIFF' &&
+          file.buffer.subarray(8, 12).toString('ascii') === 'WEBP',
+      },
     ];
     const format = signatures.find(({ mime, valid }) => mime === file.mimetype && valid);
-    if (!format) throw new BadRequestException('Menu image must be a valid JPEG, PNG, or WebP file');
+    if (!format)
+      throw new BadRequestException('Menu image must be a valid JPEG, PNG, or WebP file');
 
-    const directory = getMenuImageDirectory();
-    await mkdir(directory, { recursive: true });
     const fileName = `${chainId}-${itemId}-${randomUUID()}.${format.ext}`;
-    const filePath = join(directory, fileName);
+    const key = `menu/${fileName}`;
     const imageUrl = `${MENU_IMAGE_PUBLIC_PREFIX}/${fileName}`;
-    await writeFile(filePath, file.buffer, { flag: 'wx' });
+    await putAsset(key, file.buffer);
     let saved;
     try {
-      saved = await this.prisma.menuItem.update({ where: { id: itemId }, data: { imageUrl }, select: itemSelect });
+      saved = await this.prisma.menuItem.update({
+        where: { id: itemId },
+        data: { imageUrl },
+        select: itemSelect,
+      });
     } catch (error) {
-      await rm(filePath, { force: true }).catch(() => undefined);
+      await deleteAsset(key).catch(() => undefined);
       throw error;
     }
     if (item.imageUrl?.startsWith(`${MENU_IMAGE_PUBLIC_PREFIX}/`)) {
       const oldName = item.imageUrl.slice(MENU_IMAGE_PUBLIC_PREFIX.length + 1);
       if (oldName && basename(oldName) === oldName) {
-        await rm(join(directory, oldName), { force: true }).catch(() => undefined);
+        await deleteAsset(`menu/${oldName}`).catch(() => undefined);
       }
     }
     return saved;

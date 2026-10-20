@@ -50,6 +50,7 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
     config.RECEIPT_PDF_ENABLED ?? (nodeEnv === 'production' ? 'false' : 'true'),
   ).toLowerCase();
   const receiptStorageProvider = String(config.RECEIPT_STORAGE_PROVIDER ?? 'local').toLowerCase();
+  const assetStorageProvider = String(config.ASSET_STORAGE_PROVIDER ?? 'local').toLowerCase();
 
   if (!validEnvironments.has(nodeEnv)) {
     throw new Error('NODE_ENV must be development, test, or production.');
@@ -158,6 +159,19 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
       if (!String(config[key] ?? '').trim()) throw new Error(`${key} is required for S3 storage.`);
     }
   }
+  if (!['local', 's3'].includes(assetStorageProvider)) {
+    throw new Error('ASSET_STORAGE_PROVIDER must be local or s3.');
+  }
+  if (assetStorageProvider === 's3') {
+    for (const key of [
+      'ASSET_STORAGE_ENDPOINT',
+      'ASSET_STORAGE_BUCKET',
+      'ASSET_STORAGE_ACCESS_KEY_ID',
+      'ASSET_STORAGE_SECRET_ACCESS_KEY',
+    ]) {
+      if (!String(config[key] ?? '').trim()) throw new Error(`${key} is required for S3 storage.`);
+    }
+  }
 
   return {
     ...config,
@@ -201,5 +215,11 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
     RECEIPT_STORAGE_SECRET_ACCESS_KEY: String(
       config.RECEIPT_STORAGE_SECRET_ACCESS_KEY ?? '',
     ).trim(),
+    ASSET_STORAGE_PROVIDER: assetStorageProvider,
+    ASSET_STORAGE_ENDPOINT: String(config.ASSET_STORAGE_ENDPOINT ?? '').trim(),
+    ASSET_STORAGE_REGION: String(config.ASSET_STORAGE_REGION ?? 'auto').trim(),
+    ASSET_STORAGE_BUCKET: String(config.ASSET_STORAGE_BUCKET ?? '').trim(),
+    ASSET_STORAGE_ACCESS_KEY_ID: String(config.ASSET_STORAGE_ACCESS_KEY_ID ?? '').trim(),
+    ASSET_STORAGE_SECRET_ACCESS_KEY: String(config.ASSET_STORAGE_SECRET_ACCESS_KEY ?? '').trim(),
   };
 }
