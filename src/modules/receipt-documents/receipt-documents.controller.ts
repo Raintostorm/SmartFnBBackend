@@ -44,6 +44,23 @@ export class ReceiptDocumentsController {
     return this.service.retry(user, orderId);
   }
 
+  @Get('print-image')
+  @ApiProduces('image/png')
+  @ApiOperation({
+    summary:
+      'PNG (768px wide, trailing blank space trimmed) rendered from the stored PDF for thermal printing',
+  })
+  async printImage(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('orderId', new ParseUUIDPipe()) orderId: string,
+    @Res() response: Response,
+  ) {
+    const { data } = await this.service.printImage(user, orderId);
+    response.setHeader('Content-Type', 'image/png');
+    response.setHeader('Cache-Control', 'private, no-store');
+    response.send(data);
+  }
+
   @Get('download')
   @ApiProduces('application/pdf')
   @ApiOperation({ summary: 'Download a locally stored receipt PDF' })

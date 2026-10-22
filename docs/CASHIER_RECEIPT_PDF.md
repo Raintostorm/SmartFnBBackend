@@ -26,6 +26,7 @@ Tất cả đường dẫn dưới đây nằm dưới `/api/v1` và cần JWT.
 | `GET`  | `/cashier/orders/:orderId/receipt-document`          | Owner, Manager, Cashier | Lấy trạng thái, metadata và URL tải tạm thời |
 | `POST` | `/cashier/orders/:orderId/receipt-document/retry`    | Owner, Manager, Cashier | Sinh lại khi trạng thái là `FAILED`          |
 | `GET`  | `/cashier/orders/:orderId/receipt-document/download` | Owner, Manager, Cashier | Tải file khi dùng local storage              |
+| `GET`  | `/cashier/orders/:orderId/receipt-document/print-image` | Owner, Manager, Cashier | PNG rộng 768px render từ PDF đã lưu, đã cắt phần trống cuối trang, để Mobile in lên máy nhiệt (404 nếu chưa có PDF) |
 | `GET`  | `/cashier/orders/:orderId/print-jobs`                | Cashier                 | Xem các lượt in phiếu và phiếu số            |
 | `POST` | `/cashier/print-jobs/:printJobId/result`             | Cashier                 | Báo kết quả in vật lý                        |
 
