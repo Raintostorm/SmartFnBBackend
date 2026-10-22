@@ -17,6 +17,7 @@ import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
 import { OrderTrackingService } from '../order-tracking/order-tracking.service.js';
 import { ReceiptPdfService, type ReceiptPdfSnapshot } from './receipt-pdf.service.js';
+import { ReceiptRasterService } from './receipt-raster.service.js';
 import { ReceiptStorageService } from './receipt-storage.service.js';
 
 @Injectable()
@@ -26,6 +27,7 @@ export class ReceiptDocumentsService {
     private readonly access: BranchAccessService,
     private readonly tracking: OrderTrackingService,
     private readonly pdf: ReceiptPdfService,
+    private readonly raster: ReceiptRasterService,
     private readonly storage: ReceiptStorageService,
     private readonly config: ConfigService,
   ) {}
@@ -128,6 +130,25 @@ export class ReceiptDocumentsService {
       data: await this.storage.read(document.storageKey),
       fileName: document.fileName ?? `receipt-${orderId}.pdf`,
     };
+  }
+
+  /**
+   * Ảnh PNG của chính file PDF đã lưu, rộng 768px và đã cắt phần trống cuối phiếu, để Mobile in lên máy nhiệt
+   * đúng nội dung bản lưu. Chưa có PDF thì sinh luôn (idempotent như `get`); không có/không sinh được → 404 để
+   * Mobile quay về in bằng bill dựng cục bộ.
+   */
+  async printImage(user: AuthenticatedUser, orderId: string) {
+    await this.scopedOrder(user, orderId);
+    let document = await this.prisma.receiptDocument.findUnique({
+      where: { orderId_version: { orderId, version: 1 } },
+    });
+    if (document?.status !== ReceiptDocumentStatus.READY) {
+      document = await this.ensureReady(orderId);
+    }
+    if (!document || document.status !== ReceiptDocumentStatus.READY || !document.storageKey) {
+      throw new NotFoundException('Receipt PDF is not ready');
+    }
+    return { data: await this.raster.render(await this.storage.read(document.storageKey)) };
   }
 
   private async scopedOrder(user: AuthenticatedUser, orderId: string) {

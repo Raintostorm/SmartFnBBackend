@@ -92,12 +92,12 @@ export class ReceiptPdfService {
         });
       }
       if (qr) {
-        doc.image(qr, (164 - 70) / 2, doc.y + 4, { width: 70 });
-        doc
-          .moveDown(10)
-          .font('Noto')
-          .fontSize(7)
-          .text('Quét mã để theo dõi đơn', { align: 'center' });
+        // `image` không đẩy con trỏ xuống; đặt `y` ngay dưới ảnh thay vì `moveDown`, vốn tính theo cỡ chữ 24 của số gọi
+        // và chừa một khoảng trắng rất lớn trên giấy nhiệt.
+        const qrTop = doc.y + 4;
+        doc.image(qr, (164 - 70) / 2, qrTop, { width: 70 });
+        doc.y = qrTop + 70 + 2;
+        doc.font('Noto').fontSize(7).text('Quét mã để theo dõi đơn', { align: 'center' });
       }
       this.rule(doc);
       doc.font('Noto').fontSize(7).text('Phiếu thanh toán nội bộ – không phải hóa đơn điện tử.', {
