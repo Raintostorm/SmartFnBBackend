@@ -170,6 +170,50 @@ describe('V9 PayOS channel credentials', () => {
     assert.equal(cancelled[1], 'payos-link-id');
   });
 
+  it('records a separate stable reason when the cashier cancels an unpaid order', async () => {
+    let update;
+    const payment = {
+      id: 'payment-id',
+      status: 'PENDING',
+      transactionRef: 'payos-link-id',
+      providerOrderCode: '123',
+      order: { branch: { chainId: 'chain-id' } },
+    };
+    const service = new PayosPaymentService(
+      {
+        payment: {
+          findFirst: async (args) => (args.include ? payment : { id: payment.id }),
+          updateMany: async ({ data }) => {
+            update = data;
+            return { count: 1 };
+          },
+          findUniqueOrThrow: async () => ({ ...payment, ...update }),
+        },
+        payosChannel: {
+          findUnique: async () => ({
+            clientIdCipher: cipher.encrypt('client'),
+            apiKeyCipher: cipher.encrypt('api'),
+            checksumKeyCipher: cipher.encrypt('checksum'),
+          }),
+        },
+      },
+      {},
+      cipher,
+      { cancelPayment: async () => undefined },
+      {},
+      {},
+      {},
+    );
+
+    await service.cancelPendingForOrder(
+      { employeeId: 'cashier-id', branchId: 'branch-id' },
+      'order-id',
+      'Thu ngân huỷ đơn',
+      'PAYOS_CANCELLED_ORDER',
+    );
+    assert.equal(update.failureReason, 'PAYOS_CANCELLED_ORDER');
+  });
+
   it('accepts a correctly signed PayOS verification callback without an order', async () => {
     const store = new PayosVerificationStore();
     const webhookCode = '123e4567-e89b-12d3-a456-426614174000';

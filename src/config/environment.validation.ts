@@ -46,6 +46,16 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
   ).toLowerCase();
   const paymentExpiryJobIntervalMs = Number(config.PAYMENT_EXPIRY_JOB_INTERVAL_MS ?? 60_000);
   const paymentExpiryBatchSize = Number(config.PAYMENT_EXPIRY_BATCH_SIZE ?? 100);
+  const payosReconciliationJobEnabledValue = String(
+    config.PAYOS_RECONCILIATION_JOB_ENABLED ?? 'true',
+  ).toLowerCase();
+  const payosReconciliationJobIntervalMs = Number(
+    config.PAYOS_RECONCILIATION_JOB_INTERVAL_MS ?? 30_000,
+  );
+  const payosReconciliationLookbackMs = Number(
+    config.PAYOS_RECONCILIATION_LOOKBACK_MS ?? 30 * 60_000,
+  );
+  const payosReconciliationBatchSize = Number(config.PAYOS_RECONCILIATION_BATCH_SIZE ?? 20);
   const receiptPdfEnabledValue = String(
     config.RECEIPT_PDF_ENABLED ?? (nodeEnv === 'production' ? 'false' : 'true'),
   ).toLowerCase();
@@ -144,6 +154,21 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
   if (!Number.isInteger(paymentExpiryBatchSize) || paymentExpiryBatchSize < 1) {
     throw new Error('PAYMENT_EXPIRY_BATCH_SIZE must be a positive integer.');
   }
+  if (!['true', 'false'].includes(payosReconciliationJobEnabledValue)) {
+    throw new Error('PAYOS_RECONCILIATION_JOB_ENABLED must be true or false.');
+  }
+  if (
+    !Number.isInteger(payosReconciliationJobIntervalMs) ||
+    payosReconciliationJobIntervalMs < 10_000
+  ) {
+    throw new Error('PAYOS_RECONCILIATION_JOB_INTERVAL_MS must be an integer of at least 10000.');
+  }
+  if (!Number.isInteger(payosReconciliationLookbackMs) || payosReconciliationLookbackMs < 60_000) {
+    throw new Error('PAYOS_RECONCILIATION_LOOKBACK_MS must be an integer of at least 60000.');
+  }
+  if (!Number.isInteger(payosReconciliationBatchSize) || payosReconciliationBatchSize < 1) {
+    throw new Error('PAYOS_RECONCILIATION_BATCH_SIZE must be a positive integer.');
+  }
   if (!['true', 'false'].includes(receiptPdfEnabledValue)) {
     throw new Error('RECEIPT_PDF_ENABLED must be true or false.');
   }
@@ -205,6 +230,10 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
     PAYMENT_EXPIRY_JOB_ENABLED: paymentExpiryJobEnabledValue === 'true',
     PAYMENT_EXPIRY_JOB_INTERVAL_MS: paymentExpiryJobIntervalMs,
     PAYMENT_EXPIRY_BATCH_SIZE: paymentExpiryBatchSize,
+    PAYOS_RECONCILIATION_JOB_ENABLED: payosReconciliationJobEnabledValue === 'true',
+    PAYOS_RECONCILIATION_JOB_INTERVAL_MS: payosReconciliationJobIntervalMs,
+    PAYOS_RECONCILIATION_LOOKBACK_MS: payosReconciliationLookbackMs,
+    PAYOS_RECONCILIATION_BATCH_SIZE: payosReconciliationBatchSize,
     RECEIPT_PDF_ENABLED: receiptPdfEnabledValue === 'true',
     RECEIPT_STORAGE_PROVIDER: receiptStorageProvider,
     RECEIPT_STORAGE_LOCAL_DIR: String(config.RECEIPT_STORAGE_LOCAL_DIR ?? 'uploads/receipts'),
