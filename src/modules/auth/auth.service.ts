@@ -22,8 +22,6 @@ import type {
   JwtPayload,
   RequestMetadata,
 } from './auth.interfaces.js';
-import type { CreateStaffDto } from './dto/create-staff.dto.js';
-import type { CreateManagerDto } from './dto/create-manager.dto.js';
 import type { LoginDto } from './dto/login.dto.js';
 import type { SetupPasswordDto } from './dto/setup-password.dto.js';
 import { PasswordService } from './password.service.js';
@@ -70,63 +68,6 @@ export class AuthService {
     this.audience = configService.getOrThrow<string>('JWT_AUDIENCE');
   }
 
-  async registerManager(
-    actor: AuthenticatedUser,
-    dto: CreateManagerDto,
-    metadata: RequestMetadata,
-  ): Promise<AuthResponse> {
-    if (actor.role !== AppRole.OWNER || !actor.ownerId) {
-      throw new ForbiddenException('Only an OWNER can create a MANAGER account');
-    }
-
-    return this.registerStaff(actor, { ...dto, role: AppRole.MANAGER }, metadata);
-  }
-
-  async registerStaff(
-    actor: AuthenticatedUser,
-    dto: CreateStaffDto,
-    metadata: RequestMetadata,
-  ): Promise<AuthResponse> {
-    if (actor.role !== AppRole.OWNER || !actor.ownerId) {
-      throw new ForbiddenException('Only an OWNER can create staff accounts');
-    }
-    // An OWNER staffs a branch with its MANAGER; the MANAGER hires the rest.
-    if (dto.role !== AppRole.MANAGER) {
-      throw new ForbiddenException(
-        'OWNER can only create MANAGER accounts. WAITER, KITCHEN, and CASHIER accounts are created by the branch manager.',
-      );
-    }
-    const role = await this.usersService.findRoleByCode(dto.role);
-
-    if (!role) {
-      throw new InternalServerErrorException(`${dto.role} role is not configured`);
-    }
-
-    await this.usersService.assertOwnerCanCreateAccount(actor.ownerId, dto.branchId);
-
-    const passwordHash = await this.passwordService.hash(dto.password);
-
-    try {
-      const user = await this.usersService.createStaff({
-        email: this.normalizeEmail(dto.email),
-        phone: dto.phone?.trim(),
-        passwordHash,
-        roleId: role.id,
-        branchId: dto.branchId,
-        employeeCode: dto.employeeCode.trim().toUpperCase(),
-        firstName: dto.firstName.trim(),
-        lastName: dto.lastName.trim(),
-        jobTitle: dto.jobTitle?.trim(),
-        dateOfBirth: this.parseOptionalDate(dto.dateOfBirth),
-        hireDate: this.parseOptionalDate(dto.hireDate),
-      });
-
-      return this.createSession(user, metadata);
-    } catch (error: unknown) {
-      this.rethrowCreateUserError(error);
-    }
-  }
-
   async setupPassword(dto: SetupPasswordDto): Promise<{ message: string }> {
     const tokenHash = this.hashToken(dto.token);
     const now = new Date();
@@ -148,7 +89,14 @@ export class AuthService {
       select: {
         id: true,
         userId: true,
-        user: { select: { status: true, deletedAt: true, role: { select: { code: true } } } },
+        user: {
+          select: {
+            status: true,
+            deletedAt: true,
+            role: { select: { code: true } },
+            employee: { select: { branch: { select: { chainId: true } } } },
+          },
+        },
       },
     });
     if (
@@ -181,9 +129,54 @@ export class AuthService {
 
     const passwordHash = await this.passwordService.hash(dto.password);
     await this.prisma.$transaction(async (transaction) => {
+      const chainId = setupToken.user.employee?.branch.chainId;
+      if (chainId)
+        await transaction.$queryRaw`SELECT id FROM restaurant_chains WHERE id = ${chainId}::uuid FOR UPDATE`;
+      await transaction.$queryRaw`SELECT id FROM users WHERE id = ${setupToken.userId}::uuid FOR UPDATE`;
+      const current = await transaction.user.findUnique({
+        where: { id: setupToken.userId },
+        include: {
+          role: true,
+          employee: {
+            include: { branch: { include: { chain: { include: { subscription: true } } } } },
+          },
+        },
+      });
+      if (
+        !current ||
+        current.deletedAt ||
+        current.status === UserStatus.SUSPENDED ||
+        current.staffInvitationState === 'CANCELLED' ||
+        !PASSWORD_SETUP_ROLES.includes(current.role.code as AppRole)
+      ) {
+        throw new UnauthorizedException('Account or invitation is no longer available');
+      }
+      if (current.role.code !== AppRole.OWNER) {
+        const employee = current.employee;
+        const branch = employee?.branch;
+        const chain = branch?.chain;
+        if (
+          !employee ||
+          employee.deletedAt ||
+          employee.status !== 'ACTIVE' ||
+          !branch ||
+          branch.deletedAt ||
+          branch.status !== 'ACTIVE' ||
+          !chain ||
+          chain.deletedAt ||
+          chain.status !== 'ACTIVE' ||
+          chain.id !== chainId ||
+          chain.subscription?.status !== 'ACTIVE' ||
+          chain.subscription.expiresAt <= new Date() ||
+          (current.status !== UserStatus.ACTIVE && current.staffInvitationState !== 'PENDING')
+        ) {
+          throw new ForbiddenException('Staff account, branch or subscription is not available');
+        }
+      }
+      const acceptedAt = new Date();
       const consumed = await transaction.passwordSetupToken.updateMany({
-        where: { id: setupToken.id, usedAt: null, expiresAt: { gt: now } },
-        data: { usedAt: now },
+        where: { id: setupToken.id, usedAt: null, expiresAt: { gt: acceptedAt } },
+        data: { usedAt: acceptedAt },
       });
       if (consumed.count !== 1) {
         throw new UnauthorizedException('Password setup token is invalid or expired');
@@ -192,10 +185,9 @@ export class AuthService {
         where: { id: setupToken.userId },
         data: {
           passwordHash,
-          status:
-            setupToken.user.status === UserStatus.INACTIVE
-              ? UserStatus.ACTIVE
-              : setupToken.user.status,
+          status: current.status === UserStatus.INACTIVE ? UserStatus.ACTIVE : current.status,
+          staffInvitationState:
+            current.staffInvitationState === 'PENDING' ? 'ACCEPTED' : current.staffInvitationState,
           emailVerifiedAt: now,
         },
       });
@@ -204,6 +196,21 @@ export class AuthService {
         data: { revokedAt: now },
       });
       await transaction.passwordSetupAttempt.deleteMany({ where: { subjectHash: tokenHash } });
+      if (current.employee)
+        await transaction.branchAuditLog.create({
+          data: {
+            branchId: current.employee.branchId,
+            actorUserId: current.id,
+            actorEmployeeId: current.employee.id,
+            actorRole: current.role.code,
+            entityType: 'EMPLOYEE',
+            entityId: current.employee.id,
+            action:
+              current.staffInvitationState === 'PENDING'
+                ? 'STAFF_INVITATION_ACCEPTED'
+                : 'STAFF_PASSWORD_RESET_COMPLETED',
+          },
+        });
     });
     return { message: 'Password configured successfully' };
   }
@@ -475,7 +482,13 @@ export class AuthService {
   }
 
   private assertUserCanAuthenticate(user: AuthUserRecord | null): asserts user is AuthUserRecord {
-    if (!user || user.status !== UserStatus.ACTIVE || user.deletedAt) {
+    if (
+      !user ||
+      user.status !== UserStatus.ACTIVE ||
+      user.deletedAt ||
+      user.staffInvitationState === 'PENDING' ||
+      user.staffInvitationState === 'CANCELLED'
+    ) {
       throw new UnauthorizedException('User account is not active');
     }
 

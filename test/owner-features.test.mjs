@@ -454,45 +454,10 @@ describe('Owner staff administration', () => {
     assert.ok(attempt.lockedUntil instanceof Date);
   });
 
-  it('creates active Manager, Cashier and Barista usernames with hashed numeric passwords', async () => {
-    const created = [];
-    const transaction = {
-      $queryRaw: async () => [],
-      businessSubscription: { findFirst: async () => ({ plan: { maxAccounts: 10 } }) },
-      employee: {
-        count: async () => 1,
-        create: async ({ data }) => {
-          created.push(data);
-          return { id: 'new-employee', user: { email: data.user.create.email } };
-        },
-      },
-      ownerChainAssignment: { count: async () => 1 },
-      role: { findUnique: async () => ({ id: 'role-id' }) },
-    };
-    const service = new EmployeesService(
-      {
-        branch: { findFirst: async () => ({ id: 'branch-one', chainId: 'chain-one' }) },
-        $transaction: async (work) => work(transaction),
-      },
-      { assertCanManageChain: async () => undefined },
-      { hash: async (password) => `hashed:${password}` },
-    );
-    for (const role of [AppRole.MANAGER, AppRole.CASHIER, AppRole.BARISTA]) {
-      const result = await service.createDirectAccount(owner, {
-        branchId: 'branch-one',
-        name: 'Nguyễn Văn An',
-        username: `staff_${role.toLowerCase()}`,
-        password: '12345678',
-        role,
-      });
-      assert.equal(result.user.email, `staff_${role.toLowerCase()}`);
-    }
-    assert.equal(created.length, 3);
-    for (const data of created) {
-      assert.equal(data.user.create.status, UserStatus.ACTIVE);
-      assert.equal(data.user.create.passwordHash, 'hashed:12345678');
-      assert.equal(data.branch.connect.id, 'branch-one');
-    }
+  it('removes direct-password creation entry points', () => {
+    assert.equal(EmployeesService.prototype.createDirectAccount, undefined);
+    assert.equal(AuthService.prototype.registerManager, undefined);
+    assert.equal(AuthService.prototype.registerStaff, undefined);
   });
 
   it('replaces a direct-login password and revokes sessions', async () => {
@@ -519,48 +484,13 @@ describe('Owner staff administration', () => {
     assert.equal(calls[1].where.userId, 'staff-user');
   });
 
-  it('invites an inactive manager without returning the setup token', async () => {
-    const created = [];
-    const transaction = {
-      $queryRaw: async () => [],
-      businessSubscription: { findFirst: async () => ({ plan: { maxAccounts: 5 } }) },
-      employee: {
-        count: async () => 1,
-        create: async ({ data }) => {
-          created.push(data);
-          return {
-            id: 'employee-one',
-            user: { id: 'manager-user', email: data.user.create.email },
-          };
-        },
-      },
-      ownerChainAssignment: { count: async () => 1 },
-      role: { findUnique: async () => ({ id: 'manager-role' }) },
-      passwordSetupToken: { create: async ({ data }) => created.push(data) },
-      emailOutbox: { create: async ({ data }) => created.push(data) },
-    };
-    const service = new EmployeesService(
-      {
-        branch: {
-          findFirst: async () => ({ id: 'branch-one', name: 'Chi nhánh 1', chainId: 'chain-one' }),
-        },
-        $transaction: async (work) => work(transaction),
-      },
-      { assertCanManageChain: async () => undefined },
-      { hash: async () => 'hashed-random-password' },
-    );
-    const result = await service.inviteManager(owner, {
-      branchId: 'branch-one',
-      name: 'Nguyễn Văn An',
-      email: ' AN@example.com ',
-    });
-    assert.equal(result.account.user.email, 'an@example.com');
-    assert.equal(created[0].user.create.status, UserStatus.INACTIVE);
-    assert.equal(created[0].user.create.passwordHash, 'hashed-random-password');
-    assert.equal(created[1].tokenHash.length, 64);
-    assert.equal(created[2].template, 'MANAGER_ACCOUNT_CREATED');
-    assert.equal(created[2].payload.setupPath, '/setup-password');
-    assert.equal(JSON.stringify(result).includes(created[2].payload.setupToken), false);
+  it('routes the legacy manager invitation through shared email onboarding', async () => {
+    let input;
+    const service = new EmployeesService({}, {}, {}, { invite: async (actor, dto) => { input = dto; return { emailStatus: 'PENDING' }; } });
+    await service.inviteManager(owner, { branchId: 'branch-one', name: 'Nguyen An', email: 'an@example.com' });
+    assert.equal(input.role, AppRole.MANAGER);
+    assert.equal(input.firstName, 'Nguyen');
+    assert.equal(input.lastName, 'An');
   });
 
   function employeesServiceFor(roleCode) {

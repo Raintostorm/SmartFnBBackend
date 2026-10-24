@@ -16,13 +16,15 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { Roles } from '../auth/decorators/roles.decorator.js';
 import {
   InviteManagerDto,
-  CreateDirectStaffDto,
+  InviteStaffDto,
+  StaffInvitationReasonDto,
   ListEmployeesQueryDto,
   SetDirectStaffPasswordDto,
   TransferEmployeeBranchDto,
   UpdateEmployeeAccountStatusDto,
 } from './dto/employee.dto.js';
 import { EmployeesService } from './employees.service.js';
+import { StaffAccountsService } from './staff-accounts.service.js';
 
 @Roles(AppRole.OWNER)
 @ApiTags('Employees - OWNER')
@@ -31,7 +33,10 @@ import { EmployeesService } from './employees.service.js';
 @ApiForbiddenResponse({ description: 'The employee is outside your assigned chains' })
 @Controller('employees')
 export class EmployeesController {
-  constructor(private readonly employeesService: EmployeesService) {}
+  constructor(
+    private readonly employeesService: EmployeesService,
+    private readonly accounts: StaffAccountsService,
+  ) {}
 
   @Post('managers')
   @ApiOperation({ summary: 'Invite a MANAGER by email without choosing their password' })
@@ -40,10 +45,33 @@ export class EmployeesController {
     return this.employeesService.inviteManager(user, dto);
   }
 
-  @Post('accounts')
-  @ApiOperation({ summary: 'Create an active Manager, Cashier or Barista with username and password' })
-  createAccount(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateDirectStaffDto) {
-    return this.employeesService.createDirectAccount(user, dto);
+  @Post('invitations')
+  @ApiOperation({
+    summary: 'Invite Manager, Cashier or Barista by email (24-hour activation link)',
+  })
+  createAccount(@CurrentUser() user: AuthenticatedUser, @Body() dto: InviteStaffDto) {
+    const [firstName, ...rest] = dto.name.trim().split(/\s+/);
+    return this.accounts.invite(user, { ...dto, firstName, lastName: rest.join(' ') });
+  }
+
+  @Post(':employeeId/invitation/resend')
+  @ApiOperation({ summary: 'Resend pending invitation; replaces old link, 60-second cooldown' })
+  resendInvitation(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('employeeId', new ParseUUIDPipe()) id: string,
+    @Body() dto: StaffInvitationReasonDto,
+  ) {
+    return this.accounts.sendSetup(user, id, dto.reason, true);
+  }
+
+  @Post(':employeeId/invitation/cancel')
+  @ApiOperation({ summary: 'Cancel pending invitation and invalidate its token' })
+  cancelInvitation(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('employeeId', new ParseUUIDPipe()) id: string,
+    @Body() dto: StaffInvitationReasonDto,
+  ) {
+    return this.accounts.cancel(user, id, dto.reason);
   }
 
   @Get()
@@ -51,7 +79,7 @@ export class EmployeesController {
     summary: 'List the staff of every branch the OWNER is assigned to',
     description:
       'Roster covering all roles. The OWNER can create Manager, Cashier and Barista accounts ' +
-      'through POST /employees/accounts; email invitations remain available for Managers.',
+      'through POST /employees/invitations. All new accounts require email activation.',
   })
   @ApiOkResponse({ description: 'Paginated staff roster' })
   list(@CurrentUser() user: AuthenticatedUser, @Query() query: ListEmployeesQueryDto) {
@@ -72,7 +100,7 @@ export class EmployeesController {
 
   @Patch(':employeeId/status')
   @ApiOperation({
-    summary: 'Lock or unlock a MANAGER account',
+    summary: 'Lock or unlock a Manager, Cashier or Barista account',
     description: 'Any status other than ACTIVE also revokes the live sessions of that manager.',
   })
   @ApiParam({ name: 'employeeId', format: 'uuid' })
@@ -89,7 +117,7 @@ export class EmployeesController {
 
   @Post(':employeeId/reset-password')
   @ApiOperation({
-    summary: 'Send a password setup link to a MANAGER',
+    summary: 'Send a password setup link to a Manager, Cashier or Barista',
     description:
       'Revokes the live sessions and emails a one-time link valid for 24 hours. The token is ' +
       'never returned in the response.',
@@ -101,12 +129,15 @@ export class EmployeesController {
   resetPassword(
     @Param('employeeId', new ParseUUIDPipe()) employeeId: string,
     @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: StaffInvitationReasonDto,
   ) {
-    return this.employeesService.resetManagerPassword(user, employeeId);
+    return this.employeesService.resetManagerPassword(user, employeeId, dto.reason);
   }
 
   @Patch(':employeeId/password')
-  @ApiOperation({ summary: 'Set password for an Owner-created staff account and revoke its sessions' })
+  @ApiOperation({
+    summary: 'Set password for an Owner-created staff account and revoke its sessions',
+  })
   setPassword(
     @Param('employeeId', new ParseUUIDPipe()) employeeId: string,
     @Body() dto: SetDirectStaffPasswordDto,

@@ -7,7 +7,6 @@ import {
   IsInt,
   IsOptional,
   IsString,
-  Matches,
   IsUUID,
   Max,
   MaxLength,
@@ -59,6 +58,12 @@ export class ListEmployeesQueryDto {
 }
 
 export class UpdateEmployeeAccountStatusDto {
+  @ApiProperty({ minLength: 3, maxLength: 500 })
+  @Transform(trim)
+  @IsString()
+  @MinLength(3)
+  @MaxLength(500)
+  reason!: string;
   @ApiProperty({
     enum: UserStatus,
     enumName: 'UserStatus',
@@ -95,34 +100,19 @@ export class InviteManagerDto {
   branchId!: string;
 }
 
-/** Owner creates a usable staff login without requiring an email inbox. */
-export class CreateDirectStaffDto {
-  @ApiProperty({ example: 'Nguyễn Văn An', maxLength: 200 })
-  @Transform(trim)
-  @IsString()
-  @MinLength(1)
-  @MaxLength(200)
-  name!: string;
-
-  @ApiProperty({ example: 'quanly_cn1', description: 'Globally unique login name, not an email' })
-  @Transform(({ value }: { value: unknown }) => typeof value === 'string' ? value.trim().toLowerCase() : value)
-  @IsString()
-  @Matches(/^[a-z0-9][a-z0-9._-]{2,49}$/, { message: 'username must be 3–50 letters, digits, dots, underscores or hyphens' })
-  username!: string;
-
-  @ApiProperty({ example: '12345678', minLength: 8, maxLength: 128, writeOnly: true })
-  @IsString()
-  @MinLength(8)
-  @MaxLength(128)
-  password!: string;
-
+export class InviteStaffDto extends InviteManagerDto {
   @ApiProperty({ enum: [AppRole.MANAGER, AppRole.CASHIER, AppRole.BARISTA] })
   @IsIn([AppRole.MANAGER, AppRole.CASHIER, AppRole.BARISTA])
   role!: AppRole.MANAGER | AppRole.CASHIER | AppRole.BARISTA;
+}
 
-  @ApiProperty({ format: 'uuid' })
-  @IsUUID()
-  branchId!: string;
+export class StaffInvitationReasonDto {
+  @ApiProperty({ minLength: 3, maxLength: 500 })
+  @Transform(trim)
+  @IsString()
+  @MinLength(3)
+  @MaxLength(500)
+  reason!: string;
 }
 
 export class SetDirectStaffPasswordDto {

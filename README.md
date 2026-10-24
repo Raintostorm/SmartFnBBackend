@@ -112,8 +112,8 @@ Mọi API mặc định đều yêu cầu `Authorization: Bearer <accessToken>`,
 | `POST`  | `/api/v1/auth/logout`          | Public, thu hồi session bằng refresh token                        |
 | `POST`  | `/api/v1/auth/logout-all`      | Đã đăng nhập                                                      |
 | `GET`   | `/api/v1/auth/me`              | Đã đăng nhập                                                      |
-| `POST`  | `/api/v1/auth/managers`        | `ADMIN` hoặc `OWNER`; tạo `MANAGER` cho đúng một chi nhánh        |
-| `POST`  | `/api/v1/auth/staff`           | Endpoint cũ; `OWNER` chỉ tạo `MANAGER`, nên dùng `/auth/managers` |
+| `POST` | `/api/v1/employees/invitations` | OWNER mời MANAGER/CASHIER/BARISTA bằng email |
+| `POST` | `/api/v1/manager/staff` | MANAGER mời CASHIER/BARISTA của chi nhánh |
 | `PATCH` | `/api/v1/users/:userId/status` | Chỉ `ADMIN`; cập nhật `ACTIVE`, `INACTIVE` hoặc `SUSPENDED`       |
 
 Các role ứng dụng: `ADMIN`, `OWNER`, `MANAGER`, `WAITER`, `KITCHEN`, `CASHIER`.
@@ -132,7 +132,8 @@ route theo role; route public phải được gắn `@Public()` một cách tư�
 Các endpoint được mô tả đầy đủ trên Swagger. Nhóm chính là
 `/api/v1/restaurant-chains`, `/api/v1/branches` và `/api/v1/public/branches`.
 Owner được tạo sau khi Platform Admin phê duyệt hồ sơ đăng ký. OWNER tạo MANAGER qua
-`POST /api/v1/auth/managers`; hệ thống chỉ chấp nhận chi nhánh thuộc chuỗi của OWNER.
+`POST /api/v1/employees/invitations`; hệ thống chỉ chấp nhận chi nhánh thuộc chuỗi của OWNER.
+Luồng email và thay đổi API: [Staff invitations](docs/staff-invitations.md).
 Mỗi MANAGER chỉ quản lý `Employee.branchId` của mình.
 
 Không có API đăng ký `ADMIN`. Để tạo tài khoản quản trị đầu tiên, điền tạm
