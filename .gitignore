@@ -26,3 +26,9 @@ skill.md
 .env
 .env.local
 .env.*.local
+
+# Local Supabase agent skills
+/.agents/skills/supabase/
+/.agents/skills/supabase-postgres-best-practices/
+/.claude/skills/supabase
+/.claude/skills/supabase-postgres-best-practices

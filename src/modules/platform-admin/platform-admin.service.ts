@@ -164,11 +164,7 @@ export class PlatformAdminService {
       throw new ConflictException('Only a pending application can be approved');
     }
 
-    const plan = dto.planId
-      ? await this.getActivePlan(dto.planId)
-      : application.requestedPlanId
-        ? await this.getActivePlan(application.requestedPlanId)
-        : await this.getDefaultPlan();
+    const plan = await this.getTrialPlan();
     const ownerRole = await this.prisma.role.findUnique({ where: { code: AppRole.OWNER } });
     if (!ownerRole) {
       throw new ConflictException('OWNER role is not configured');
@@ -181,7 +177,7 @@ export class PlatformAdminService {
     }
 
     const now = new Date();
-    const expiresAt = this.addMonths(now, dto.subscriptionMonths);
+    const expiresAt = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
     const setupExpiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000);
     const setupToken = randomBytes(32).toString('base64url');
     const placeholderPasswordHash = await this.passwordService.hash(
@@ -232,6 +228,8 @@ export class PlatformAdminService {
             monthlyPrice: plan.monthlyPrice,
             startsAt: now,
             expiresAt,
+            trialStartedAt: now,
+            trialEndsAt: expiresAt,
           },
         });
         await transaction.businessSubscriptionEvent.create({
@@ -240,6 +238,7 @@ export class PlatformAdminService {
             type: SubscriptionEventType.CREATED,
             toPlanId: plan.id,
             changedById: adminUserId,
+            note: '14-day trial started on registration approval',
           },
         });
         await transaction.passwordSetupToken.create({
@@ -344,13 +343,16 @@ export class PlatformAdminService {
 
   listPublicServicePlans() {
     return this.prisma.servicePlan.findMany({
-      where: { isActive: true },
+      where: { isActive: true, code: { not: 'TRIAL' }, monthlyPrice: { gt: 0 } },
       select: publicServicePlanSelect,
       orderBy: [{ monthlyPrice: 'asc' }, { name: 'asc' }],
     });
   }
 
   async createServicePlan(dto: CreateServicePlanDto) {
+    if (dto.code === 'TRIAL') {
+      throw new BadRequestException('TRIAL is reserved for automatic registration approval');
+    }
     try {
       return await this.prisma.servicePlan.create({
         data: { ...dto, maxTables: dto.maxTables ?? 1 },
@@ -363,6 +365,10 @@ export class PlatformAdminService {
 
   async updateServicePlan(id: string, dto: UpdateServicePlanDto) {
     await this.ensurePlanExists(id);
+    const existing = await this.prisma.servicePlan.findUniqueOrThrow({ where: { id } });
+    if (existing.code === 'TRIAL' || dto.code === 'TRIAL') {
+      throw new BadRequestException('TRIAL is managed automatically from the BASIC plan');
+    }
     try {
       return await this.prisma.servicePlan.update({
         where: { id },
@@ -420,6 +426,9 @@ export class PlatformAdminService {
 
   async renewSubscription(businessId: string, dto: RenewSubscriptionDto, adminUserId: string) {
     const subscription = await this.getSubscription(businessId);
+    if (subscription.plan.code === 'TRIAL') {
+      throw new ConflictException('The 14-day trial cannot be renewed');
+    }
     const baseDate = subscription.expiresAt > new Date() ? subscription.expiresAt : new Date();
     await this.prisma.$transaction(async (transaction) => {
       await transaction.businessSubscription.update({
@@ -449,6 +458,9 @@ export class PlatformAdminService {
       this.getSubscription(businessId),
       this.getActivePlan(dto.planId),
     ]);
+    if (subscription.plan.code === 'TRIAL' || targetPlan.code === 'TRIAL') {
+      throw new ConflictException('Trial conversion requires a verified platform PayOS payment');
+    }
     if (subscription.planId === targetPlan.id) {
       throw new BadRequestException('Business already uses this service plan');
     }
@@ -721,6 +733,36 @@ export class PlatformAdminService {
       throw new ConflictException('No active service plan is configured');
     }
     return plan;
+  }
+
+  private async getTrialPlan() {
+    const basic = await this.prisma.servicePlan.findUnique({ where: { code: 'BASIC' } });
+    if (!basic?.isActive) {
+      throw new ConflictException('Active BASIC plan is required before approving a trial');
+    }
+    return this.prisma.servicePlan.upsert({
+      where: { code: 'TRIAL' },
+      create: {
+        code: 'TRIAL',
+        name: 'Dùng thử 14 ngày',
+        description: 'Gói dùng thử với hạn mức tương đương BASIC',
+        monthlyPrice: 0,
+        maxBranches: basic.maxBranches,
+        maxAccounts: basic.maxAccounts,
+        maxTables: basic.maxTables,
+        brandingEnabled: basic.brandingEnabled,
+        multiBranchComparisonEnabled: basic.multiBranchComparisonEnabled,
+      },
+      update: {
+        monthlyPrice: 0,
+        maxBranches: basic.maxBranches,
+        maxAccounts: basic.maxAccounts,
+        maxTables: basic.maxTables,
+        brandingEnabled: basic.brandingEnabled,
+        multiBranchComparisonEnabled: basic.multiBranchComparisonEnabled,
+        isActive: true,
+      },
+    });
   }
 
   private async ensurePlanExists(id: string): Promise<void> {

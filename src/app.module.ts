@@ -25,6 +25,7 @@ import { CounterOperationsModule } from './modules/counter-operations/counter-op
 import { PayosModule } from './modules/payos/payos.module.js';
 import { BranchManagerModule } from './modules/branch-manager/branch-manager.module.js';
 import { OrderTrackingModule } from './modules/order-tracking/order-tracking.module.js';
+import { PlatformBillingModule } from './modules/platform-billing/platform-billing.module.js';
 
 @Module({
   imports: [
@@ -55,6 +56,7 @@ import { OrderTrackingModule } from './modules/order-tracking/order-tracking.mod
     PlatformAdminModule,
     ReportsModule,
     BranchManagerModule,
+    PlatformBillingModule,
   ],
   controllers: [AppController],
   providers: [AppService],

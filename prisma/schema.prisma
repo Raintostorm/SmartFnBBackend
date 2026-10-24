@@ -266,6 +266,13 @@ enum EmailOutboxStatus {
   FAILED
 }
 
+enum SubscriptionCheckoutStatus {
+  PENDING
+  PAID
+  FAILED
+  NEEDS_REVIEW
+}
+
 model Role {
   id          String   @id @default(uuid()) @db.Uuid
   code        String   @unique @db.VarChar(50)
@@ -349,6 +356,7 @@ model RestaurantChain {
   ownerAssignments        OwnerChainAssignment[]
   registrationApplication RegistrationApplication?
   subscription            BusinessSubscription?
+  subscriptionCheckouts   SubscriptionCheckout[]
   branding                BusinessBranding?
   displayPosters          DisplayPoster[]
   invoices                Invoice[]
@@ -656,6 +664,7 @@ model ServicePlan {
   subscriptions BusinessSubscription[]
   eventsFrom    BusinessSubscriptionEvent[] @relation("SubscriptionEventFromPlan")
   eventsTo      BusinessSubscriptionEvent[] @relation("SubscriptionEventToPlan")
+  checkouts     SubscriptionCheckout[]
 
   @@map("service_plans")
 }
@@ -669,6 +678,9 @@ model BusinessSubscription {
   startsAt     DateTime                   @map("starts_at") @db.Timestamptz(6)
   expiresAt    DateTime                   @map("expires_at") @db.Timestamptz(6)
   suspendedAt  DateTime?                  @map("suspended_at") @db.Timestamptz(6)
+  trialStartedAt DateTime?                @map("trial_started_at") @db.Timestamptz(6)
+  trialEndsAt    DateTime?                @map("trial_ends_at") @db.Timestamptz(6)
+  trialConvertedAt DateTime?             @map("trial_converted_at") @db.Timestamptz(6)
   createdAt    DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -679,6 +691,27 @@ model BusinessSubscription {
   @@index([status, expiresAt])
   @@index([planId])
   @@map("business_subscriptions")
+}
+
+model SubscriptionCheckout {
+  id                String                     @id @default(uuid()) @db.Uuid
+  chainId           String                     @map("chain_id") @db.Uuid
+  planId            String                     @map("plan_id") @db.Uuid
+  providerOrderCode String                     @unique @map("provider_order_code") @db.VarChar(30)
+  amount            Decimal                    @db.Decimal(14, 2)
+  status            SubscriptionCheckoutStatus @default(PENDING)
+  checkoutUrl       String?                    @map("checkout_url") @db.Text
+  paymentLinkId     String?                    @map("payment_link_id") @db.VarChar(100)
+  paidAt            DateTime?                  @map("paid_at") @db.Timestamptz(6)
+  reviewReason      String?                    @map("review_reason") @db.VarChar(255)
+  createdAt         DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  chain RestaurantChain @relation(fields: [chainId], references: [id], onDelete: Cascade)
+  plan  ServicePlan    @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  @@index([chainId, status, createdAt])
+  @@map("subscription_checkouts")
 }
 
 model BusinessSubscriptionEvent {
@@ -745,6 +778,7 @@ model PasswordSetupAttempt {
 
 model EmailOutbox {
   id        String            @id @default(uuid()) @db.Uuid
+  dedupeKey String?           @unique @map("dedupe_key") @db.VarChar(150)
   recipient String            @db.VarChar(255)
   subject   String            @db.VarChar(255)
   template  String            @db.VarChar(100)
