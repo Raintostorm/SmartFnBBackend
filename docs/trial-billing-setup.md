@@ -10,7 +10,7 @@
 ## Cấu hình Render
 
 1. Triển khai BE với migration mới. Cấu hình hiện tại `render:start` chạy `pnpm prisma:migrate:deploy` trước khi mở server. **Không** chạy seed demo để bật tính năng này.
-2. Tạo gói trả phí có mã chính xác `BASIC` và trạng thái hoạt động trong trang Admin, nếu chưa có. Hạn mức TRIAL được sao chép từ BASIC khi duyệt hồ sơ; đổi BASIC sau đó sẽ đồng bộ TRIAL ở lần duyệt tiếp theo.
+2. Migration `20261025050000_bootstrap_basic_and_trial_plans` tạo BASIC nếu chưa có: 300.000đ/tháng, 2 chi nhánh, 10 tài khoản, 30 bàn; đồng thời tạo TRIAL miễn phí sao chép hạn mức BASIC. Migration không ghi đè gói đã có. BASIC phải đang hoạt động để duyệt hồ sơ. Hạn mức TRIAL được đồng bộ từ BASIC khi duyệt; đổi BASIC sau đó sẽ đồng bộ TRIAL ở lần duyệt tiếp theo.
 3. Tạo **kênh PayOS riêng cho SmartFnB** để nhận phí nền tảng. Ghi `PLATFORM_PAYOS_CLIENT_ID`, `PLATFORM_PAYOS_API_KEY`, `PLATFORM_PAYOS_CHECKSUM_KEY` vào Render Environment của BE. Không đặt các khóa này trên Vercel/FE, không dùng `PAYOS_MASTER_KEY` hay khóa của nhà hàng để thay thế.
 4. Đặt `PLATFORM_PAYOS_WEBHOOK_URL=https://<BE-host>/api/v1/webhooks/payos/platform` (đổi prefix nếu `API_PREFIX` khác). Đặt `PUBLIC_WEB_URL=https://<FE-host>` để PayOS trả Owner về `/owner/plan`.
 5. Sau khi BE đã chạy công khai, đăng nhập Admin và gọi `POST /api/v1/admin/platform-billing/confirm-webhook` qua Swagger/API. BE dùng khóa SmartFnB gọi PayOS `confirm-webhook`; PayOS gửi mẫu có chữ ký đến URL ở bước 4. Chỉ khi phản hồi `confirmed: true` mới dùng thanh toán thật.
