@@ -22,7 +22,7 @@ import { PrismaService } from '../../database/prisma.service.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
 import type { CreatePayosPaymentDto } from './dto/payos-payment.dto.js';
-import { PayosApiError, PayosApiService } from './payos-api.service.js';
+import { PayosApiError, PayosApiService, type PayosCredentials } from './payos-api.service.js';
 import { PayosCipherService } from './payos-cipher.service.js';
 import { verifyPayosSignature } from './payos-signature.js';
 import { PayosVerificationStore } from './payos-verification.store.js';
@@ -40,6 +40,10 @@ interface PayosWebhook {
     paymentLinkId?: string;
   };
 }
+
+type RecheckablePayment = Prisma.PaymentGetPayload<{
+  include: { order: { include: { branch: { select: { chainId: true } } } } };
+}>;
 
 @Injectable()
 export class PayosPaymentService {
@@ -304,6 +308,32 @@ export class PayosPaymentService {
 
   async recheck(user: AuthenticatedUser, paymentId: string) {
     const { payment, credentials } = await this.scopedPayment(user, paymentId);
+    return this.recheckResolved(payment, credentials);
+  }
+
+  /**
+   * Server-side recovery for a webhook that never reached Render. This deliberately accepts only
+   * a still-pending PayOS payment; expired and exceptional cases remain explicit cashier/manager
+   * actions through `recheck`.
+   */
+  async reconcilePending(paymentId: string) {
+    const payment = await this.prisma.payment.findFirst({
+      where: { id: paymentId, provider: PaymentProvider.PAYOS, status: PaymentStatus.PENDING },
+      include: { order: { include: { branch: { select: { chainId: true } } } } },
+    });
+    if (!payment?.order) return null;
+    const channel = await this.prisma.payosChannel.findUnique({
+      where: { chainId: payment.order.branch.chainId },
+    });
+    if (!channel) return null;
+    return this.recheckResolved(payment, {
+      clientId: this.cipher.decrypt(channel.clientIdCipher),
+      apiKey: this.cipher.decrypt(channel.apiKeyCipher),
+      checksumKey: this.cipher.decrypt(channel.checksumKeyCipher),
+    });
+  }
+
+  private async recheckResolved(payment: RecheckablePayment, credentials: PayosCredentials) {
     if (payment.status === PaymentStatus.SUCCESS) return payment;
     if (payment.status === PaymentStatus.REQUIRES_ATTENTION) return payment;
     const legacyExpired =
@@ -402,7 +432,12 @@ export class PayosPaymentService {
     return this.prisma.payment.findUniqueOrThrow({ where: { id: payment.id } });
   }
 
-  async cancelPendingForOrder(user: AuthenticatedUser, orderId: string, reason: string) {
+  async cancelPendingForOrder(
+    user: AuthenticatedUser,
+    orderId: string,
+    reason: string,
+    failureReason = 'PAYOS_CANCELLED_SWITCH_TO_CASH',
+  ) {
     if (!user.branchId || !user.employeeId) {
       throw new ForbiddenException('An assigned employee profile is required');
     }
@@ -417,7 +452,7 @@ export class PayosPaymentService {
       orderBy: { createdAt: 'desc' },
     });
     if (!payment) return null;
-    return this.cancel(user, payment.id, reason, 'PAYOS_CANCELLED_SWITCH_TO_CASH');
+    return this.cancel(user, payment.id, reason, failureReason);
   }
 
   private async scopedPayment(user: AuthenticatedUser, paymentId: string) {

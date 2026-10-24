@@ -252,7 +252,20 @@ export class CashierController {
     @Param('orderId', new ParseUUIDPipe()) id: string,
     @Body() dto: CancelCounterOrderDto,
   ) {
+    const cancelledQr = await this.payosPayments.cancelPendingForOrder(
+      user,
+      id,
+      dto.reason,
+      'PAYOS_CANCELLED_ORDER',
+    );
     const result = await this.service.cancelUnpaid(user, id, dto.reason);
+    if (cancelledQr) {
+      this.publish(user, 'payment.cancelled', {
+        orderId: id,
+        paymentId: cancelledQr.id,
+        status: cancelledQr.status,
+      });
+    }
     this.publish(user, 'order.cancelled', { orderId: id, reason: dto.reason });
     return result;
   }
