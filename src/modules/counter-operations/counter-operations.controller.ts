@@ -47,7 +47,7 @@ export class CashierController {
   }
 
   @Post('orders')
-  @ApiOperation({ summary: 'Create an editable counter-order draft' })
+  @ApiOperation({ summary: 'Retired: use POST /cashier/checkout with a local cart', deprecated:true })
   create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateCounterOrderDto) {
     return this.service.createDraft(user, dto);
   }

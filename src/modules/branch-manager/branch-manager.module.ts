@@ -8,9 +8,17 @@ import { ManagerOperationsService } from './manager-operations.service.js';
 import { ManagerReportsService } from './manager-reports.service.js';
 import { EmailModule } from '../email/email.module.js';
 import { PaymentsModule } from '../payments/payments.module.js';
+import { StaffAccountsModule } from '../employees/staff-accounts.module.js';
 
 @Module({
-  imports: [AuthModule, BranchesModule, RealtimeModule, EmailModule, PaymentsModule],
+  imports: [
+    AuthModule,
+    BranchesModule,
+    RealtimeModule,
+    EmailModule,
+    PaymentsModule,
+    StaffAccountsModule,
+  ],
   controllers: [BranchManagerController],
   providers: [ManagerStaffService, ManagerOperationsService, ManagerReportsService],
 })

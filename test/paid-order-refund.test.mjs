@@ -255,8 +255,8 @@ describe('Paid order cancellation and external refunds (#43)', () => {
     assert.equal(calls.printJobs.length, 0);
   });
 
-  it('rejects delivered orders without creating a refund', async () => {
-    const { service, calls, order } = fixture({ orderStatus: 'DELIVERED' });
+  it('rejects unpaid draft orders without creating a refund', async () => {
+    const { service, calls, order } = fixture({ orderStatus: 'PENDING' });
     await assert.rejects(
       service.cancelPaidOrder(manager, order.id, {
         reason: 'Yêu cầu quá muộn',

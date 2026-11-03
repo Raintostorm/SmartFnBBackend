@@ -139,3 +139,16 @@ test('fixed size is injected and conflicting size is rejected', async () => {
     ),
   );
 });
+
+import { CounterOperationsService } from '../dist/modules/counter-operations/counter-operations.service.js';
+test('new database drafts are retired; checkout is the only cart submission path', async () => {
+  const service = new CounterOperationsService(
+    {},
+    { assertSubscriptionAllowsWrite: async () => {} },
+    {},
+  );
+  await assert.rejects(
+    service.createDraft({ branchId: 'branch', employeeId: 'employee' }, {}),
+    (error) => error.getStatus() === 410,
+  );
+});

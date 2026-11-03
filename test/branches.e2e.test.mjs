@@ -220,20 +220,21 @@ describe('Owner branch management and role scopes', () => {
     assert.equal(reset.body.logoUrl, null);
   });
 
-  it('lets OWNER create only MANAGER accounts, denying Platform ADMIN and waiter roles', async () => {
-    const manager = await request('/auth/managers', {
+  it('lets OWNER invite a MANAGER by email, denying Platform ADMIN and waiter roles', async () => {
+    const manager = await request('/employees/invitations', {
       method: 'POST',
       headers: { authorization: `Bearer ${ownerAuth.accessToken}` },
       body: JSON.stringify({
         email: emails.manager,
-        password,
+        role: 'MANAGER',
         branchId: firstBranchId,
-        employeeCode: `M-${suffix}`.slice(0, 50),
-        firstName: 'Role',
-        lastName: 'Manager',
+        name: 'Role Manager',
       }),
     });
     assert.equal(manager.response.status, 201);
+    const email = await prisma.emailOutbox.findFirstOrThrow({ where: { recipient: emails.manager }, orderBy: { createdAt: 'desc' } });
+    const setup = await request('/auth/setup-password', { method: 'POST', body: JSON.stringify({ token: email.payload.setupToken, password }) });
+    assert.equal(setup.response.status, 200);
 
     const waiterPayload = {
       email: emails.waiter,
@@ -244,15 +245,15 @@ describe('Owner branch management and role scopes', () => {
       firstName: 'Role',
       lastName: 'Waiter',
     };
-    const adminDenied = await request('/auth/staff', {
+    const adminDenied = await request('/employees/invitations', {
       method: 'POST',
       headers: { authorization: `Bearer ${adminAuth.accessToken}` },
       body: JSON.stringify(waiterPayload),
     });
     assert.equal(adminDenied.response.status, 403);
 
-    // An OWNER no longer staffs a branch with waiters; the DTO only accepts MANAGER.
-    const ownerDenied = await request('/auth/staff', {
+    // Owner can invite Manager, Cashier and Barista, but not Waiter.
+    const ownerDenied = await request('/employees/invitations', {
       method: 'POST',
       headers: { authorization: `Bearer ${ownerAuth.accessToken}` },
       body: JSON.stringify(waiterPayload),

@@ -4,6 +4,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  GoneException,
   Injectable,
   Optional,
   NotFoundException,
@@ -213,16 +214,9 @@ export class CounterOperationsService {
   async createDraft(user: AuthenticatedUser, dto: CreateCounterOrderDto) {
     const actor = this.employee(user);
     await this.branchAccess.assertSubscriptionAllowsWrite(actor.branchId);
-    return this.prisma.order.create({
-      data: {
-        orderCode: `CTR-${Date.now()}-${crypto.randomUUID().slice(0, 6).toUpperCase()}`,
-        branchId: actor.branchId,
-        createdByCashierId: actor.employeeId,
-        type: OrderType.COUNTER_PICKUP,
-        note: dto.note,
-      },
-      include: counterOrderInclude,
-    });
+    throw new GoneException(
+      'Database drafts are retired; keep the cart locally and use POST /cashier/checkout',
+    );
   }
 
   async checkout(user: AuthenticatedUser, dto: CheckoutCounterOrderDto) {
@@ -1127,7 +1121,7 @@ export class CounterOperationsService {
       return tx.order.update({
         where: { id: orderId },
         data: {
-          status: OrderStatus.DELIVERED,
+          status: OrderStatus.COMPLETED,
           deliveredAt: now,
           completedAt: now,
           deliveredById: actor.employeeId,

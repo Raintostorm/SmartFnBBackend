@@ -1,3 +1,4 @@
+import { StaffAccountsService } from '../employees/staff-accounts.service.js';
 import {
   BadRequestException,
   ConflictException,
@@ -5,7 +6,6 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { createHash, randomBytes } from 'node:crypto';
 import { Prisma, UserStatus } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { AppRole } from '../auth/app-role.enum.js';
@@ -23,7 +23,6 @@ import { managerActor, writeBranchAudit } from './manager-scope.js';
 import { EmailOutboxService } from '../email/email-outbox.service.js';
 
 const staffRoles = [AppRole.CASHIER, AppRole.BARISTA];
-const PASSWORD_SETUP_TTL_MS = 24 * 60 * 60 * 1000;
 const staffSelect = {
   id: true,
   branchId: true,
@@ -41,6 +40,7 @@ const staffSelect = {
       phone: true,
       status: true,
       lastLoginAt: true,
+      staffInvitationState: true,
       role: { select: { code: true } },
       passwordSetupTokens: {
         where: { usedAt: null },
@@ -59,6 +59,7 @@ export class ManagerStaffService {
     private readonly access: BranchAccessService,
     private readonly passwords: PasswordService,
     private readonly emails: EmailOutboxService,
+    private readonly accounts: StaffAccountsService,
   ) {}
 
   private async scope(user: AuthenticatedUser, write = false) {
@@ -132,92 +133,12 @@ export class ManagerStaffService {
 
   async create(user: AuthenticatedUser, dto: ManagerCreateStaffDto) {
     const { branchId } = await this.scope(user, true);
-    if (!staffRoles.includes(dto.role))
-      throw new BadRequestException('Only CASHIER and BARISTA can be created');
-    const setupToken = randomBytes(32).toString('base64url');
-    const expiresAt = new Date(Date.now() + PASSWORD_SETUP_TTL_MS);
-    const passwordHash = await this.passwords.hash(randomBytes(32).toString('base64url'));
-    const invitation = await this.mutate(async (tx) => {
-      const branch = await tx.branch.findUniqueOrThrow({
-        where: { id: branchId },
-        select: { chainId: true, name: true },
-      });
-      // Serialize manager hires across every branch of the same chain.
-      await tx.$queryRaw`SELECT id FROM restaurant_chains WHERE id = ${branch.chainId}::uuid FOR UPDATE`;
-      const subscription = await tx.businessSubscription.findFirst({
-        where: { chainId: branch.chainId, status: 'ACTIVE', expiresAt: { gt: new Date() } },
-        select: { plan: { select: { maxAccounts: true } } },
-      });
-      if (!subscription) throw new ConflictException('Subscription is not active');
-      const employees = await tx.employee.count({
-        where: { branch: { chainId: branch.chainId }, deletedAt: null, user: { deletedAt: null } },
-      });
-      const owners = await tx.ownerChainAssignment.count({
-        where: { chainId: branch.chainId, owner: { deletedAt: null, user: { deletedAt: null } } },
-      });
-      if (employees + owners >= subscription.plan.maxAccounts) {
-        throw new ConflictException({
-          statusCode: 409,
-          error: 'PLAN_LIMIT_REACHED',
-          message: 'Đã hết hạn mức tài khoản. Liên hệ Owner để nâng gói.',
-        });
-      }
-      const role = await tx.role.findUnique({ where: { code: dto.role }, select: { id: true } });
-      if (!role) throw new ConflictException('Staff role is not configured; run the seed');
-      const created = await tx.employee.create({
-        data: {
-          branch: { connect: { id: branchId } },
-          employeeCode: dto.employeeCode.trim().toUpperCase(),
-          firstName: dto.firstName.trim(),
-          lastName: dto.lastName.trim(),
-          jobTitle: dto.jobTitle?.trim(),
-          dateOfBirth: dto.dateOfBirth ? new Date(dto.dateOfBirth) : undefined,
-          hireDate: dto.hireDate ? new Date(dto.hireDate) : undefined,
-          user: {
-            create: {
-              email: dto.email.trim().toLowerCase(),
-              phone: dto.phone?.trim(),
-              passwordHash,
-              roleId: role.id,
-              status: UserStatus.INACTIVE,
-            },
-          },
-        },
-        select: staffSelect,
-      });
-      await tx.passwordSetupToken.create({
-        data: {
-          userId: created.user.id,
-          tokenHash: createHash('sha256').update(setupToken).digest('hex'),
-          expiresAt,
-        },
-      });
-      const email = await tx.emailOutbox.create({
-        data: {
-          recipient: created.user.email,
-          subject: 'Thiết lập tài khoản nhân viên Smart F&B',
-          template: 'STAFF_ACCOUNT_CREATED',
-          payload: {
-            employeeName: `${created.firstName} ${created.lastName}`.trim(),
-            branchName: branch.name,
-            role: created.user.role.code,
-            setupToken,
-            setupPath: '/setup-password',
-            expiresAt: expiresAt.toISOString(),
-            requestedByUserId: user.id,
-          },
-        },
-      });
-      await writeBranchAudit(tx, user, {
-        action: 'STAFF_INVITED',
-        entityType: 'EMPLOYEE',
-        entityId: created.id,
-        after: this.snapshot(created),
-      });
-      return { account: created, emailId: email.id };
-    });
-    const emailStatus = await this.emails.deliver(invitation.emailId);
-    return { ...this.response(invitation.account), invitationExpiresAt: expiresAt, emailStatus };
+    const result = await this.accounts.invite(user, { ...dto, branchId });
+    return {
+      ...result.account,
+      invitationExpiresAt: result.invitationExpiresAt,
+      emailStatus: result.emailStatus,
+    };
   }
 
   async update(user: AuthenticatedUser, id: string, dto: ManagerUpdateStaffDto) {
@@ -230,6 +151,11 @@ export class ManagerStaffService {
       throw new BadRequestException('Only CASHIER and BARISTA roles are allowed');
     return this.mutate(async (tx) => {
       const old = await this.target(tx, branchId, id);
+      if (dto.email && dto.email.trim().toLowerCase() !== old.user.email) {
+        throw new ConflictException(
+          'Account email cannot be changed; cancel and invite the correct email',
+        );
+      }
       const role = dto.role
         ? await tx.role.findUniqueOrThrow({ where: { code: dto.role }, select: { id: true } })
         : undefined;
@@ -265,96 +191,19 @@ export class ManagerStaffService {
   }
 
   async status(user: AuthenticatedUser, id: string, dto: ManagerStaffStatusDto) {
-    const { branchId } = await this.scope(user, true);
-    return this.mutate(async (tx) => {
-      const old = await this.target(tx, branchId, id);
-      await tx.user.update({ where: { id: old.user.id }, data: { status: dto.status } });
-      if (dto.status !== UserStatus.ACTIVE) await this.revoke(tx, old.user.id);
-      await writeBranchAudit(tx, user, {
-        action: 'STAFF_STATUS_CHANGED',
-        entityType: 'EMPLOYEE',
-        entityId: id,
-        reason: dto.reason,
-        before: { status: old.user.status },
-        after: { status: dto.status },
-      });
-      return this.response(await this.target(tx, branchId, id));
-    });
+    return this.accounts.status(user, id, dto.status, dto.reason);
   }
 
   async cancelInvitation(user: AuthenticatedUser, id: string, reason: string) {
-    const { branchId } = await this.scope(user, true);
-    return this.mutate(async (tx) => {
-      const staff = await this.target(tx, branchId, id);
-      if (staff.user.status !== UserStatus.INACTIVE) {
-        throw new ConflictException('Only an inactive invitation can be cancelled');
-      }
-      const cancelled = await tx.passwordSetupToken.updateMany({
-        where: { userId: staff.user.id, usedAt: null },
-        data: { usedAt: new Date() },
-      });
-      if (!cancelled.count) throw new ConflictException('No active invitation was found');
-      await writeBranchAudit(tx, user, {
-        action: 'STAFF_INVITATION_CANCELLED',
-        entityType: 'EMPLOYEE',
-        entityId: id,
-        reason,
-      });
-      return { employeeId: id, invitationStatus: 'DEACTIVATED' };
-    });
+    return this.accounts.cancel(user, id, reason);
   }
 
   async resetPassword(user: AuthenticatedUser, id: string, dto: ManagerResetPasswordDto) {
-    const { branchId } = await this.scope(user, true);
-    const setupToken = randomBytes(32).toString('base64url');
-    const expiresAt = new Date(Date.now() + PASSWORD_SETUP_TTL_MS);
-    const invitation = await this.mutate(async (tx) => {
-      const staff = await this.target(tx, branchId, id);
-      if (!staff.user.email.includes('@')) {
-        throw new ForbiddenException('Username accounts are reset directly by the Owner');
-      }
-      await this.revoke(tx, staff.user.id);
-      await tx.passwordSetupToken.updateMany({
-        where: { userId: staff.user.id, usedAt: null },
-        data: { usedAt: new Date() },
-      });
-      await tx.passwordSetupToken.create({
-        data: {
-          userId: staff.user.id,
-          tokenHash: createHash('sha256').update(setupToken).digest('hex'),
-          expiresAt,
-        },
-      });
-      const email = await tx.emailOutbox.create({
-        data: {
-          recipient: staff.user.email,
-          subject: 'Đặt lại mật khẩu nhân viên Smart F&B',
-          template: 'STAFF_PASSWORD_RESET',
-          payload: {
-            employeeName: `${staff.firstName} ${staff.lastName}`.trim(),
-            role: staff.user.role.code,
-            setupToken,
-            setupPath: '/setup-password',
-            expiresAt: expiresAt.toISOString(),
-            requestedByUserId: user.id,
-          },
-        },
-      });
-      await writeBranchAudit(tx, user, {
-        action: 'STAFF_PASSWORD_SETUP_SENT',
-        entityType: 'EMPLOYEE',
-        entityId: id,
-        reason: dto.reason,
-      });
-      return { emailId: email.id };
-    });
-    const emailStatus = await this.emails.deliver(invitation.emailId);
-    return {
-      message: 'A password setup link has been queued for delivery',
-      employeeId: id,
-      expiresAt,
-      emailStatus,
-    };
+    return this.accounts.sendSetup(user, id, dto.reason);
+  }
+
+  async resendInvitation(user: AuthenticatedUser, id: string, reason: string) {
+    return this.accounts.sendSetup(user, id, reason, true);
   }
 
   private snapshot(
@@ -378,15 +227,17 @@ export class ManagerStaffService {
     const { passwordSetupTokens, ...user } = staff.user;
     const invitationExpiresAt = passwordSetupTokens?.[0]?.expiresAt ?? null;
     const invitationStatus =
-      user.status === UserStatus.ACTIVE
-        ? 'ACTIVE'
-        : user.status === UserStatus.SUSPENDED
-          ? 'SUSPENDED'
-          : invitationExpiresAt && invitationExpiresAt > new Date()
-            ? 'INVITED'
-            : invitationExpiresAt
-              ? 'INVITATION_EXPIRED'
-              : 'DEACTIVATED';
+      user.staffInvitationState === 'CANCELLED'
+        ? 'CANCELLED'
+        : user.status === UserStatus.ACTIVE
+          ? 'ACTIVE'
+          : user.status === UserStatus.SUSPENDED
+            ? 'SUSPENDED'
+            : invitationExpiresAt && invitationExpiresAt > new Date()
+              ? 'INVITED'
+              : invitationExpiresAt
+                ? 'INVITATION_EXPIRED'
+                : 'DEACTIVATED';
     return { ...staff, user, invitationStatus, invitationExpiresAt };
   }
 

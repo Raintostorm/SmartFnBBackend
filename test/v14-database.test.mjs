@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { Pool } from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../dist/generated/prisma/client.js';
+import { CounterPaymentSettlementService } from '../dist/modules/payments/counter-payment-settlement.service.js';
 import { PaidOrderRefundService } from '../dist/modules/payments/paid-order-refund.service.js';
 import { ManagerReportsService } from '../dist/modules/branch-manager/manager-reports.service.js';
 import { MenuExtrasService } from '../dist/modules/menu/menu-extras.service.js';
@@ -15,6 +16,7 @@ import { PagersService } from '../dist/modules/counter-operations/pagers.service
 
 // Deliberately accepts only the disposable local database documented in the test guide.
 const url = process.env.V14_TEST_DATABASE_URL;
+if (!url) throw new Error('Set V14_TEST_DATABASE_URL to the dedicated test database');
 if (url && !/^postgresql:\/\/postgres@127\.0\.0\.1:55439\/postgres$/.test(url))
   throw new Error('Use the isolated V14 local database on port 55439');
 test(
@@ -315,7 +317,7 @@ test(
       const pos = new CounterOperationsService(
         prisma,
         access,
-        { ensureForOrder: async () => null },
+        { ensureForOrder: async () => null, markTerminal: async () => {} },
         combos,
       );
       const chosen = {
@@ -373,6 +375,19 @@ test(
           items: [{ orderItemId: children[0].id }],
         }),
       );
+      await pagers.change(actor, order.id, 24);
+      await pagers.change(barista, order.id, 24, true);
+      await pagers.change(actor, order.id, 25);
+      assert.equal(
+        (await prisma.order.findUniqueOrThrow({ where: { id: order.id } })).pagerNotifiedAt,
+        null,
+      );
+      await pagers.change(barista, order.id, 25, true);
+      await pos.deliverOrder(barista, order.id);
+      assert.equal(
+        (await prisma.order.findUniqueOrThrow({ where: { id: order.id } })).status,
+        'COMPLETED',
+      );
       const beforeRefund = await new ManagerReportsService(prisma, access).report(
         { ...actor, role: 'MANAGER' },
         { granularity: 'day', limit: 100 },
@@ -387,6 +402,7 @@ test(
       });
       assert.equal(returned.refund.amount.toString(), '100000');
       assert.equal(returned.refund.items.length, 1);
+      assert.equal(returned.refund.items[0].isWastage, true);
       assert.equal(
         await prisma.orderItem.count({ where: { orderId: order.id, status: 'CANCELLED' } }),
         3,
@@ -396,6 +412,53 @@ test(
           where: { orderItem: { orderId: order.id }, status: 'CANCELLED' },
         }),
         4,
+      );
+      const qrOrder = await pos.checkout(actor, {
+        items: [],
+        combos: [{ ...chosen, quantity: 1 }],
+      });
+      const qrPayment = await prisma.payment.create({
+        data: {
+          paymentCode: randomUUID(),
+          orderId: qrOrder.id,
+          stationId: station.id,
+          processedById: employee.id,
+          method: 'BANK_TRANSFER',
+          provider: 'PAYOS',
+          status: 'PENDING',
+          amount: qrOrder.totalAmount,
+        },
+      });
+      const settle = new CounterPaymentSettlementService(
+        prisma,
+        { ensureForOrder: async () => null, markTerminal: async () => {} },
+        realtime,
+        { ensureReady: async () => null },
+      );
+      await settle.settle({
+        paymentId: qrPayment.id,
+        source: 'PAYOS_WEBHOOK',
+        receivedAmount: qrOrder.totalAmount,
+        providerTransactionId: 'test-qr',
+      });
+      await assert.rejects(
+        settle.settle({
+          paymentId: qrPayment.id,
+          source: 'PAYOS_WEBHOOK',
+          receivedAmount: qrOrder.totalAmount,
+          providerTransactionId: 'test-qr',
+        }),
+        (error) => error.getStatus() === 409,
+      );
+      assert.equal(
+        await prisma.orderItemUnit.count({ where: { orderItem: { orderId: qrOrder.id } } }),
+        2,
+      );
+      assert.equal(
+        await prisma.orderItemUnit.count({
+          where: { orderItem: { orderId: qrOrder.id, lineType: 'COMBO' } },
+        }),
+        0,
       );
       // Availability recovers dynamically; no sticky auto-off bit is written on combo.
       await prisma.branchMenuItem.update({

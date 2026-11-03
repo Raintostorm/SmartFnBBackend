@@ -345,6 +345,8 @@ export class CounterPaymentSettlementService {
       orderId: result.order.id,
       status: result.payment.status,
       callNumber: result.order.callNumber,
+      pagerNumber: result.order.pagerNumber,
+      pagerNotifiedAt: result.order.pagerNotifiedAt,
       source: result.source,
     };
     this.realtime.branch(result.order.branchId, 'payment.confirmed', event);
@@ -353,6 +355,8 @@ export class CounterPaymentSettlementService {
       id: result.order.id,
       orderCode: result.order.orderCode,
       callNumber: result.order.callNumber,
+      pagerNumber: result.order.pagerNumber,
+      pagerNotifiedAt: result.order.pagerNotifiedAt,
       status: result.order.status,
       submittedAt: result.order.submittedAt,
     });

@@ -22,6 +22,7 @@ export interface ReceiptPdfSnapshot {
   items: Array<{
     itemName: string;
     parentId?: string | null;
+    lineType?: string;
     id?: string;
     quantity: number;
     unitPrice: { toString(): string };
@@ -78,7 +79,7 @@ export class ReceiptPdfService {
           doc.font('Noto').text(this.money(Number(item.unitPrice.toString()) * item.quantity), {
             align: 'right',
           });
-        const options = this.optionLabels(item.selectedOptions);
+        const options = item.lineType === 'COMBO' ? [] : this.optionLabels(item.selectedOptions);
         if (options.length) doc.fontSize(7).text(options.join(', '));
         if (item.specialInstructions) doc.fontSize(7).text(`Ghi chú: ${item.specialInstructions}`);
         doc.fontSize(8);

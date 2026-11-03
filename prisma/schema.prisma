@@ -296,6 +296,7 @@ model User {
   status          UserStatus @default(ACTIVE)
   emailVerifiedAt DateTime?  @map("email_verified_at") @db.Timestamptz(6)
   lastLoginAt     DateTime?  @map("last_login_at") @db.Timestamptz(6)
+  staffInvitationState String? @map("staff_invitation_state") @db.VarChar(20)
   roleId          String     @map("role_id") @db.Uuid
   createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -1224,6 +1225,8 @@ model OrderItem {
   units              OrderItemUnit[]
   refundItems        RefundItem[]
 
+  @@unique([orderId,id], map:"order_items_order_id_id_unique")
+  @@index([parentId])
   @@index([orderId, status])
   @@index([menuItemId])
   @@index([status, queuedAt])

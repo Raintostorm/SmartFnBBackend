@@ -34,6 +34,7 @@ const cancellableOrderStatuses = [
   OrderStatus.READY,
   OrderStatus.REQUIRES_ATTENTION,
   OrderStatus.COMPLETED,
+  OrderStatus.DELIVERED,
 ];
 
 const refundInclude = {
@@ -314,9 +315,7 @@ export class PaidOrderRefundService {
           !(cancellableOrderStatuses as OrderStatus[]).includes(order.status) &&
           !(lateReturn && order.status === 'CANCELLED')
         ) {
-          throw new ConflictException(
-            'Delivered, completed or already cancelled orders cannot be cancelled',
-          );
+          throw new ConflictException('This order is not eligible for a paid-order refund');
         }
         if (
           payment.status === PaymentStatus.SUCCESS &&
@@ -379,13 +378,25 @@ export class PaidOrderRefundService {
             : Prisma.Decimal.min(item.totalPrice, remainingAllocation);
           remainingAllocation = Prisma.Decimal.max(0, remainingAllocation.sub(lineAmount));
           const isWastage =
-            item.status === OrderItemStatus.READY ||
-            item.units.some((unit) => unit.status === OrderItemStatus.READY) ||
+            [OrderItemStatus.READY, OrderItemStatus.DELIVERED].some(
+              (status) => status === item.status,
+            ) ||
+            item.units.some((unit) =>
+              [OrderItemStatus.READY, OrderItemStatus.DELIVERED].some(
+                (status) => status === unit.status,
+              ),
+            ) ||
             cancelledItems.some(
               (child) =>
                 child.parentId === item.id &&
-                (child.status === OrderItemStatus.READY ||
-                  child.units.some((unit) => unit.status === OrderItemStatus.READY)),
+                ([OrderItemStatus.READY, OrderItemStatus.DELIVERED].some(
+                  (status) => status === child.status,
+                ) ||
+                  child.units.some((unit) =>
+                    [OrderItemStatus.READY, OrderItemStatus.DELIVERED].some(
+                      (status) => status === unit.status,
+                    ),
+                  )),
             );
           return { item, lineAmount, isWastage };
         });
@@ -429,8 +440,10 @@ export class PaidOrderRefundService {
           ? OrderStatus.CANCELLED
           : lateReturn
             ? order.status
-            : order.status === OrderStatus.COMPLETED
-              ? OrderStatus.COMPLETED
+            : [OrderStatus.COMPLETED, OrderStatus.DELIVERED].some(
+                  (status) => status === order.status,
+                )
+              ? order.status
               : this.deriveOrderStatus(remainingItems);
         const updatedOrder = await tx.order.update({
           where: { id: order.id },

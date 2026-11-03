@@ -56,7 +56,7 @@ export class BranchManagerController {
 
   @Post('staff')
   @ApiOperation({
-    summary: 'BM-01: Create a Cashier/Barista within the chain account quota',
+    summary: 'BM-01: Invite Cashier/Barista by email within the chain account quota',
     description:
       'Branch is derived from the JWT. Returns staff profile without passwords or login tokens.',
   })
@@ -119,6 +119,19 @@ export class BranchManagerController {
     @Body() dto: ManagerResetPasswordDto,
   ) {
     return this.staff.cancelInvitation(user, id, dto.reason);
+  }
+
+  @Post('staff/:employeeId/invitation/resend')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Resend pending staff invitation; replaces old link, 60-second cooldown',
+  })
+  resendInvitation(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('employeeId', new ParseUUIDPipe()) id: string,
+    @Body() dto: ManagerResetPasswordDto,
+  ) {
+    return this.staff.resendInvitation(user, id, dto.reason);
   }
 
   @Get('menu-options')
