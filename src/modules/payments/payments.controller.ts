@@ -120,7 +120,7 @@ export class PaymentsController {
     return this.refunds.listRefunds(user, query);
   }
 
-  @Roles(AppRole.OWNER, AppRole.MANAGER)
+  @Roles(AppRole.MANAGER)
   @Post('refunds/:refundId/complete')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({

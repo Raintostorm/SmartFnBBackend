@@ -37,6 +37,7 @@ import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { Roles } from '../auth/decorators/roles.decorator.js';
 import {
+  SetBranchMenuPriceDto,
   CreateMenuCategoryDto,
   CreateMenuItemDto,
   CreateMenuOptionDto,
@@ -62,6 +63,22 @@ import { MENU_IMAGE_MAX_BYTES } from './menu-image.js';
 @Controller('restaurant-chains/:chainId/menu')
 export class ChainMenuController {
   constructor(private readonly menuService: MenuService) {}
+
+  @Put('items/:itemId/branches/:branchId/price')
+  @ApiOperation({
+    summary: 'Set a branch base price, or restore the chain price with null (Brand Manager only)',
+  })
+  @ApiParam({ name: 'itemId', format: 'uuid' })
+  @ApiParam({ name: 'branchId', format: 'uuid' })
+  setBranchPrice(
+    @Param('chainId', new ParseUUIDPipe()) chainId: string,
+    @Param('itemId', new ParseUUIDPipe()) itemId: string,
+    @Param('branchId', new ParseUUIDPipe()) branchId: string,
+    @Body() dto: SetBranchMenuPriceDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.menuService.setBranchPrice(chainId, itemId, branchId, dto, user);
+  }
 
   // --- Categories -----------------------------------------------------------
 
@@ -281,9 +298,17 @@ export class ChainMenuController {
 
   @Post('items/:itemId/image')
   @HttpCode(HttpStatus.OK)
-  @UseInterceptors(FileInterceptor('file', { limits: { files: 1, fileSize: MENU_IMAGE_MAX_BYTES } }))
+  @UseInterceptors(
+    FileInterceptor('file', { limits: { files: 1, fileSize: MENU_IMAGE_MAX_BYTES } }),
+  )
   @ApiConsumes('multipart/form-data')
-  @ApiBody({ schema: { type: 'object', required: ['file'], properties: { file: { type: 'string', format: 'binary' } } } })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file'],
+      properties: { file: { type: 'string', format: 'binary' } },
+    },
+  })
   @ApiOperation({ summary: 'Upload a menu item image (JPEG, PNG, or WebP; maximum 5 MB)' })
   @ApiOkResponse({ description: 'Menu item image updated' })
   @ApiBadRequestResponse({ description: 'Missing or invalid image' })

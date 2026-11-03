@@ -25,6 +25,7 @@ import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { writeBranchAudit } from '../branch-manager/manager-scope.js';
 import type { CancelPaidOrderDto, CompleteRefundDto } from '../branch-manager/manager.dto.js';
 import type { RefundListQueryDto } from './dto/payment.dto.js';
+import type { CashierRefundDto } from './cashier-refunds.controller.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
 
 const cancellableOrderStatuses = [
@@ -32,6 +33,7 @@ const cancellableOrderStatuses = [
   OrderStatus.PREPARING,
   OrderStatus.READY,
   OrderStatus.REQUIRES_ATTENTION,
+  OrderStatus.COMPLETED,
 ];
 
 const refundInclude = {
@@ -66,7 +68,7 @@ export class PaidOrderRefundService {
       ...(query.to ? { lte: new Date(query.to) } : {}),
     };
     const where: Prisma.RefundWhereInput = {
-      status: query.status ?? RefundStatus.PENDING,
+      ...(query.status ? { status: query.status } : {}),
       ...(query.method ? { method: query.method } : {}),
       ...(query.from || query.to ? { requestedAt } : {}),
       order: {
@@ -123,6 +125,20 @@ export class PaidOrderRefundService {
         if (!payment?.order) {
           throw new ConflictException('Late payment is not linked to an order');
         }
+        if (payment.status === PaymentStatus.SUCCESS)
+          return { changed: false, branchId: payment.order.branchId, payment, reason: null };
+        if (
+          payment.status === PaymentStatus.REQUIRES_ATTENTION &&
+          ['PAYMENT_RECEIVED_AFTER_CANCELLATION', 'PAYMENT_RECEIVED_AFTER_SWITCH_TO_CASH'].includes(
+            payment.failureReason ?? '',
+          )
+        )
+          return {
+            changed: false,
+            branchId: payment.order.branchId,
+            payment,
+            reason: payment.failureReason,
+          };
         const switchedToCash = payment.failureReason === 'PAYOS_CANCELLED_SWITCH_TO_CASH';
         const replacementCashPayment = switchedToCash
           ? await tx.payment.findFirst({
@@ -143,68 +159,94 @@ export class PaidOrderRefundService {
             'Late payment is not linked to a cancelled order or a completed cash switch',
           );
         }
+        await tx.$queryRaw`SELECT id FROM orders WHERE id = ${payment.order.id}::uuid FOR UPDATE`;
         const now = new Date();
-        await tx.payment.update({
+        const reason = replacementCashPayment
+          ? 'PAYMENT_RECEIVED_AFTER_SWITCH_TO_CASH'
+          : 'PAYMENT_RECEIVED_AFTER_CANCELLATION';
+        const updated = await tx.payment.update({
           where: { id: payment.id },
           data: {
-            status: PaymentStatus.SUCCESS,
+            status: PaymentStatus.REQUIRES_ATTENTION,
             receivedAmount: received,
             paidAt: now,
-            confirmedAt: now,
             providerTransactionId: providerTransactionId ?? payment.providerTransactionId,
-            failureReason: null,
+            failureReason: reason,
           },
         });
         await tx.order.update({
           where: { id: payment.order.id },
           data: {
-            paymentStatus: OrderPaymentStatus.PAID,
-            paidAt: payment.order.paidAt ?? now,
+            attentionAt: now,
+            attentionReason: reason,
           },
         });
-        const refund = await tx.refund.create({
-          data: {
-            orderId: payment.order.id,
-            paymentId: payment.id,
-            amount: received,
-            status: RefundStatus.PENDING,
-            method: RefundMethod.BANK_TRANSFER,
-            source: RefundSource.LATE_PAYMENT,
-            sourceReference,
-            reason: replacementCashPayment
-              ? 'PayOS payment received after the order was paid in cash'
-              : 'PayOS payment received after order cancellation',
-            requestedByRole: 'SYSTEM',
-            cancellationDate: this.businessDate(payment.order.branch.timezone, now),
-          },
-          include: refundInclude,
-        });
-        return { changed: true, branchId: payment.order.branchId, refund };
+        return { changed: true, branchId: payment.order.branchId, payment: updated, reason };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
     if (result.changed && result.branchId) {
-      const receivedAfterCash =
-        result.refund.reason === 'PayOS payment received after the order was paid in cash';
-      const payload = {
-        reason: receivedAfterCash
-          ? 'PAYMENT_RECEIVED_AFTER_SWITCH_TO_CASH'
-          : 'PAYMENT_RECEIVED_AFTER_CANCELLATION',
-        orderId: result.refund.orderId,
+      this.realtime.branch(result.branchId, 'manager.order.attention-required', {
+        reason: 'reason' in result ? result.reason : 'PAYMENT_RECEIVED_AFTER_CANCELLATION',
+        orderId: result.payment?.orderId,
         paymentId,
-        refundId: result.refund.id,
         receivedAmount: received.toString(),
-      };
-      this.realtime.branch(result.branchId, 'manager.order.attention-required', payload);
-      this.realtime.branch(result.branchId, 'refund.pending', payload);
+      });
     }
-    return result.refund;
+    return 'payment' in result ? result.payment : result.refund;
+  }
+
+  async cashierRefund(user: AuthenticatedUser, orderId: string, dto: CashierRefundDto) {
+    if (user.role !== AppRole.CASHIER) throw new ForbiddenException('Cashier required');
+    const codes = ['CHANGE_OF_MIND', 'WRONG_ITEM', 'OUT_OF_STOCK', 'LONG_WAIT', 'OTHER'];
+    if (
+      !codes.includes(dto.reasonCode) ||
+      (dto.reasonCode === 'OTHER' && (dto.note?.trim().length ?? 0) < 5)
+    )
+      throw new BadRequestException(
+        'Valid reason required; OTHER requires a note of at least 5 characters',
+      );
+    return this.cancelPaidOrder(user, orderId, {
+      reason: dto.reasonCode + (dto.note?.trim() ? ': ' + dto.note.trim() : ''),
+      refundMethod: RefundMethod.CASH,
+      reasonCode: dto.reasonCode,
+      orderItemIds: dto.items?.map((item) => item.orderItemId),
+    });
+  }
+
+  async refundReceipt(user: AuthenticatedUser, orderId: string, refundId: string) {
+    if (!['CASHIER', 'MANAGER'].includes(user.role) || !user.branchId || !user.employeeId)
+      throw new ForbiddenException('Assigned branch staff required');
+    const refund = await this.prisma.refund.findFirst({
+      where: { id: refundId, orderId, order: { branchId: user.branchId, type: 'COUNTER_PICKUP' } },
+      include: {
+        ...refundInclude,
+        payment: { select: { method: true } },
+        order: { select: { orderCode: true, callNumber: true } },
+      },
+    });
+    if (!refund) throw new NotFoundException('Refund not found in your branch');
+    return refund;
   }
 
   async cancelPaidOrder(user: AuthenticatedUser, orderId: string, dto: CancelPaidOrderDto) {
-    if (user.role !== AppRole.MANAGER || !user.branchId || !user.employeeId) {
-      throw new ForbiddenException('Only an assigned Branch Manager can cancel a paid order');
+    if (
+      ![AppRole.MANAGER, AppRole.CASHIER].includes(user.role) ||
+      !user.branchId ||
+      !user.employeeId
+    ) {
+      throw new ForbiddenException('Assigned Store Manager or Cashier required');
     }
+    if (dto.refundMethod !== RefundMethod.CASH)
+      throw new BadRequestException('New refunds must be paid in cash');
+    const reasonCode = dto.reasonCode ?? 'OTHER';
+    if (
+      !['CHANGE_OF_MIND', 'WRONG_ITEM', 'OUT_OF_STOCK', 'LONG_WAIT', 'OTHER'].includes(
+        reasonCode,
+      ) ||
+      (reasonCode === 'OTHER' && dto.reason.trim().length < 5)
+    )
+      throw new BadRequestException('Valid refund reason required');
     const branchId = user.branchId;
     const employeeId = user.employeeId;
     const requestedItemIds = [...new Set(dto.orderItemIds ?? [])];
@@ -234,7 +276,11 @@ export class PaidOrderRefundService {
           payment.status !== PaymentStatus.AMOUNT_MISMATCH &&
           !(
             payment.status === PaymentStatus.REQUIRES_ATTENTION &&
-            payment.failureReason === 'PAYMENT_RECEIVED_AFTER_EXPIRY'
+            [
+              'PAYMENT_RECEIVED_AFTER_EXPIRY',
+              'PAYMENT_RECEIVED_AFTER_CANCELLATION',
+              'PAYMENT_RECEIVED_AFTER_SWITCH_TO_CASH',
+            ].includes(payment.failureReason ?? '')
           )
         ) {
           throw new ConflictException('Payment is no longer eligible for a refund');
@@ -246,11 +292,28 @@ export class PaidOrderRefundService {
           include: {
             branch: { select: { timezone: true } },
             items: { include: { units: true, refundItems: { select: { id: true } } } },
-            refunds: { select: { amount: true } },
+            refunds: { select: { amount: true, paymentId: true } },
           },
         });
         if (!order) throw new NotFoundException('Counter order was not found in your branch');
-        if (!(cancellableOrderStatuses as OrderStatus[]).includes(order.status)) {
+        if (
+          user.role === AppRole.CASHIER &&
+          (!order.paidAt ||
+            this.businessDate('Asia/Ho_Chi_Minh', order.paidAt).getTime() !==
+              this.businessDate('Asia/Ho_Chi_Minh', new Date()).getTime())
+        ) {
+          throw new ForbiddenException('Cashier can only refund payments received today');
+        }
+        const lateReturn =
+          user.role === AppRole.MANAGER &&
+          payment.status === PaymentStatus.REQUIRES_ATTENTION &&
+          ['PAYMENT_RECEIVED_AFTER_CANCELLATION', 'PAYMENT_RECEIVED_AFTER_SWITCH_TO_CASH'].includes(
+            payment.failureReason ?? '',
+          );
+        if (
+          !(cancellableOrderStatuses as OrderStatus[]).includes(order.status) &&
+          !(lateReturn && order.status === 'CANCELLED')
+        ) {
           throw new ConflictException(
             'Delivered, completed or already cancelled orders cannot be cancelled',
           );
@@ -263,18 +326,29 @@ export class PaidOrderRefundService {
         }
 
         await tx.$queryRaw`SELECT id FROM order_items WHERE order_id = ${orderId}::uuid FOR UPDATE`;
-        const activeItems = order.items.filter(
-          (item) => item.status !== OrderItemStatus.CANCELLED && item.refundItems.length === 0,
-        );
+        const activeItems = lateReturn
+          ? []
+          : order.items.filter(
+              (item) => item.status !== OrderItemStatus.CANCELLED && item.refundItems.length === 0,
+            );
         const cancelWholeOrder = requestedItemIds.length === 0;
         if (payment.status !== PaymentStatus.SUCCESS && !cancelWholeOrder) {
           throw new ConflictException('An underpaid order must be cancelled in full');
         }
-        const selectedItems = cancelWholeOrder
-          ? activeItems
-          : activeItems.filter((item) => requestedItemIds.includes(item.id));
+        const rootItems = activeItems.filter((item) => !item.parentId);
         if (
-          selectedItems.length === 0 ||
+          requestedItemIds.some((id) => activeItems.some((item) => item.id === id && item.parentId))
+        )
+          throw new BadRequestException('Refund the entire combo, not an individual component');
+        const selectedItems = cancelWholeOrder
+          ? rootItems
+          : rootItems.filter((item) => requestedItemIds.includes(item.id));
+        const selectedIds = new Set(selectedItems.map((item) => item.id));
+        const cancelledItems = activeItems.filter(
+          (item) => selectedIds.has(item.id) || (!!item.parentId && selectedIds.has(item.parentId)),
+        );
+        if (
+          (!lateReturn && selectedItems.length === 0) ||
           (!cancelWholeOrder && selectedItems.length !== requestedItemIds.length)
         ) {
           throw new ConflictException(
@@ -284,10 +358,9 @@ export class PaidOrderRefundService {
 
         const now = new Date();
         const actualReceived = payment.receivedAmount ?? payment.amount;
-        const alreadyRefunded = order.refunds.reduce(
-          (sum, refund) => sum.add(refund.amount),
-          new Prisma.Decimal(0),
-        );
+        const alreadyRefunded = order.refunds
+          .filter((refund) => refund.paymentId === payment.id)
+          .reduce((sum, refund) => sum.add(refund.amount), new Prisma.Decimal(0));
         const refundableBalance = actualReceived.sub(alreadyRefunded);
         const selectedTotal = selectedItems.reduce(
           (sum, item) => sum.add(item.totalPrice),
@@ -307,11 +380,17 @@ export class PaidOrderRefundService {
           remainingAllocation = Prisma.Decimal.max(0, remainingAllocation.sub(lineAmount));
           const isWastage =
             item.status === OrderItemStatus.READY ||
-            item.units.some((unit) => unit.status === OrderItemStatus.READY);
+            item.units.some((unit) => unit.status === OrderItemStatus.READY) ||
+            cancelledItems.some(
+              (child) =>
+                child.parentId === item.id &&
+                (child.status === OrderItemStatus.READY ||
+                  child.units.some((unit) => unit.status === OrderItemStatus.READY)),
+            );
           return { item, lineAmount, isWastage };
         });
 
-        for (const { item } of refundLines) {
+        for (const item of cancelledItems) {
           const restorable = item.units.length
             ? item.units.filter((unit) => unit.status === OrderItemStatus.QUEUED).length
             : item.status === OrderItemStatus.QUEUED
@@ -330,7 +409,7 @@ export class PaidOrderRefundService {
               cancellationReason: dto.reason,
             },
           });
-          if (restorable > 0) {
+          if (restorable > 0 && item.menuItemId) {
             await tx.branchMenuItem.updateMany({
               where: {
                 branchId,
@@ -342,13 +421,17 @@ export class PaidOrderRefundService {
           }
         }
 
-        const remainingItems = activeItems.filter(
+        const remainingItems = rootItems.filter(
           (item) => !selectedItems.some((selected) => selected.id === item.id),
         );
-        const fullCancellation = remainingItems.length === 0;
+        const fullCancellation = !lateReturn && remainingItems.length === 0;
         const nextOrderStatus = fullCancellation
           ? OrderStatus.CANCELLED
-          : this.deriveOrderStatus(remainingItems);
+          : lateReturn
+            ? order.status
+            : order.status === OrderStatus.COMPLETED
+              ? OrderStatus.COMPLETED
+              : this.deriveOrderStatus(remainingItems);
         const updatedOrder = await tx.order.update({
           where: { id: order.id },
           data: {
@@ -377,7 +460,14 @@ export class PaidOrderRefundService {
             amount: refundAmount,
             status: completedImmediately ? RefundStatus.COMPLETED : RefundStatus.PENDING,
             method: dto.refundMethod,
+            sourceReference: lateReturn ? `late-payment:${payment.id}` : null,
+            source: lateReturn
+              ? RefundSource.LATE_PAYMENT
+              : user.role === AppRole.CASHIER
+                ? RefundSource.CASHIER_REFUND
+                : RefundSource.MANAGER_CANCELLATION,
             reason: dto.reason,
+            reasonCode,
             requestedByUserId: user.id,
             requestedByEmployeeId: employeeId,
             requestedByRole: user.role,
@@ -398,6 +488,16 @@ export class PaidOrderRefundService {
           },
           include: refundInclude,
         });
+        if (lateReturn) {
+          await tx.payment.update({
+            where: { id: payment.id },
+            data: { status: PaymentStatus.SUCCESS, failureReason: null },
+          });
+          await tx.order.update({
+            where: { id: order.id },
+            data: { attentionAt: null, attentionReason: null },
+          });
+        }
         await writeBranchAudit(tx, user, {
           action: fullCancellation ? 'PAID_ORDER_CANCELLED' : 'PAID_ORDER_ITEMS_CANCELLED',
           entityType: 'ORDER',
@@ -426,8 +526,11 @@ export class PaidOrderRefundService {
       refundAmount: result.refund.amount.toString(),
       itemIds: result.refund.items.map((item) => item.orderItemId),
     };
-    this.realtime.branch(branchId, 'order.cancelled', payload);
-    this.realtime.callingDisplay(branchId, 'order.cancelled', payload);
+    this.realtime.branch(branchId, 'refund.completed', payload);
+    if (result.refund.source !== RefundSource.LATE_PAYMENT) {
+      this.realtime.branch(branchId, 'order.cancelled', payload);
+      this.realtime.callingDisplay(branchId, 'order.cancelled', payload);
+    }
     if (result.refund.status === RefundStatus.PENDING) {
       this.realtime.branch(branchId, 'refund.pending', payload);
     }
@@ -435,8 +538,8 @@ export class PaidOrderRefundService {
   }
 
   async completeRefund(user: AuthenticatedUser, refundId: string, dto: CompleteRefundDto) {
-    if (![AppRole.OWNER, AppRole.MANAGER].includes(user.role)) {
-      throw new ForbiddenException('Only an Owner or Branch Manager can complete a refund');
+    if (user.role !== AppRole.MANAGER) {
+      throw new ForbiddenException('Only the assigned Store Manager can settle a legacy refund');
     }
     const scopedRefund = await this.prisma.refund.findUnique({
       where: { id: refundId },

@@ -1,3 +1,4 @@
+import { CashierRefundsController } from './cashier-refunds.controller.js';
 import { Module } from '@nestjs/common';
 import { BranchesModule } from '../branches/branches.module.js';
 import { PaymentsController } from './payments.controller.js';
@@ -11,7 +12,7 @@ import { ReceiptDocumentsModule } from '../receipt-documents/receipt-documents.m
 
 @Module({
   imports: [BranchesModule, RealtimeModule, OrderTrackingModule, ReceiptDocumentsModule],
-  controllers: [PaymentsController],
+  controllers: [PaymentsController, CashierRefundsController],
   providers: [
     PaymentsService,
     CounterPaymentSettlementService,

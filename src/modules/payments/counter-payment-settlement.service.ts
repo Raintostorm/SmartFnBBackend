@@ -276,10 +276,13 @@ export class CounterPaymentSettlementService {
               status: OrderItemStatus.QUEUED,
               queuedAt: now,
               units: {
-                create: Array.from({ length: item.quantity }, (_, index) => ({
-                  sequence: index + 1,
-                  status: OrderItemStatus.QUEUED,
-                })),
+                create: Array.from(
+                  { length: item.lineType === 'COMBO' ? 0 : item.quantity },
+                  (_, index) => ({
+                    sequence: index + 1,
+                    status: OrderItemStatus.QUEUED,
+                  }),
+                ),
               },
             },
           });

@@ -192,6 +192,7 @@ export class OrdersService {
       if (!order.items.length) throw new BadRequestException('Cannot submit an empty order');
       const now = new Date();
       for (const item of order.items) {
+        if (!item.menuItemId) continue;
         const limitedStock = await tx.branchMenuItem.findFirst({
           where: {
             branchId: actor.branchId,

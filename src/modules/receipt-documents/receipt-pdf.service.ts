@@ -21,6 +21,8 @@ export interface ReceiptPdfSnapshot {
   cashier: string | null;
   items: Array<{
     itemName: string;
+    parentId?: string | null;
+    id?: string;
     quantity: number;
     unitPrice: { toString(): string };
     selectedOptions: unknown;
@@ -60,11 +62,22 @@ export class ReceiptPdfService {
       );
       if (receipt.cashier) doc.text(`Thu ngân: ${receipt.cashier}`);
       this.rule(doc);
-      for (const item of receipt.items) {
-        doc.font('NotoBold').text(`${item.quantity} × ${item.itemName}`);
-        doc.font('Noto').text(this.money(Number(item.unitPrice.toString()) * item.quantity), {
-          align: 'right',
-        });
+      const displayItems = receipt.items.flatMap((item) =>
+        item.parentId
+          ? []
+          : [
+              item,
+              ...receipt.items.filter((child) => child.parentId === item.id && child.parentId),
+            ],
+      );
+      for (const item of displayItems) {
+        doc
+          .font(item.parentId ? 'Noto' : 'NotoBold')
+          .text(`${item.parentId ? '  ' : ''}${item.quantity} × ${item.itemName}`);
+        if (!item.parentId)
+          doc.font('Noto').text(this.money(Number(item.unitPrice.toString()) * item.quantity), {
+            align: 'right',
+          });
         const options = this.optionLabels(item.selectedOptions);
         if (options.length) doc.fontSize(7).text(options.join(', '));
         if (item.specialInstructions) doc.fontSize(7).text(`Ghi chú: ${item.specialInstructions}`);
@@ -126,7 +139,11 @@ export class ReceiptPdfService {
     if (!Array.isArray(value)) return [];
     return value
       .map((item) =>
-        item && typeof item === 'object' && 'name' in item ? String(item.name) : null,
+        item && typeof item === 'object' && 'name' in item
+          ? 'kind' in item && item.kind === 'EXTRA' && 'quantity' in item
+            ? `+${item.quantity} ${item.name}`
+            : String(item.name)
+          : null,
       )
       .filter((item): item is string => Boolean(item));
   }

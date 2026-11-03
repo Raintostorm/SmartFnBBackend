@@ -30,6 +30,8 @@ export const SWAGGER_TAGS = [
   ['Menu - branch', 'Bật/tắt món và giá riêng tại từng chi nhánh.'],
   ['POS stations and displays', 'Quầy POS, ghép màn hình khách và màn hình gọi số.'],
   ['Public order tracking', 'Trang công khai chỉ trả số gọi và trạng thái nhận món qua token.'],
+  ['Counter · Pagers', 'Assign and record physical pager calls.'],
+  ['Cashier · Cash refunds', 'Same-day cash refunds and receipt data.'],
   ['Cashier · Orders', 'Cashier tạo, sửa, chốt, hủy và in lại đơn tại quầy.'],
   ['Cashier · Payments', 'Cashier thu tiền mặt hoặc tạo thanh toán QR PayOS.'],
   ['Cashier receipt documents', 'PDF biên nhận bất biến để xem lại và in từ lịch sử đơn quầy.'],

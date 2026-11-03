@@ -14,6 +14,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
 
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
@@ -349,7 +350,10 @@ export class CreateMenuOptionDto {
   @Max(9999)
   displayOrder?: number;
 
-  @ApiPropertyOptional({ example: false, description: 'Only one active default option is allowed per group' })
+  @ApiPropertyOptional({
+    example: false,
+    description: 'Only one active default option is allowed per group',
+  })
   @IsOptional()
   @Transform(toBoolean)
   @IsBoolean()
@@ -374,4 +378,17 @@ export class SetMenuItemOptionGroupsDto {
   @ArrayUnique()
   @IsUUID('4', { each: true })
   optionGroupIds!: string[];
+}
+
+export class SetBranchMenuPriceDto {
+  @ApiProperty({
+    nullable: true,
+    example: 35000,
+    description: 'Branch base price; null restores the chain price. Zero is valid.',
+  })
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(99_999_999_999)
+  @ValidateIf((_object, value) => value !== null)
+  priceOverride!: number | null;
 }

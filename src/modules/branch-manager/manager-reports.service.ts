@@ -45,7 +45,7 @@ export class ManagerReportsService {
         WITH ${bounds}, ${sales}, refund_totals AS (
           SELECT COALESCE(SUM(r.amount),0) AS total,
             COALESCE(SUM(r.amount) FILTER (WHERE r.status = 'PENDING'),0) AS pending
-          FROM refunds r JOIN orders o ON o.id = r.order_id, bounds b
+          FROM refunds r JOIN orders o ON o.id = r.order_id AND r.source <> 'LATE_PAYMENT', bounds b
           WHERE o.branch_id = ${branchId}::uuid AND r.cancellation_date >= ${from}::date
             AND r.cancellation_date <= ${to}::date
         ), sale_totals AS (
@@ -68,7 +68,7 @@ export class ManagerReportsService {
           FROM sales s GROUP BY 1
         ), refund_totals AS (
           SELECT date_trunc(${query.granularity}, r.cancellation_date::timestamp) AS bucket,
-            SUM(r.amount) AS refunds FROM refunds r JOIN orders o ON o.id = r.order_id
+            SUM(r.amount) AS refunds FROM refunds r JOIN orders o ON o.id = r.order_id AND r.source <> 'LATE_PAYMENT'
           WHERE o.branch_id = ${branchId}::uuid AND r.cancellation_date >= ${from}::date
             AND r.cancellation_date <= ${to}::date GROUP BY 1
         ) SELECT to_char(b.bucket,'YYYY-MM-DD') AS bucket,
@@ -89,7 +89,7 @@ export class ManagerReportsService {
           GROUP BY p.method
         ), refund_totals AS (
           SELECT p.method, SUM(r.amount) AS refunds
-          FROM refunds r JOIN payments p ON p.id = r.payment_id JOIN orders o ON o.id = r.order_id
+          FROM refunds r JOIN payments p ON p.id = r.payment_id JOIN orders o ON o.id = r.order_id AND r.source <> 'LATE_PAYMENT'
           WHERE o.branch_id = ${branchId}::uuid AND r.cancellation_date >= ${from}::date
             AND r.cancellation_date <= ${to}::date GROUP BY p.method
         ) SELECT COALESCE(p.method,r.method) AS method,
@@ -103,11 +103,31 @@ export class ManagerReportsService {
           COALESCE(p.cancelled_count,0)::int AS "cancelledAfterPaymentCount"
         FROM payment_totals p FULL OUTER JOIN refund_totals r ON r.method=p.method
         ORDER BY COALESCE(p.method,r.method)`;
+        const cashDrawer = await tx.$queryRaw`
+          WITH movements AS (
+            SELECT p.processed_by_id AS employee_id, p.amount AS collected, 0::numeric AS refunded
+            FROM payments p JOIN orders o ON o.id=p.order_id
+            WHERE o.branch_id=${branchId}::uuid AND o.type='COUNTER_PICKUP'
+              AND p.method='CASH' AND p.status='SUCCESS' AND p.paid_at >= ${startAt} AND p.paid_at < ${endAt}
+            UNION ALL
+            SELECT r.completed_by_employee_id, 0::numeric, r.amount
+            FROM refunds r JOIN orders o ON o.id=r.order_id
+            WHERE o.branch_id=${branchId}::uuid AND o.type='COUNTER_PICKUP'
+              AND r.method='CASH' AND r.status='COMPLETED'
+              AND r.completed_at >= ${startAt} AND r.completed_at < ${endAt}
+          ) SELECT employee_id AS "employeeId", SUM(collected)::text AS "cashCollected",
+            SUM(refunded)::text AS "cashRefunded", (SUM(collected)-SUM(refunded))::text AS "netCash"
+          FROM movements GROUP BY employee_id ORDER BY employee_id`;
         const topItems = await tx.$queryRaw`
         WITH ${bounds}, ${sales} SELECT i.menu_item_id AS "menuItemId", i.item_name AS name,
           SUM(i.quantity)::int AS quantity, SUM(i.total_price)::text AS "lineRevenue"
-        FROM order_items i JOIN sales s ON s.id = i.order_id WHERE i.status <> 'CANCELLED'
+        FROM order_items i JOIN sales s ON s.id = i.order_id WHERE i.status <> 'CANCELLED' AND i.menu_item_id IS NOT NULL
         GROUP BY i.menu_item_id, i.item_name ORDER BY SUM(i.quantity) DESC, i.menu_item_id LIMIT ${query.limit}`;
+        const topCombos = await tx.$queryRaw`
+        WITH ${bounds}, ${sales} SELECT i.combo_id AS "comboId",i.item_name AS name,
+          SUM(i.quantity)::int AS quantity,SUM(i.total_price)::text AS revenue
+        FROM order_items i JOIN sales s ON s.id=i.order_id WHERE i.line_type='COMBO' AND i.status<>'CANCELLED'
+        GROUP BY i.combo_id,i.item_name ORDER BY SUM(i.quantity) DESC,i.combo_id LIMIT ${query.limit}`;
         const topOptions = await tx.$queryRaw`
         WITH ${bounds}, ${sales} SELECT opt->>'id' AS "optionId", opt->>'name' AS name,
           opt->>'groupCode' AS "groupCode", opt->>'groupName' AS "groupName",
@@ -120,10 +140,10 @@ export class ManagerReportsService {
         ORDER BY SUM(i.quantity) DESC,opt->>'id' LIMIT ${query.limit}`;
         const topToppings = await tx.$queryRaw`
         WITH ${bounds}, ${sales} SELECT opt->>'id' AS "optionId", opt->>'name' AS name,
-          SUM(i.quantity)::int AS quantity, SUM(i.quantity * COALESCE((opt->>'priceDelta')::numeric,0))::text AS "additionalRevenue"
+          SUM(i.quantity * COALESCE((opt->>'quantity')::int,1))::int AS quantity, SUM(i.quantity * COALESCE((opt->>'priceDelta')::numeric,0))::text AS "additionalRevenue"
         FROM order_items i JOIN sales s ON s.id = i.order_id
           CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(i.selected_options) = 'array' THEN i.selected_options ELSE '[]'::jsonb END) opt
-        WHERE i.status <> 'CANCELLED' AND upper(opt->>'groupCode') IN ('TOPPING','TOPPINGS')
+        WHERE i.status <> 'CANCELLED' AND (upper(opt->>'groupCode') IN ('TOPPING','TOPPINGS') OR opt->>'kind' = 'EXTRA')
         GROUP BY opt->>'id',opt->>'name' ORDER BY SUM(i.quantity) DESC,opt->>'id' LIMIT ${query.limit}`;
         const ordersByHour = await tx.$queryRaw`
         WITH ${bounds}, ${sales}, counts AS (
@@ -172,7 +192,9 @@ export class ManagerReportsService {
           summary,
           revenue,
           payments,
+          cashDrawer,
           topItems,
+          topCombos,
           topOptions,
           topToppings,
           ordersByHour,

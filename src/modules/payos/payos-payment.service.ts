@@ -240,8 +240,10 @@ export class PayosPaymentService {
       if (payment.order.status === OrderStatus.CANCELLED) {
         await this.refunds.recordLatePayosPayment(payment.id, data.amount ?? -1, data.reference);
       } else if (
-        payment.status === PaymentStatus.FAILED &&
-        payment.failureReason === 'PAYOS_CANCELLED_SWITCH_TO_CASH'
+        (payment.status === PaymentStatus.FAILED &&
+          payment.failureReason === 'PAYOS_CANCELLED_SWITCH_TO_CASH') ||
+        (payment.status === PaymentStatus.REQUIRES_ATTENTION &&
+          payment.failureReason === 'PAYMENT_RECEIVED_AFTER_SWITCH_TO_CASH')
       ) {
         await this.refunds.recordLatePayosPayment(payment.id, data.amount ?? -1, data.reference);
       } else if (

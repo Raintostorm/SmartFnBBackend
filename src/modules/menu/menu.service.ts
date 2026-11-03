@@ -12,6 +12,7 @@ import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
 import { deleteAsset, putAsset } from '../assets/asset-storage.js';
 import type {
+  SetBranchMenuPriceDto,
   CreateMenuCategoryDto,
   CreateMenuItemDto,
   CreateMenuOptionDto,
@@ -26,6 +27,7 @@ import type {
   UpdateMenuOptionDto,
   UpdateMenuOptionGroupDto,
 } from './dto/menu.dto.js';
+import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
 import { MENU_IMAGE_MAX_BYTES, MENU_IMAGE_PUBLIC_PREFIX } from './menu-image.js';
 
 const categorySelect = {
@@ -88,14 +90,15 @@ const optionGroupSelect = {
 } satisfies Prisma.MenuOptionGroupSelect;
 
 /**
- * The menu lives on the chain: one catalogue, one price. Which branch actually
- * sells a given item is the only per-branch decision, and it lives in BranchMenuItem.
+ * The catalogue belongs to the chain. BranchMenuItem contains branch availability
+ * and an optional base-price override; null inherits the current chain price.
  */
 @Injectable()
 export class MenuService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly branchAccess: BranchAccessService,
+    private readonly realtime: RealtimePublisher,
   ) {}
 
   // --- Categories -----------------------------------------------------------
@@ -400,11 +403,21 @@ export class MenuService {
       await this.getCategoryOrFail(chainId, dto.categoryId);
     }
 
-    return this.prisma.menuItem.update({
+    const saved = await this.prisma.menuItem.update({
       where: { id: itemId },
       data: dto,
       select: itemSelect,
     });
+    if (dto.price !== undefined) {
+      const branches = await this.prisma.branchMenuItem.findMany({
+        where: { menuItemId: itemId },
+        select: { branchId: true },
+      });
+      for (const branch of branches) {
+        this.realtime.branch(branch.branchId, 'menu.prices-updated', { menuItemId: itemId });
+      }
+    }
+    return saved;
   }
 
   async uploadItemImage(
@@ -643,7 +656,7 @@ export class MenuService {
             preparationMinutes: true,
             branchAvailability: {
               where: { branchId },
-              select: { isAvailable: true, remainingPortions: true },
+              select: { isAvailable: true, remainingPortions: true, priceOverride: true },
             },
           },
           orderBy: { name: 'asc' },
@@ -658,6 +671,9 @@ export class MenuService {
         ...category,
         items: items.map(({ branchAvailability, ...item }) => ({
           ...item,
+          chainPrice: item.price,
+          price: branchAvailability[0]?.priceOverride ?? item.price,
+          priceOverride: branchAvailability[0]?.priceOverride ?? null,
           isAvailable: branchAvailability[0]?.isAvailable ?? false,
           remainingPortions: branchAvailability[0]?.remainingPortions ?? null,
         })),
@@ -697,6 +713,65 @@ export class MenuService {
       },
       update: { ...dto, updatedById: user.employeeId },
     });
+  }
+
+  async setBranchPrice(
+    chainId: string,
+    itemId: string,
+    branchId: string,
+    dto: SetBranchMenuPriceDto,
+    user: AuthenticatedUser,
+  ) {
+    await this.branchAccess.assertCanManageChain(user, chainId);
+    await this.assertBranchesInChain(chainId, [branchId]);
+    const item = await this.getItemOrFail(chainId, itemId);
+    const price = dto.priceOverride;
+    // Defense in depth for direct service callers; never coerce absent/string values to zero.
+    if (
+      price !== null &&
+      (typeof price !== 'number' ||
+        !Number.isFinite(price) ||
+        price < 0 ||
+        price > 99_999_999_999 ||
+        Math.abs(price * 100 - Math.round(price * 100)) > 0.001)
+    ) {
+      throw new BadRequestException('priceOverride must be a nonnegative price or null');
+    }
+    const saved = await this.prisma.$transaction(async (tx) => {
+      const before = await tx.branchMenuItem.findUnique({
+        where: { branchId_menuItemId: { branchId, menuItemId: itemId } },
+      });
+      if (!before) throw new NotFoundException('Item is not assigned to this branch');
+      const result = await tx.branchMenuItem.update({
+        where: { branchId_menuItemId: { branchId, menuItemId: itemId } },
+        data: { priceOverride: price },
+      });
+      // Owner has no Employee profile; record its user ID without manufacturing an employee ID.
+      await tx.branchAuditLog.create({
+        data: {
+          branchId,
+          actorUserId: user.id,
+          actorRole: user.role,
+          action: 'MENU_BRANCH_PRICE_CHANGED',
+          entityType: 'MenuItem',
+          entityId: itemId,
+          before: { priceOverride: before.priceOverride?.toString() ?? null },
+          after: { priceOverride: result.priceOverride?.toString() ?? null },
+        },
+      });
+      return result;
+    });
+    this.realtime.branch(branchId, 'menu.prices-updated', { menuItemId: itemId });
+    const base = Number(item.price);
+    return {
+      ...saved,
+      chainPrice: item.price,
+      effectivePrice: saved.priceOverride ?? item.price,
+      warnings:
+        price !== null && (price < base * 0.5 || price > base * 2)
+          ? ['PRICE_OUTSIDE_CHAIN_RANGE']
+          : [],
+    };
   }
 
   // --- Helpers --------------------------------------------------------------

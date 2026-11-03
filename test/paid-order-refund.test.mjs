@@ -68,6 +68,7 @@ function fixture({
     type: 'COUNTER_PICKUP',
     status: orderStatus,
     paymentStatus: paymentStatus === 'SUCCESS' ? 'PAID' : 'UNPAID',
+    paidAt: new Date(),
     totalAmount: new Prisma.Decimal(50_000),
     branch: { timezone: 'Asia/Ho_Chi_Minh' },
     items,
@@ -89,7 +90,7 @@ function fixture({
     order: {
       findFirst: async () => ({ ...order, status: currentOrderStatus }),
       update: async ({ data }) => {
-        currentOrderStatus = data.status;
+        currentOrderStatus = data.status ?? currentOrderStatus;
         return { ...order, ...data };
       },
     },
@@ -150,7 +151,7 @@ function fixture({
 }
 
 describe('Paid order cancellation and external refunds (#43)', () => {
-  it('lists pending refunds only inside the Owner branch scope', async () => {
+  it('lists refund history only inside the Owner branch scope', async () => {
     let capturedWhere;
     const service = new PaidOrderRefundService(
       {
@@ -173,7 +174,7 @@ describe('Paid order cancellation and external refunds (#43)', () => {
     });
     assert.equal(result.total, 1);
     assert.deepEqual(capturedWhere.order.branchId.in, [manager.branchId]);
-    assert.equal(capturedWhere.status, 'PENDING');
+    assert.equal(capturedWhere.status, undefined);
     assert.equal(capturedWhere.order.branch.chainId, '44444444-4444-4444-8444-444444444444');
 
     await assert.rejects(
@@ -200,11 +201,11 @@ describe('Paid order cancellation and external refunds (#43)', () => {
     assert.equal(calls.audits[0].action, 'PAID_ORDER_CANCELLED');
     assert.deepEqual(
       calls.events.map((event) => event.type),
-      ['order.cancelled', 'calling:order.cancelled'],
+      ['refund.completed', 'order.cancelled', 'calling:order.cancelled'],
     );
   });
 
-  it('turns an underpaid mismatch into one pending refund for the amount actually received', async () => {
+  it('returns an underpaid mismatch in cash for the amount actually received', async () => {
     const { service, calls, order } = fixture({
       paymentStatus: 'AMOUNT_MISMATCH',
       orderStatus: 'REQUIRES_ATTENTION',
@@ -212,14 +213,14 @@ describe('Paid order cancellation and external refunds (#43)', () => {
     });
     const result = await service.cancelPaidOrder(manager, order.id, {
       reason: 'Khách chuyển thiếu và không thanh toán tiếp',
-      refundMethod: 'BANK_TRANSFER',
+      refundMethod: 'CASH',
     });
     assert.equal(result.order.status, 'CANCELLED');
-    assert.equal(result.refund.status, 'PENDING');
+    assert.equal(result.refund.status, 'COMPLETED');
     assert.equal(result.refund.amount.toString(), '40000');
     assert.deepEqual(
       calls.events.map((event) => event.type),
-      ['order.cancelled', 'calling:order.cancelled', 'refund.pending'],
+      ['refund.completed', 'order.cancelled', 'calling:order.cancelled'],
     );
   });
 
@@ -232,10 +233,10 @@ describe('Paid order cancellation and external refunds (#43)', () => {
     });
     const result = await service.cancelPaidOrder(manager, order.id, {
       reason: 'Khách không tiếp tục đơn sau khi chuyển tiền muộn',
-      refundMethod: 'BANK_TRANSFER',
+      refundMethod: 'CASH',
     });
     assert.equal(result.order.status, 'CANCELLED');
-    assert.equal(result.refund.status, 'PENDING');
+    assert.equal(result.refund.status, 'COMPLETED');
     assert.equal(result.refund.amount.toString(), '45000');
     assert.equal(calls.refundCreates.length, 1);
   });
@@ -277,8 +278,8 @@ describe('Paid order cancellation and external refunds (#43)', () => {
     assert.equal(calls.refundCreates.length, 1);
   });
 
-  it('rejects Cashier and Barista before touching the database', async () => {
-    for (const role of ['CASHIER', 'BARISTA']) {
+  it('rejects Barista and Owner before touching the database', async () => {
+    for (const role of ['BARISTA', 'OWNER']) {
       const { service, calls, order } = fixture();
       await assert.rejects(
         service.cancelPaidOrder({ ...manager, role }, order.id, {
@@ -325,32 +326,15 @@ describe('Paid order cancellation and external refunds (#43)', () => {
     );
   });
 
-  it('allows the chain Owner to complete a pending refund without an employee profile', async () => {
-    const { service, tx, order } = fixture();
-    tx.refund.findUnique = async () => ({
-      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-      orderId: order.id,
-      amount: new Prisma.Decimal(50_000),
-      status: 'PENDING',
-      method: 'BANK_TRANSFER',
-      order: { branchId: manager.branchId },
-      items: [],
-    });
-    tx.refund.update = async ({ data }) => ({
-      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-      orderId: order.id,
-      amount: new Prisma.Decimal(50_000),
-      method: 'BANK_TRANSFER',
-      items: [],
-      ...data,
-    });
-    const result = await service.completeRefund(owner, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', {});
-    assert.equal(result.status, 'COMPLETED');
-    assert.equal(result.completedByRole, 'OWNER');
-    assert.equal(result.completedByEmployeeId, null);
+  it('keeps Owner read only for legacy refunds', async () => {
+    const { service } = fixture();
+    await assert.rejects(
+      service.completeRefund(owner, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', {}),
+      (error) => error.getStatus() === 403,
+    );
   });
 
-  it('records one pending refund when PayOS money arrives after cancellation', async () => {
+  it('flags late money once without creating a pending refund', async () => {
     const { service, calls, tx, payment } = fixture({
       paymentStatus: 'FAILED',
       orderStatus: 'CANCELLED',
@@ -367,17 +351,15 @@ describe('Paid order cancellation and external refunds (#43)', () => {
     const second = await service.recordLatePayosPayment(payment.id, 50_000, 'late-bank-ref');
 
     assert.equal(first.id, second.id);
-    assert.equal(calls.refundCreates.length, 1);
-    assert.equal(calls.refundCreates[0].source, 'LATE_PAYMENT');
-    assert.equal(calls.refundCreates[0].status, 'PENDING');
-    assert.equal(calls.paymentUpdates[0].status, 'SUCCESS');
+    assert.equal(calls.refundCreates.length, 0);
+    assert.equal(calls.paymentUpdates[0].status, 'REQUIRES_ATTENTION');
     assert.deepEqual(
       calls.events.map((event) => event.type),
-      ['manager.order.attention-required', 'refund.pending'],
+      ['manager.order.attention-required'],
     );
   });
 
-  it('records a pending refund when PayOS arrives after the cashier switched to cash', async () => {
+  it('flags late PayOS after switching to cash without promising a bank refund', async () => {
     const { service, calls, tx, payment } = fixture({
       paymentStatus: 'FAILED',
       orderStatus: 'PREPARING',
@@ -388,9 +370,45 @@ describe('Paid order cancellation and external refunds (#43)', () => {
 
     const refund = await service.recordLatePayosPayment(payment.id, 50_000, 'late-after-cash');
 
-    assert.equal(refund.status, 'PENDING');
-    assert.equal(refund.reason, 'PayOS payment received after the order was paid in cash');
-    assert.equal(calls.refundCreates[0].source, 'LATE_PAYMENT');
+    assert.equal(refund.status, 'REQUIRES_ATTENTION');
+    assert.equal(refund.failureReason, 'PAYMENT_RECEIVED_AFTER_SWITCH_TO_CASH');
+    assert.equal(calls.refundCreates.length, 0);
     assert.equal(calls.events[0].data.reason, 'PAYMENT_RECEIVED_AFTER_SWITCH_TO_CASH');
+  });
+  it('cashier refunds today in cash, including completed orders', async () => {
+    const { service, order, calls } = fixture({ orderStatus: 'COMPLETED' });
+    const result = await service.cashierRefund({ ...manager, role: 'CASHIER' }, order.id, {
+      reasonCode: 'WRONG_ITEM',
+    });
+    assert.equal(result.refund.source, 'CASHIER_REFUND');
+    assert.equal(result.refund.method, 'CASH');
+    assert.equal(calls.refundCreates.length, 1);
+  });
+  it('cashier cannot refund yesterday or use OTHER without a useful note', async () => {
+    const { service, order, calls } = fixture();
+    await assert.rejects(
+      service.cashierRefund({ ...manager, role: 'CASHIER' }, order.id, {
+        reasonCode: 'OTHER',
+        note: 'x',
+      }),
+    );
+    order.paidAt = new Date(Date.now() - 86400000);
+    await assert.rejects(
+      service.cashierRefund({ ...manager, role: 'CASHIER' }, order.id, {
+        reasonCode: 'WRONG_ITEM',
+      }),
+      (e) => e.getStatus() === 403,
+    );
+    assert.equal(calls.refundCreates.length, 0);
+  });
+  it('rejects new bank-transfer refunds', async () => {
+    const { service, order } = fixture();
+    await assert.rejects(
+      service.cancelPaidOrder(manager, order.id, {
+        reason: 'Changed mind',
+        refundMethod: 'BANK_TRANSFER',
+      }),
+      (e) => e.getStatus() === 400,
+    );
   });
 });

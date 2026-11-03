@@ -13,6 +13,7 @@ import {
   MinLength,
   MaxLength,
   Min,
+  Max,
   ValidateNested,
 } from 'class-validator';
 import { PrintJobStatus } from '../../../generated/prisma/client.js';
@@ -25,7 +26,28 @@ export class CreateCounterOrderDto {
   note?: string;
 }
 
+export class SelectedExtraDto {
+  @ApiProperty({ format: 'uuid' })
+  @IsUUID()
+  extraId!: string;
+  @ApiProperty({ minimum: 1, maximum: 5 })
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  quantity!: number;
+}
+
 export class AddCounterOrderItemDto {
+  @ApiPropertyOptional({
+    type: [SelectedExtraDto],
+    description: 'Extra quantities per cup, not per order line',
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => SelectedExtraDto)
+  extras: SelectedExtraDto[] = [];
+
   @ApiProperty({ format: 'uuid' })
   @IsUUID()
   menuItemId!: string;
@@ -50,12 +72,47 @@ export class AddCounterOrderItemDto {
   specialInstructions?: string;
 }
 
+export class SelectedComboComponentDto {
+  @ApiProperty() @IsUUID() componentId!: string;
+  @ApiPropertyOptional() @IsOptional() @IsUUID() menuItemId?: string;
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsUUID(undefined, { each: true })
+  optionIds: string[] = [];
+  @ApiPropertyOptional({ type: [SelectedExtraDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => SelectedExtraDto)
+  extras: SelectedExtraDto[] = [];
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(500) specialInstructions?: string;
+}
+export class SelectedComboDto {
+  @ApiProperty() @IsUUID() comboId!: string;
+  @ApiProperty({ minimum: 1, maximum: 100 }) @IsInt() @Min(1) @Max(100) quantity!: number;
+  @ApiPropertyOptional({ type: [SelectedComboComponentDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => SelectedComboComponentDto)
+  components: SelectedComboComponentDto[] = [];
+}
+
 export class CheckoutCounterOrderDto {
+  @ApiPropertyOptional({ type: [SelectedComboDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => SelectedComboDto)
+  combos: SelectedComboDto[] = [];
   @ApiProperty({ type: [AddCounterOrderItemDto] })
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => AddCounterOrderItemDto)
-  items!: AddCounterOrderItemDto[];
+  @IsOptional()
+  items: AddCounterOrderItemDto[] = [];
 
   @ApiPropertyOptional({ maxLength: 2000 })
   @IsOptional()

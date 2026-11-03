@@ -73,6 +73,12 @@ export class ReportsController {
     return this.reportsService.getPaymentMethods(user, query);
   }
 
+  @Get('top-combos')
+  @ApiOperation({ summary: 'Best-selling combos; revenue is recorded only on parent lines' })
+  getTopCombos(@CurrentUser() user: AuthenticatedUser, @Query() query: TopItemsQueryDto) {
+    return this.reportsService.getTopCombos(user, query);
+  }
+
   @Get('top-toppings')
   @ApiOperation({ summary: 'Best-selling toppings over the period' })
   getTopToppings(@CurrentUser() user: AuthenticatedUser, @Query() query: TopItemsQueryDto) {

@@ -1,3 +1,6 @@
+import { MenuModule } from '../menu/menu.module.js';
+import { PagersService } from './pagers.service.js';
+import { PagersController } from './pagers.controller.js';
 import { Module } from '@nestjs/common';
 import { RealtimeModule } from '../../realtime/realtime.module.js';
 import { BranchesModule } from '../branches/branches.module.js';
@@ -10,9 +13,16 @@ import { OrderTrackingModule } from '../order-tracking/order-tracking.module.js'
 import { ReceiptDocumentsModule } from '../receipt-documents/receipt-documents.module.js';
 
 @Module({
-  imports: [RealtimeModule, BranchesModule, PayosModule, OrderTrackingModule, ReceiptDocumentsModule],
-  controllers: [CashierController, BaristaController, StationsController],
-  providers: [CounterOperationsService, StationsService],
+  imports: [
+    MenuModule,
+    RealtimeModule,
+    BranchesModule,
+    PayosModule,
+    OrderTrackingModule,
+    ReceiptDocumentsModule,
+  ],
+  controllers: [PagersController, CashierController, BaristaController, StationsController],
+  providers: [PagersService, CounterOperationsService, StationsService],
   exports: [CounterOperationsService],
 })
 export class CounterOperationsModule {}

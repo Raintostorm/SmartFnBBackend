@@ -1,8 +1,11 @@
+import { CombosService } from '../menu/combos.service.js';
+import { priceExtras } from '../menu/extra-pricing.js';
 import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
+  Optional,
   NotFoundException,
 } from '@nestjs/common';
 import {
@@ -44,6 +47,7 @@ export class CounterOperationsService {
     private readonly prisma: PrismaService,
     private readonly branchAccess: BranchAccessService,
     private readonly tracking: OrderTrackingService,
+    @Optional() private readonly combos?: CombosService,
   ) {}
 
   private employee(user: AuthenticatedUser) {
@@ -77,6 +81,12 @@ export class CounterOperationsService {
         include: {
           menuItem: {
             include: {
+              extras: {
+                orderBy: { displayOrder: 'asc' },
+                include: {
+                  extra: { include: { branches: { where: { branchId: actor.branchId } } } },
+                },
+              },
               category: true,
               optionGroups: {
                 orderBy: { displayOrder: 'asc' },
@@ -105,6 +115,7 @@ export class CounterOperationsService {
     ]);
     return {
       branch,
+      combos: this.combos ? await this.combos.branchMenu(actor.branchId) : [],
       menuItems: menuItems.map(({ menuItem, ...branchAvailability }) => {
         const chainAvailable = menuItem.isActive && menuItem.isAvailable;
         const hasRemainingPortions =
@@ -135,6 +146,18 @@ export class CounterOperationsService {
           unavailableReason,
           menuItem: {
             ...menuItem,
+            extras: (menuItem.extras ?? []).map((link) => ({
+              extraId: link.extraId,
+              name: link.extra.name,
+              price: link.price,
+              displayOrder: link.displayOrder,
+              maxQuantity: link.maxQuantity,
+              isActive: link.extra.isActive,
+              isAvailable:
+                link.extra.isActive && !link.extra.branches.some((state) => !state.isAvailable),
+            })),
+            chainPrice: menuItem.price,
+            price: branchAvailability.priceOverride ?? menuItem.price,
             optionGroups: menuItem.optionGroups.map(({ group, ...link }) => ({
               ...link,
               group: {
@@ -162,11 +185,18 @@ export class CounterOperationsService {
     return {
       branch: context.branch,
       menuItems: context.menuItems.map(({ menuItem, ...availability }) => {
-        const { price: _price, costPrice: _costPrice, ...menuItemWithoutPrices } = menuItem;
+        const {
+          price: _price,
+          chainPrice: _chainPrice,
+          costPrice: _costPrice,
+          ...menuItemWithoutPrices
+        } = menuItem;
+        const { priceOverride: _override, ...publicAvailability } = availability;
         return {
-          ...availability,
+          ...publicAvailability,
           menuItem: {
             ...menuItemWithoutPrices,
+            extras: (menuItem.extras ?? []).map(({ price: _extraPrice, ...extra }) => extra),
             optionGroups: menuItem.optionGroups.map(({ group, ...link }) => ({
               ...link,
               group: {
@@ -198,7 +228,8 @@ export class CounterOperationsService {
   async checkout(user: AuthenticatedUser, dto: CheckoutCounterOrderDto) {
     const actor = this.employee(user);
     await this.branchAccess.assertSubscriptionAllowsWrite(actor.branchId);
-    if (!dto.items.length) throw new BadRequestException('Cannot checkout an empty cart');
+    if (!(dto.items?.length || dto.combos?.length))
+      throw new BadRequestException('Cannot checkout an empty cart');
 
     return this.prisma.$transaction(
       async (tx) => {
@@ -224,6 +255,8 @@ export class CounterOperationsService {
             priced.itemName,
           );
           const lineTotal = priced.unitPrice.mul(cartItem.quantity);
+          if (lineTotal.gt('999999999999.99'))
+            throw new BadRequestException('Order amount exceeds supported limit');
           total = total.add(lineTotal);
           await tx.orderItem.create({
             data: {
@@ -239,6 +272,62 @@ export class CounterOperationsService {
           });
         }
 
+        for (const selected of dto.combos ?? []) {
+          if (!this.combos) throw new ConflictException('Combo service unavailable');
+          const priced = await this.combos.price(tx, actor.branchId, selected, (line) =>
+            this.priceCartItem(tx, actor.branchId, line),
+          );
+          const lineTotal = priced.unitPrice.mul(priced.quantity);
+          if (lineTotal.gt('999999999999.99'))
+            throw new BadRequestException('Order amount exceeds supported limit');
+          total = total.add(lineTotal);
+          const parent = await tx.orderItem.create({
+            data: {
+              orderId: order.id,
+              menuItemId: null,
+              lineType: 'COMBO',
+              comboId: priced.comboId,
+              itemName: priced.itemName,
+              unitPrice: priced.unitPrice,
+              quantity: priced.quantity,
+              totalPrice: lineTotal,
+              selectedOptions: priced.children.map((c) => ({
+                componentId: c.componentId,
+                menuItemId: c.menuItemId,
+                name: c.itemName,
+                quantity: c.quantity,
+                surcharge: c.surcharge,
+              })),
+            },
+          });
+          for (const child of priced.children) {
+            await this.reservePortions(
+              tx,
+              actor.branchId,
+              child.menuItemId,
+              child.quantity,
+              child.itemName,
+            );
+            await tx.orderItem.create({
+              data: {
+                orderId: order.id,
+                menuItemId: child.menuItemId,
+                lineType: 'COMBO_COMPONENT',
+                parentId: parent.id,
+                comboName: priced.itemName,
+                itemName: child.itemName,
+                unitPrice: 0,
+                totalPrice: 0,
+                quantity: child.quantity,
+                selectedOptions: child.selectedOptions,
+                specialInstructions: child.specialInstructions,
+              },
+            });
+          }
+        }
+
+        if (total.gt('999999999999.99'))
+          throw new BadRequestException('Order amount exceeds supported limit');
         return tx.order.update({
           where: { id: order.id },
           data: { subtotal: total, totalAmount: total },
@@ -386,6 +475,7 @@ export class CounterOperationsService {
         if (!order.items.length) throw new BadRequestException('Cannot finalize an empty order');
         await this.assertOrderItemsAvailable(tx, actor.branchId, order.items);
         for (const item of order.items) {
+          if (!item.menuItemId) continue;
           await this.reservePortions(
             tx,
             actor.branchId,
@@ -461,6 +551,7 @@ export class CounterOperationsService {
           },
         });
         for (const item of order.items) {
+          if (!item.menuItemId) continue;
           await tx.orderItem.update({
             where: { id: item.id },
             data: {
@@ -566,6 +657,7 @@ export class CounterOperationsService {
           throw new ConflictException('Only an unpaid counter order can be cancelled');
 
         for (const item of order.items) {
+          if (!item.menuItemId) continue;
           await tx.branchMenuItem.updateMany({
             where: {
               branchId: actor.branchId,
@@ -749,6 +841,10 @@ export class CounterOperationsService {
         id: string;
         sequence: number;
         callNumber: number | null;
+        comboName: string | null;
+        parentId: string | null;
+        pagerNumber: number | null;
+        pagerNotifiedAt: Date | null;
         options: Prisma.JsonValue;
         specialInstructions: string | null;
       }>;
@@ -762,7 +858,7 @@ export class CounterOperationsService {
       const selected = [head];
       for (
         let index = 0;
-        head.orderItem.menuItem.allowBatching !== false &&
+        head.orderItem.menuItem!.allowBatching !== false &&
         index < pending.length &&
         selected.length < maxBatchSize;
       ) {
@@ -771,7 +867,7 @@ export class CounterOperationsService {
         const candidateSize = this.sizeOption(candidateOptions);
         const candidateTime = candidate.orderItem.order.paidAt ?? candidate.createdAt;
         if (
-          head.orderItem.menuItem.allowBatching &&
+          head.orderItem.menuItem!.allowBatching &&
           candidate.orderItem.menuItemId === head.orderItem.menuItemId &&
           candidateSize === headSize &&
           candidateTime.getTime() - headTime.getTime() <= windowMs
@@ -782,9 +878,9 @@ export class CounterOperationsService {
       }
       batches.push({
         id: selected.map((unit) => unit.id).join(':'),
-        menuItemId: head.orderItem.menuItemId,
+        menuItemId: head.orderItem.menuItemId!,
         itemName: head.orderItem.itemName,
-        categoryId: head.orderItem.menuItem.categoryId,
+        categoryId: head.orderItem.menuItem!.categoryId,
         size: headSize,
         oldestPaidAt: headTime,
         status: 'QUEUED',
@@ -792,7 +888,11 @@ export class CounterOperationsService {
           id: unit.id,
           sequence: unit.sequence,
           callNumber: unit.orderItem.order.callNumber,
-          options: unit.orderItem.selectedOptions ?? [],
+          comboName: unit.orderItem.comboName,
+          parentId: unit.orderItem.parentId,
+          pagerNumber: unit.orderItem.order.pagerNumber,
+          pagerNotifiedAt: unit.orderItem.order.pagerNotifiedAt,
+          options: this.preparationOptions(unit.orderItem.selectedOptions),
           specialInstructions: unit.orderItem.specialInstructions,
         })),
       });
@@ -812,9 +912,9 @@ export class CounterOperationsService {
       const options = this.optionSnapshots(head.orderItem.selectedOptions);
       batches.unshift({
         id: group.map((unit) => unit.id).join(':'),
-        menuItemId: head.orderItem.menuItemId,
+        menuItemId: head.orderItem.menuItemId!,
         itemName: head.orderItem.itemName,
-        categoryId: head.orderItem.menuItem.categoryId,
+        categoryId: head.orderItem.menuItem!.categoryId,
         size: this.sizeOption(options),
         oldestPaidAt: head.orderItem.order.paidAt ?? head.createdAt,
         status: 'PREPARING',
@@ -822,7 +922,11 @@ export class CounterOperationsService {
           id: unit.id,
           sequence: unit.sequence,
           callNumber: unit.orderItem.order.callNumber,
-          options: unit.orderItem.selectedOptions ?? [],
+          comboName: unit.orderItem.comboName,
+          parentId: unit.orderItem.parentId,
+          pagerNumber: unit.orderItem.order.pagerNumber,
+          pagerNotifiedAt: unit.orderItem.order.pagerNotifiedAt,
+          options: this.preparationOptions(unit.orderItem.selectedOptions),
           specialInstructions: unit.orderItem.specialInstructions,
         })),
       });
@@ -844,6 +948,8 @@ export class CounterOperationsService {
         orderCode: true,
         callNumber: true,
         readyAt: true,
+        pagerNumber: true,
+        pagerNotifiedAt: true,
         items: { select: { id: true, itemName: true, quantity: true } },
       },
       orderBy: { readyAt: 'asc' },
@@ -887,6 +993,8 @@ export class CounterOperationsService {
           id: true,
           orderCode: true,
           callNumber: true,
+          pagerNumber: true,
+          pagerNotifiedAt: true,
           status: true,
           submittedAt: true,
         },
@@ -931,7 +1039,14 @@ export class CounterOperationsService {
           id: { in: [...new Set(units.map((unit) => unit.orderItem.orderId))] },
           status: OrderStatus.READY,
         },
-        select: { id: true, orderCode: true, callNumber: true, readyAt: true },
+        select: {
+          id: true,
+          orderCode: true,
+          callNumber: true,
+          readyAt: true,
+          pagerNumber: true,
+          pagerNotifiedAt: true,
+        },
       });
       return { unitIds, completedAt: now, completedById: actor.employeeId, readyOrders };
     });
@@ -1168,7 +1283,31 @@ export class CounterOperationsService {
           ? { status: itemStatus, readyAt: new Date(), completedAt: new Date() }
           : { status: itemStatus },
     });
-    const items = await tx.orderItem.findMany({ where: { orderId }, select: { status: true } });
+    const items = await tx.orderItem.findMany({
+      where: { orderId, lineType: { not: 'COMBO' }, status: { not: OrderItemStatus.CANCELLED } },
+      select: { status: true, parentId: true },
+    });
+    for (const parentId of new Set(items.flatMap((i) => (i.parentId ? [i.parentId] : [])))) {
+      const children = items.filter((i) => i.parentId === parentId);
+      const status = children.every((i) => i.status === OrderItemStatus.READY)
+        ? OrderItemStatus.READY
+        : children.some((i) => i.status === OrderItemStatus.OUT_OF_STOCK)
+          ? OrderItemStatus.OUT_OF_STOCK
+          : children.some(
+                (i) => i.status === OrderItemStatus.PREPARING || i.status === OrderItemStatus.READY,
+              )
+            ? OrderItemStatus.PREPARING
+            : OrderItemStatus.QUEUED;
+      await tx.orderItem.update({
+        where: { id: parentId },
+        data: {
+          status,
+          ...(status === OrderItemStatus.READY
+            ? { readyAt: new Date(), completedAt: new Date() }
+            : {}),
+        },
+      });
+    }
     const orderStatus = items.every((item) => item.status === OrderItemStatus.READY)
       ? OrderStatus.READY
       : items.some(
@@ -1188,7 +1327,7 @@ export class CounterOperationsService {
 
   private async recalculateOrder(tx: Prisma.TransactionClient, orderId: string) {
     const result = await tx.orderItem.aggregate({
-      where: { orderId, status: { not: OrderItemStatus.CANCELLED } },
+      where: { orderId, status: { not: OrderItemStatus.CANCELLED }, lineType: { not: 'COMBO' } },
       _sum: { totalPrice: true },
     });
     const subtotal = result._sum.totalPrice ?? new Prisma.Decimal(0);
@@ -1212,7 +1351,8 @@ export class CounterOperationsService {
       !availability?.isEnabled ||
       !availability.isAvailable ||
       !availability.menuItem.isActive ||
-      !availability.menuItem.isAvailable
+      !availability.menuItem.isAvailable ||
+      availability.menuItem.deletedAt
     )
       throw new ConflictException('Menu item is not currently available at this branch');
     const allowed = availability.menuItem.optionGroups.flatMap((link) =>
@@ -1222,6 +1362,8 @@ export class CounterOperationsService {
             .map((option) => ({ ...option, group: link.group }))
         : [],
     );
+    if (new Set(dto.optionIds).size !== dto.optionIds.length)
+      throw new BadRequestException('Duplicate option');
     const selected = dto.optionIds.map((id) => allowed.find((option) => option.id === id));
     if (selected.some((option) => !option))
       throw new BadRequestException('One or more options do not belong to this menu item');
@@ -1243,19 +1385,35 @@ export class CounterOperationsService {
       (sum, option) => sum.add(option.priceDelta),
       new Prisma.Decimal(0),
     );
+    const extras = await priceExtras(tx, branchId, dto.menuItemId, dto.extras);
     return {
       itemName: availability.menuItem.name,
-      unitPrice: availability.menuItem.price.add(optionDelta),
-      selectedOptions: options.map((option) => ({
-        id: option.id,
-        code: option.code,
-        groupId: option.groupId,
-        groupCode: option.group.code,
-        groupName: option.group.name,
-        name: option.name,
-        priceDelta: option.priceDelta.toString(),
-      })),
+      basePrice: availability.priceOverride ?? availability.menuItem.price,
+      unitPrice: (availability.priceOverride ?? availability.menuItem.price)
+        .add(optionDelta)
+        .add(extras.total),
+      selectedOptions: [
+        ...extras.snapshots,
+        ...options.map((option) => ({
+          id: option.id,
+          code: option.code,
+          groupId: option.groupId,
+          groupCode: option.group.code,
+          groupName: option.group.name,
+          name: option.name,
+          priceDelta: option.priceDelta.toString(),
+        })),
+      ],
     };
+  }
+
+  private preparationOptions(value: Prisma.JsonValue | null): Prisma.JsonValue {
+    if (!Array.isArray(value)) return [];
+    return value.map((option) => {
+      if (!option || typeof option !== 'object' || Array.isArray(option)) return option;
+      const { priceDelta: _delta, price: _price, unitPrice: _unitPrice, ...visible } = option;
+      return visible;
+    });
   }
 
   private async reservePortions(
@@ -1290,9 +1448,29 @@ export class CounterOperationsService {
   private async assertOrderItemsAvailable(
     tx: Prisma.TransactionClient,
     branchId: string,
-    items: Array<{ menuItemId: string; selectedOptions: Prisma.JsonValue | null }>,
+    items: Array<{
+      menuItemId: string | null;
+      comboId?: string | null;
+      selectedOptions: Prisma.JsonValue | null;
+    }>,
   ) {
     for (const item of items) {
+      if (!item.menuItemId) {
+        if (
+          !item.comboId ||
+          !(await tx.branchCombo.count({
+            where: {
+              branchId,
+              comboId: item.comboId,
+              isEnabled: true,
+              isAvailable: true,
+              combo: { isActive: true, deletedAt: null },
+            },
+          }))
+        )
+          throw new ConflictException('Combo is no longer available');
+        continue;
+      }
       const availability = await tx.branchMenuItem.findUnique({
         where: { branchId_menuItemId: { branchId, menuItemId: item.menuItemId } },
         include: {
@@ -1314,7 +1492,20 @@ export class CounterOperationsService {
       }
 
       const snapshots = this.optionSnapshots(item.selectedOptions);
-      const selectedIds = snapshots.map((option) => String(option.id ?? '')).filter(Boolean);
+      const extraSnapshots = snapshots.filter((option) => option.kind === 'EXTRA');
+      await priceExtras(
+        tx,
+        branchId,
+        item.menuItemId,
+        extraSnapshots.map((option) => ({
+          extraId: String(option.id),
+          quantity: Number(option.quantity),
+        })),
+      );
+      const selectedIds = snapshots
+        .filter((option) => option.kind !== 'EXTRA')
+        .map((option) => String(option.id ?? ''))
+        .filter(Boolean);
       const activeGroups = availability.menuItem.optionGroups.filter((link) => link.group.isActive);
       const activeOptions = activeGroups.flatMap((link) =>
         link.group.options.filter((option) => option.isActive),

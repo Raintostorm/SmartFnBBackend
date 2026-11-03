@@ -197,6 +197,12 @@ export class ManagerOrderQueryDto extends ManagerPageDto {
 }
 
 export class CancelPaidOrderDto {
+  @ApiPropertyOptional({
+    enum: ['CHANGE_OF_MIND', 'WRONG_ITEM', 'OUT_OF_STOCK', 'LONG_WAIT', 'OTHER'],
+  })
+  @IsOptional()
+  @IsString()
+  reasonCode?: string;
   @ApiProperty({ minLength: 3, maxLength: 500 })
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()

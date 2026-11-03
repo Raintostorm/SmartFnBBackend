@@ -116,7 +116,7 @@ export class ReportsService {
           COALESCE(SUM(r.amount),0)::text AS refund_amount,
           COALESCE(SUM(r.amount) FILTER (WHERE r.status = 'PENDING'),0)::text AS pending_refund_amount,
           COUNT(DISTINCT r.order_id) AS paid_cancellation_count
-        FROM refunds r JOIN orders o ON o.id = r.order_id
+        FROM refunds r JOIN orders o ON o.id = r.order_id AND r.source <> 'LATE_PAYMENT'
         WHERE o.branch_id = ANY(${scope.branchIds}::uuid[])
           AND o.type = 'COUNTER_PICKUP'
           AND r.cancellation_date >= ${scope.fromDate}::date
@@ -214,7 +214,7 @@ export class ReportsService {
         GROUP BY o.branch_id,p.method
       ), refunded AS (
         SELECT o.branch_id,p.method,SUM(r.amount) refunds
-        FROM refunds r JOIN orders o ON o.id=r.order_id JOIN payments p ON p.id=r.payment_id
+        FROM refunds r JOIN orders o ON o.id=r.order_id AND r.source <> 'LATE_PAYMENT' JOIN payments p ON p.id=r.payment_id
         WHERE o.branch_id = ANY(${scope.branchIds}::uuid[])
           AND o.type = 'COUNTER_PICKUP'
           AND r.cancellation_date >= ${scope.fromDate}::date
@@ -269,6 +269,27 @@ export class ReportsService {
     };
   }
 
+  async getTopCombos(user: AuthenticatedUser, query: TopItemsQueryDto) {
+    const scope = await this.resolveScope(user, query);
+    const rows = await this.prisma.$queryRaw<
+      Array<{ comboId: string; name: string; quantity: bigint; revenue: string }>
+    >`
+      SELECT i.combo_id AS "comboId",i.item_name AS name,SUM(i.quantity)::bigint AS quantity,SUM(i.total_price)::text AS revenue
+      FROM order_items i JOIN orders o ON o.id=i.order_id
+      WHERE o.branch_id=ANY(${scope.branchIds}::uuid[]) AND o.type='COUNTER_PICKUP' AND o.payment_status='PAID'
+      AND o.paid_at>=${scope.from} AND o.paid_at<${scope.to} AND i.line_type='COMBO' AND i.status<>'CANCELLED'
+      GROUP BY i.combo_id,i.item_name ORDER BY SUM(i.quantity) DESC,i.combo_id LIMIT ${query.limit}`;
+    return {
+      range: this.describeRange(scope),
+      items: rows.map((r, index) => ({
+        ...r,
+        rank: index + 1,
+        quantity: Number(r.quantity),
+        revenue: this.money(new Prisma.Decimal(r.revenue)),
+      })),
+    };
+  }
+
   async getTopToppings(user: AuthenticatedUser, query: TopItemsQueryDto) {
     const scope = await this.resolveScope(user, query);
     if (!scope.branchIds.length) return { range: this.describeRange(scope), items: [] };
@@ -287,12 +308,12 @@ export class ReportsService {
         AND paid_at >= ${scope.from} AND paid_at < ${scope.to})
       SELECT COALESCE(opt->>'id',opt->>'code',opt->>'name') option_id,opt->>'name' name,
         opt->>'groupCode' group_code,opt->>'groupName' group_name,
-        SUM(i.quantity)::bigint quantity,
+        SUM(i.quantity * COALESCE((opt->>'quantity')::int,1))::bigint quantity,
         SUM(i.quantity * COALESCE((opt->>'priceDelta')::numeric,0))::text revenue
       FROM order_items i JOIN sales s ON s.id=i.order_id
         CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(i.selected_options)='array'
           THEN i.selected_options ELSE '[]'::jsonb END) opt
-      WHERE i.status <> 'CANCELLED' AND upper(opt->>'groupCode') IN ('TOPPING','TOPPINGS')
+      WHERE i.status <> 'CANCELLED' AND (upper(opt->>'groupCode') IN ('TOPPING','TOPPINGS') OR opt->>'kind' = 'EXTRA')
       GROUP BY 1,2,3,4 ORDER BY SUM(i.quantity) DESC,1 LIMIT ${query.limit}`;
     return {
       range: this.describeRange(scope),
@@ -330,7 +351,7 @@ export class ReportsService {
       ), refunds_by_bucket AS (
         SELECT o.branch_id, date_trunc(${unit}, r.cancellation_date::timestamp) AS bucket,
           SUM(r.amount) AS refund_amount
-        FROM refunds r JOIN orders o ON o.id=r.order_id
+        FROM refunds r JOIN orders o ON o.id=r.order_id AND r.source <> 'LATE_PAYMENT'
         WHERE o.branch_id = ANY(${scope.branchIds}::uuid[])
           AND o.type = 'COUNTER_PICKUP'
           AND r.cancellation_date >= ${scope.fromDate}::date
@@ -395,6 +416,7 @@ export class ReportsService {
     }
 
     const where: Prisma.OrderItemWhereInput = {
+      menuItemId: { not: null },
       status: { not: OrderItemStatus.CANCELLED },
       order: this.completedOrdersWhere(scope),
     };
@@ -409,7 +431,7 @@ export class ReportsService {
     });
 
     const menuItems = await this.prisma.menuItem.findMany({
-      where: { id: { in: grouped.map(({ menuItemId }) => menuItemId) } },
+      where: { id: { in: grouped.flatMap(({ menuItemId }) => (menuItemId ? [menuItemId] : [])) } },
       select: {
         id: true,
         sku: true,
@@ -426,7 +448,7 @@ export class ReportsService {
       range: this.describeRange(scope),
       items: grouped.map((row, index) => ({
         rank: index + 1,
-        menuItem: menuItemById.get(row.menuItemId) ?? { id: row.menuItemId },
+        menuItem: menuItemById.get(row.menuItemId ?? '') ?? { id: row.menuItemId },
         quantity: row._sum.quantity ?? 0,
         revenue: this.money(row._sum.totalPrice ?? new Prisma.Decimal(0)),
         orderLineCount: row._count._all,
