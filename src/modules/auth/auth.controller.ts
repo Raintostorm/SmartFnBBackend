@@ -2,23 +2,17 @@ import { Body, Controller, Get, HttpCode, HttpStatus, Post, Req } from '@nestjs/
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
-  ApiConflictResponse,
-  ApiCreatedResponse,
-  ApiForbiddenResponse,
-  ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import type { Request } from 'express';
-import { AppRole } from './app-role.enum.js';
 import { SWAGGER_ACCESS_TOKEN } from './auth.constants.js';
 import type { AuthenticatedUser, AuthResponse, RequestMetadata } from './auth.interfaces.js';
 import { AuthService } from './auth.service.js';
 import { CurrentUser } from './decorators/current-user.decorator.js';
 import { Public } from './decorators/public.decorator.js';
-import { Roles } from './decorators/roles.decorator.js';
 import {
   AuthenticatedUserResponseDto,
   AuthResponseDto,

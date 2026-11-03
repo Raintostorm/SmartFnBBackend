@@ -1,6 +1,6 @@
 import { StaffAccountsService } from './staff-accounts.service.js';
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, UserStatus } from '../../generated/prisma/client.js';
+import { Prisma } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { AppRole } from '../auth/app-role.enum.js';
 import { PasswordService } from '../auth/password.service.js';

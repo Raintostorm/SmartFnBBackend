@@ -2,7 +2,6 @@ import { StaffAccountsService } from '../employees/staff-accounts.service.js';
 import {
   BadRequestException,
   ConflictException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -10,7 +9,6 @@ import { Prisma, UserStatus } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { AppRole } from '../auth/app-role.enum.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
-import { PasswordService } from '../auth/password.service.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
 import type {
   ManagerCreateStaffDto,
@@ -20,7 +18,6 @@ import type {
   ManagerResetPasswordDto,
 } from './manager.dto.js';
 import { managerActor, writeBranchAudit } from './manager-scope.js';
-import { EmailOutboxService } from '../email/email-outbox.service.js';
 
 const staffRoles = [AppRole.CASHIER, AppRole.BARISTA];
 const staffSelect = {
@@ -57,8 +54,6 @@ export class ManagerStaffService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly access: BranchAccessService,
-    private readonly passwords: PasswordService,
-    private readonly emails: EmailOutboxService,
     private readonly accounts: StaffAccountsService,
   ) {}
 

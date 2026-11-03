@@ -5,7 +5,6 @@ import {
   OrderStatus,
   OrderType,
   Prisma,
-  TableSessionStatus,
 } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { AppRole } from '../auth/app-role.enum.js';
@@ -86,7 +85,7 @@ export class ReportsService {
       return this.emptyReport(scope);
     }
 
-    const [revenueRows, countRows, guestRows, refundRows] = await Promise.all([
+    const [revenueRows, countRows, refundRows] = await Promise.all([
       this.prisma.order.groupBy({
         by: ['branchId'],
         where: this.completedOrdersWhere(scope),
@@ -96,12 +95,6 @@ export class ReportsService {
       this.prisma.order.groupBy({
         by: ['branchId'],
         where: this.countableOrdersWhere(scope),
-        _count: { _all: true },
-      }),
-      this.prisma.tableSession.groupBy({
-        by: ['branchId'],
-        where: this.servedSessionsWhere(scope),
-        _sum: { guestCount: true },
         _count: { _all: true },
       }),
       this.prisma.$queryRaw<
@@ -127,12 +120,10 @@ export class ReportsService {
 
     const revenueByBranch = new Map(revenueRows.map((row) => [row.branchId, row]));
     const countsByBranch = new Map(countRows.map((row) => [row.branchId, row._count._all]));
-    const guestsByBranch = new Map(guestRows.map((row) => [row.branchId, row]));
     const refundsByBranch = new Map(refundRows.map((row) => [row.branch_id, row]));
 
     const branches = scope.branches.map((branch) => {
       const revenue = revenueByBranch.get(branch.id);
-      const guests = guestsByBranch.get(branch.id);
       const totalRevenue = revenue?._sum.totalAmount ?? new Prisma.Decimal(0);
       const refunds = refundsByBranch.get(branch.id);
       const refundAmount = new Prisma.Decimal(refunds?.refund_amount ?? 0);
@@ -152,8 +143,8 @@ export class ReportsService {
         averageOrderValue: this.money(
           orderCount > 0 ? netRevenue.dividedBy(orderCount) : new Prisma.Decimal(0),
         ),
-        guestCount: guests?._sum.guestCount ?? 0,
-        sessionCount: guests?._count._all ?? 0,
+        guestCount: 0,
+        sessionCount: 0,
       };
     });
 
@@ -456,42 +447,6 @@ export class ReportsService {
     };
   }
 
-  /** Guests served per branch, from the table sessions that reached payment. */
-  async getCustomerTraffic(user: AuthenticatedUser, query: ReportRangeQueryDto) {
-    const scope = await this.resolveScope(user, query);
-    if (scope.branchIds.length === 0) {
-      return this.emptyReport(scope);
-    }
-
-    const rows = await this.prisma.tableSession.groupBy({
-      by: ['branchId'],
-      where: this.servedSessionsWhere(scope),
-      _sum: { guestCount: true },
-      _count: { _all: true },
-      _avg: { guestCount: true },
-    });
-    const byBranch = new Map(rows.map((row) => [row.branchId, row]));
-
-    const branches = scope.branches.map((branch) => {
-      const row = byBranch.get(branch.id);
-      return {
-        branch,
-        guestCount: row?._sum.guestCount ?? 0,
-        sessionCount: row?._count._all ?? 0,
-        averageGuestsPerSession: Number((row?._avg.guestCount ?? 0).toFixed(2)),
-      };
-    });
-
-    return {
-      range: this.describeRange(scope),
-      totals: {
-        guestCount: branches.reduce((total, { guestCount }) => total + guestCount, 0),
-        sessionCount: branches.reduce((total, { sessionCount }) => total + sessionCount, 0),
-      },
-      branches,
-    };
-  }
-
   // --- Scope and range ------------------------------------------------------
 
   private async resolveScope(
@@ -701,14 +656,6 @@ export class ReportsService {
     return {
       ...this.completedOrdersWhere(scope),
       status: { not: OrderStatus.CANCELLED },
-    };
-  }
-
-  private servedSessionsWhere(scope: ReportScope): Prisma.TableSessionWhereInput {
-    return {
-      branchId: { in: scope.branchIds },
-      status: { in: [TableSessionStatus.PAID, TableSessionStatus.CLOSED] },
-      openedAt: { gte: scope.from, lt: scope.to },
     };
   }
 

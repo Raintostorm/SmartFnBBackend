@@ -33,7 +33,7 @@ Reports accept inclusive local `YYYY-MM-DD` dates `from`/`to`, up to 366 days; d
 
 The Manager explicitly accepts settlement of the expected amount. Original `amount` and order total remain unchanged; actual `receivedAmount`, variance, actor, reason and timestamp are recorded. This API does not transfer/refund money. Counter confirmation allocates a call number and queues preparation in the same serializable transaction. Duplicate or racing confirmations return 409 without duplicate units/audit. The normal PayOS webhook remains automatic.
 
-`POST /invoices/:invoiceId/cancel` now requires MANAGER and a nonblank reason, records audit, and only cancels the invoice. It does not implement paid-order cancellation/refunds (BM-06).
+The current Branch Manager contract covers counter-order search, manual transfer confirmation, staff, branch availability, reports, audit logs, and cash refunds for paid counter orders. Table-session invoices have been retired. A Manager can use `POST /manager/orders/:orderId/cancel-paid` to refund an entire order or selected lines in cash; Cashiers use `POST /cashier/orders/:orderId/refunds` for orders paid on the current business day.
 
 Audit is append-only through the API and written in the same transaction as staff changes, option switches, payment confirmation and invoice cancellation. No audit update/delete API exists. Option stock events publish `menu.availability.changed` and `manager.order.attention-required` when paid queued/preparing lines are affected. Re-enabling an option does not automatically restart already flagged lines.
 

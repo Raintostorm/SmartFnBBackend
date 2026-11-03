@@ -1,10 +1,7 @@
 import {
-  ConflictException,
   ForbiddenException,
   HttpException,
   Injectable,
-  InternalServerErrorException,
-  NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -57,7 +54,7 @@ export class AuthService {
     private readonly usersService: UsersService,
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
-    private readonly configService: ConfigService,
+    configService: ConfigService,
     private readonly passwordService: PasswordService,
   ) {
     this.accessSecret = configService.getOrThrow<string>('JWT_ACCESS_SECRET');
@@ -507,14 +504,6 @@ export class AuthService {
     return email.trim().toLowerCase();
   }
 
-  private parseOptionalDate(value?: string): Date | undefined {
-    return value ? new Date(`${value}T00:00:00.000Z`) : undefined;
-  }
-
-  private generateCode(prefix: string): string {
-    return `${prefix}-${randomUUID().replaceAll('-', '').slice(0, 16).toUpperCase()}`;
-  }
-
   private hashToken(token: string): string {
     return createHash('sha256').update(token).digest('hex');
   }
@@ -541,17 +530,5 @@ export class AuthService {
       },
       data: { revokedAt },
     });
-  }
-
-  private rethrowCreateUserError(error: unknown): never {
-    if (this.isPrismaUniqueConstraintError(error)) {
-      throw new ConflictException('Email, phone, or account code already exists');
-    }
-
-    throw error;
-  }
-
-  private isPrismaUniqueConstraintError(error: unknown): boolean {
-    return typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2002';
   }
 }

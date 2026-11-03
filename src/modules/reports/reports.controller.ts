@@ -84,14 +84,4 @@ export class ReportsController {
   getTopToppings(@CurrentUser() user: AuthenticatedUser, @Query() query: TopItemsQueryDto) {
     return this.reportsService.getTopToppings(user, query);
   }
-
-  @Get('customers')
-  @ApiOperation({
-    summary: 'Guests served per branch',
-    description: 'Counted from the table sessions that reached PAID or CLOSED in the period.',
-  })
-  @ApiOkResponse({ description: 'Guest traffic per branch' })
-  getCustomerTraffic(@CurrentUser() user: AuthenticatedUser, @Query() query: ReportRangeQueryDto) {
-    return this.reportsService.getCustomerTraffic(user, query);
-  }
 }

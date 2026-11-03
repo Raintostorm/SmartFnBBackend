@@ -9,16 +9,10 @@ import { BranchesModule } from './modules/branches/branches.module.js';
 import { EmployeesModule } from './modules/employees/employees.module.js';
 import { AttendanceModule } from './modules/attendance/attendance.module.js';
 import { MenuModule } from './modules/menu/menu.module.js';
-import { OrdersModule } from './modules/orders/orders.module.js';
 import { PaymentsModule } from './modules/payments/payments.module.js';
-import { ReservationsModule } from './modules/reservations/reservations.module.js';
-import { RolesModule } from './modules/roles/roles.module.js';
-import { TablesModule } from './modules/tables/tables.module.js';
 import { UsersModule } from './modules/users/users.module.js';
-import { VouchersModule } from './modules/vouchers/vouchers.module.js';
 import { PlatformAdminModule } from './modules/platform-admin/platform-admin.module.js';
 import { ReportsModule } from './modules/reports/reports.module.js';
-import { InvoicesModule } from './modules/invoices/invoices.module.js';
 import { BrandingModule } from './modules/branding/branding.module.js';
 import { RealtimeModule } from './realtime/realtime.module.js';
 import { CounterOperationsModule } from './modules/counter-operations/counter-operations.module.js';
@@ -37,21 +31,15 @@ import { PlatformBillingModule } from './modules/platform-billing/platform-billi
     PrismaModule,
     AuthModule,
     UsersModule,
-    RolesModule,
     BranchesModule,
     EmployeesModule,
-    TablesModule,
-    ReservationsModule,
     MenuModule,
-    OrdersModule,
     CounterOperationsModule,
     OrderTrackingModule,
     PayosModule,
     PaymentsModule,
-    InvoicesModule,
     BrandingModule,
     RealtimeModule,
-    VouchersModule,
     AttendanceModule,
     PlatformAdminModule,
     ReportsModule,

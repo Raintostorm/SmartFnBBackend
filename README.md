@@ -105,18 +105,18 @@ băm bằng Argon2id; refresh token chỉ được lưu trong database dưới d
 Mọi API mặc định đều yêu cầu `Authorization: Bearer <accessToken>`, trừ các route
 được khai báo public.
 
-| Method  | Endpoint                       | Quyền                                                             |
-| ------- | ------------------------------ | ----------------------------------------------------------------- |
-| `POST`  | `/api/v1/auth/login`           | Public                                                            |
-| `POST`  | `/api/v1/auth/refresh`         | Public, đổi refresh token một lần                                 |
-| `POST`  | `/api/v1/auth/logout`          | Public, thu hồi session bằng refresh token                        |
-| `POST`  | `/api/v1/auth/logout-all`      | Đã đăng nhập                                                      |
-| `GET`   | `/api/v1/auth/me`              | Đã đăng nhập                                                      |
-| `POST` | `/api/v1/employees/invitations` | OWNER mời MANAGER/CASHIER/BARISTA bằng email |
-| `POST` | `/api/v1/manager/staff` | MANAGER mời CASHIER/BARISTA của chi nhánh |
-| `PATCH` | `/api/v1/users/:userId/status` | Chỉ `ADMIN`; cập nhật `ACTIVE`, `INACTIVE` hoặc `SUSPENDED`       |
+| Method  | Endpoint                        | Quyền                                                       |
+| ------- | ------------------------------- | ----------------------------------------------------------- |
+| `POST`  | `/api/v1/auth/login`            | Public                                                      |
+| `POST`  | `/api/v1/auth/refresh`          | Public, đổi refresh token một lần                           |
+| `POST`  | `/api/v1/auth/logout`           | Public, thu hồi session bằng refresh token                  |
+| `POST`  | `/api/v1/auth/logout-all`       | Đã đăng nhập                                                |
+| `GET`   | `/api/v1/auth/me`               | Đã đăng nhập                                                |
+| `POST`  | `/api/v1/employees/invitations` | OWNER mời MANAGER/CASHIER/BARISTA bằng email                |
+| `POST`  | `/api/v1/manager/staff`         | MANAGER mời CASHIER/BARISTA của chi nhánh                   |
+| `PATCH` | `/api/v1/users/:userId/status`  | Chỉ `ADMIN`; cập nhật `ACTIVE`, `INACTIVE` hoặc `SUSPENDED` |
 
-Các role ứng dụng: `ADMIN`, `OWNER`, `MANAGER`, `WAITER`, `KITCHEN`, `CASHIER`.
+Các role hiện dùng cho luồng quầy: `ADMIN`, `OWNER`, `MANAGER`, `CASHIER`, `BARISTA`.
 Gắn `@Roles(AppRole.ADMIN, ...)` vào controller/handler để giới hạn
 route theo role; route public phải được gắn `@Public()` một cách tường minh.
 
@@ -169,51 +169,29 @@ Data dictionary đầy đủ (từng bảng, cột, lý do tồn tại và khóa
 - `owners`: hồ sơ chủ sở hữu; liên kết 1–1 với User.
 - `owner_chain_assignments`: các chuỗi nhà hàng được ADMIN giao cho OWNER.
 - `employees`: hồ sơ nhân viên; liên kết 1–1 với User và thuộc một Branch.
-- `restaurant_tables`: bàn ăn theo từng chi nhánh.
-- `reservations`: lịch đặt bàn theo thông tin khách vãng lai.
-- `reservation_tables`: phân bổ một hoặc nhiều bàn liền kề cho lịch đặt trước.
 - `menu_categories`, `menu_items`: danh mục và món ăn dùng chung ở cấp chuỗi.
 - `orders`, `order_items`: đơn hàng và snapshot món tại thời điểm đặt.
-- `table_sessions`, `table_session_tables`: phiên phục vụ tại bàn; một phiên có thể
-  ghép nhiều bàn và chứa nhiều lần gọi món.
-- `table_adjacencies`: quan hệ bàn liền kề dùng khi Waiter cần ghép bàn.
 - `branch_menu_items`: trạng thái bán và số phần còn lại của món tại từng chi nhánh.
-- `serving_tasks`: hàng đợi món đã sẵn sàng, hỗ trợ Waiter nhận việc và xác nhận đã phục vụ.
-- `work_sessions`: phiên làm việc thực tế; dùng để giới hạn thông báo thời gian thực cho
-  Waiter/Kitchen Staff đang trong ca.
+- `work_sessions`: phiên làm việc thực tế của nhân viên.
 - `shift_templates`, `shift_assignments`: mẫu ca và lịch phân công nhân viên theo ngày.
-- `payments`: các lần thanh toán hoặc hoàn tiền của đơn hàng.
-- `invoices`, `invoice_items`, `invoice_payments`: snapshot bill nội bộ bất biến sau
-  thanh toán, giữ đúng tên món/giá và phân bổ payment tại thời điểm in.
+- `payments`, `refunds`, `refund_items`: các lần thanh toán và hoàn tiền mặt của đơn quầy.
 - `vouchers`: voucher toàn chuỗi hoặc giới hạn theo chi nhánh.
 - `attendances`: chấm công theo nhân viên, chi nhánh và ngày làm việc.
 
-### Luồng dữ liệu Waiter và Kitchen Staff
+Các bảng bàn, đặt chỗ, phiên bàn và hóa đơn nội bộ vẫn còn trong Prisma schema để bảo toàn dữ liệu lịch sử. Chúng không còn được đăng ký thành module HTTP và không xuất hiện trong Swagger. Bảng hoàn tiền vẫn phục vụ API hoàn tiền mặt của đơn quầy. Không xoá dữ liệu lịch sử khỏi production trước khi có một migration lưu trữ riêng.
+
+### Luồng đơn tại quầy
 
 ```text
-restaurant_tables
-  -> table_session_tables
-  -> table_sessions
-  -> orders
+cashier cart
+  -> counter order
+  -> payment (cash hoặc PayOS)
   -> order_items
-  -> serving_tasks
+  -> barista queue
+  -> customer tracking / calling display
 ```
 
-Kitchen Staff xử lý từng `order_item` từ `QUEUED` sang `PREPARING`, rồi `READY`.
-Khi món sẵn sàng, hệ thống tạo đúng một `serving_task`; Waiter nhận task theo cơ chế
-first-claim-wins và xác nhận `SERVED`. Trạng thái sẵn bán và số phần còn lại được quản
-lý riêng theo chi nhánh trong `branch_menu_items`, không sửa trực tiếp menu gốc.
-
-### Bill, thanh toán và in giấy theo V7
-
-- Waiter dùng `GET /api/v1/table-sessions/:id/bill-preview` để cho khách xem bill tạm
-  ngay trên tablet; Waiter không được tạo hoặc xác nhận payment.
-- Manager/Cashier tạo payment/QR và xác nhận payment thành công.
-- Sau khi phiên bàn đã `PAID`, Manager/Cashier phát hành snapshot bằng
-  `POST /api/v1/table-sessions/:id/invoices` và lấy dữ liệu in trình duyệt tại
-  `GET /api/v1/invoices/:id/print`.
-- Đây là bill nội bộ phục vụ máy in nhiệt qua trình duyệt, không phải hóa đơn điện tử
-  hợp pháp và không tích hợp trực tiếp driver máy in.
+Cashier tạo đơn và nhận tiền mặt hoặc tạo mã PayOS. Thanh toán hợp lệ cấp số gọi và đưa món vào hàng pha chế. Barista cập nhật món từ chờ pha sang đang pha rồi sẵn sàng; khách theo dõi bằng mã công khai hoặc màn hình gọi số. Tiền PayOS về sau khi đơn đã huỷ hoặc đã chuyển sang tiền mặt được ghi ở trạng thái cần đối soát; khoản hoàn chỉ được ghi khi nhân viên thực sự trả tiền mặt.
 
 ### Realtime
 

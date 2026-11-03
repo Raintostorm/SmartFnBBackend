@@ -724,17 +724,6 @@ export class PlatformAdminService {
     return plan;
   }
 
-  private async getDefaultPlan() {
-    const plan = await this.prisma.servicePlan.findFirst({
-      where: { isActive: true },
-      orderBy: { monthlyPrice: 'asc' },
-    });
-    if (!plan) {
-      throw new ConflictException('No active service plan is configured');
-    }
-    return plan;
-  }
-
   private async getTrialPlan() {
     const basic = await this.prisma.servicePlan.findUnique({ where: { code: 'BASIC' } });
     if (!basic?.isActive) {

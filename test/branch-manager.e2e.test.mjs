@@ -199,14 +199,6 @@ describe('Branch Manager API and PostgreSQL integration', () => {
     assert.equal((await api('/manager/orders')).status, 401);
     for (const token of [cashierToken, baristaToken])
       assert.equal((await api('/manager/reports', token)).status, 403);
-    assert.equal(
-      (
-        await api(`/invoices/${randomUUID()}/cancel`, cashierToken, 'POST', {
-          reason: 'Not allowed',
-        })
-      ).status,
-      403,
-    );
   });
 
   it('creates both staff roles without returning credentials or tokens', async () => {
@@ -540,65 +532,6 @@ describe('Branch Manager API and PostgreSQL integration', () => {
     assert.equal(empty.body.summary.orderCount, 0);
     assert.equal(empty.body.revenue.length, 2);
     assert.equal(empty.body.preparation.averageSeconds, null);
-  });
-
-  it('preserves cashier cash settlement for table sessions and records paidAt for reports', async () => {
-    const session = await db.tableSession.create({
-      data: {
-        sessionCode: randomUUID(),
-        branchId: branch.id,
-        openedByWaiterId: manager.id,
-        guestCount: 1,
-      },
-    });
-    const order = await makeOrder(branch.id, { type: 'DINE_IN', tableSessionId: session.id });
-    const pending = await api(`/table-sessions/${session.id}/payments`, cashierToken, 'POST', {
-      method: 'CASH',
-      amount: 100,
-    });
-    assert.equal(pending.status, 201);
-    const confirmed = await api(`/payments/${pending.body.id}/confirm`, cashierToken, 'POST', {});
-    assert.equal(confirmed.status, 200, JSON.stringify(confirmed.body));
-    const updated = await db.order.findUnique({ where: { id: order.id } });
-    assert.equal(updated.paymentStatus, 'PAID');
-    assert.ok(updated.paidAt);
-    assert.equal(await db.orderItemUnit.count({ where: { orderItemId: order.items[0].id } }), 0);
-    const search = await api(
-      `/manager/orders?orderCode=${order.orderCode}&paymentMethod=CASH`,
-      managerToken,
-    );
-    assert.equal(search.body.total, 1);
-    assert.equal(search.body.items[0].tableSession.payments.length, 1);
-  });
-
-  it('cancels invoices only in the Manager branch and records reason and actor atomically', async () => {
-    const invoice = await db.invoice.create({
-      data: {
-        invoiceNumber: randomUUID(),
-        chainId: chain.id,
-        branchId: branch.id,
-        subtotal: 100,
-        totalAmount: 100,
-        paidAmount: 100,
-        sellerName: 'Test chain',
-        sellerAddress: 'Address',
-        issuedById: cashier.id,
-      },
-    });
-    const path = `/invoices/${invoice.id}/cancel`;
-    assert.equal((await api(path, otherToken, 'POST', { reason: 'Wrong branch' })).status, 403);
-    assert.equal((await api(path, managerToken, 'POST', { reason: '   ' })).status, 400);
-    const r = await api(path, managerToken, 'POST', { reason: 'Incorrect invoice details' });
-    assert.equal(r.status, 200, JSON.stringify(r.body));
-    assert.equal(r.body.cancelledById, manager.id);
-    assert.equal(
-      (await api(path, managerToken, 'POST', { reason: 'Duplicate request' })).status,
-      409,
-    );
-    const logs = await db.branchAuditLog.findMany({ where: { entityId: invoice.id } });
-    assert.equal(logs.length, 1);
-    assert.equal(logs[0].reason, 'Incorrect invoice details');
-    assert.equal(logs[0].actorUserId, manager.user.id);
   });
 
   it('keeps audit logs branch-scoped and rejects writes when subscription is expired', async () => {

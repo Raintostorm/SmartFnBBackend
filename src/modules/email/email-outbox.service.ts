@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { EmailOutboxStatus, Prisma } from '../../generated/prisma/client.js';
+import { EmailOutboxStatus } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
 
 type SetupPayload = {

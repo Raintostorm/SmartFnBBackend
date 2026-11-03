@@ -11,7 +11,6 @@ import {
   BranchStatus,
   Prisma,
   RestaurantChainStatus,
-  TableSessionStatus,
 } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { AppRole } from '../auth/app-role.enum.js';
@@ -351,15 +350,6 @@ export class BranchesService {
     }
     await this.branchAccess.assertCanManageBranch(user, id);
     await this.ensureBranchExists(id);
-    const activeSessions = await this.prisma.tableSession.count({
-      where: {
-        branchId: id,
-        status: { in: [TableSessionStatus.OPEN, TableSessionStatus.SERVING] },
-      },
-    });
-    if (activeSessions > 0) {
-      throw new ConflictException('Branch cannot be archived while table sessions are open');
-    }
     return this.prisma.branch.update({
       where: { id },
       data: { deletedAt: new Date(), status: BranchStatus.INACTIVE },

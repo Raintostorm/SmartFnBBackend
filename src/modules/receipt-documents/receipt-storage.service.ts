@@ -12,7 +12,7 @@ export class ReceiptStorageService {
   private readonly localRoot: string;
   private readonly s3: S3Client | null;
 
-  constructor(private readonly config: ConfigService) {
+  constructor(config: ConfigService) {
     const enabled = config.get<boolean>('RECEIPT_PDF_ENABLED', true);
     this.provider = config.get<'local' | 's3'>('RECEIPT_STORAGE_PROVIDER', 'local');
     this.bucket = config.get<string>('RECEIPT_STORAGE_BUCKET', '');

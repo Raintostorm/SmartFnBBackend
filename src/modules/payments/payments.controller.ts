@@ -11,7 +11,6 @@ import {
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
-  ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
@@ -28,14 +27,12 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { Roles } from '../auth/decorators/roles.decorator.js';
 import {
   ConfirmPaymentDto,
-  CreateTableSessionPaymentDto,
   PaymentListQueryDto,
   PaymentListResponseDto,
   PaymentResponseDto,
   RefundListQueryDto,
 } from './dto/payment.dto.js';
 import { PaymentsService } from './payments.service.js';
-import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
 import { PaidOrderRefundService } from './paid-order-refund.service.js';
 import { CompleteRefundDto } from '../branch-manager/manager.dto.js';
 
@@ -46,7 +43,6 @@ import { CompleteRefundDto } from '../branch-manager/manager.dto.js';
 export class PaymentsController {
   constructor(
     private readonly service: PaymentsService,
-    private readonly realtime: RealtimePublisher,
     private readonly refunds: PaidOrderRefundService,
   ) {}
 
@@ -65,31 +61,6 @@ export class PaymentsController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.service.list(branchId, query, user);
-  }
-
-  @Roles(AppRole.MANAGER, AppRole.CASHIER)
-  @Post('table-sessions/:tableSessionId/payments')
-  @ApiOperation({
-    summary: 'Create a pending payment for a table session',
-    description:
-      'Validates the open session and remaining balance before recording a pending payment.',
-  })
-  @ApiUuidPath('tableSessionId', 'Open table session to pay')
-  @ApiCreatedResponse({ type: PaymentResponseDto })
-  @ApiStandardMutationErrors({
-    notFound: 'Open table session not found',
-    conflict: 'Session already paid',
-  })
-  async createForTableSession(
-    @Param('tableSessionId', new ParseUUIDPipe()) tableSessionId: string,
-    @Body() dto: CreateTableSessionPaymentDto,
-    @CurrentUser() user: AuthenticatedUser,
-  ) {
-    const result = await this.service.createForTableSession(tableSessionId, dto, user);
-    const branchId = result.tableSession?.branchId ?? result.order?.branchId;
-    if (branchId)
-      this.realtime.branch(branchId, 'payment.created', { id: result.id, status: result.status });
-    return result;
   }
 
   @Roles(AppRole.MANAGER)
