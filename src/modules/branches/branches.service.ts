@@ -757,6 +757,7 @@ export class BranchesService {
   private getVisibleAreaTypes(role: AppRole): BranchAreaType[] {
     switch (role) {
       case AppRole.ADMIN:
+      case AppRole.PLATFORM_STAFF:
         throw new ForbiddenException('Platform ADMIN cannot access restaurant operations');
       case AppRole.OWNER:
       case AppRole.MANAGER:

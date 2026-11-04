@@ -10,6 +10,11 @@ type SetupPayload = {
   daysRemaining?: number;
   trialEndsAt?: string;
   role?: string;
+  planName?: string;
+  checkoutUrl?: string;
+  amount?: number;
+  representativeName?: string;
+  rejectionReason?: string;
   setupToken?: string;
   setupPath?: string;
   expiresAt?: string;
@@ -36,8 +41,14 @@ export class EmailOutboxService {
     const setupPath = `/${String(payload.setupPath ?? '/setup-password').replace(/^\/+/, '')}`;
     const setupUrl = `${publicWebUrl}${setupPath}?token=${encodeURIComponent(payload.setupToken ?? '')}`;
     const html =
-      message.template === 'TRIAL_EXPIRING'
+      message.template === 'REGISTRATION_ACTIVATION'
+        ? this.activationHtml(payload, setupUrl)
+        : message.template === 'PLATFORM_INVOICE'
+        ? this.platformInvoiceHtml(payload)
+        : message.template === 'TRIAL_EXPIRING'
         ? this.trialExpiringHtml(payload, `${publicWebUrl}/owner/plan`)
+        : message.template === 'REGISTRATION_APPLICATION_REJECTED'
+        ? this.registrationRejectedHtml(payload)
         : this.setupHtml(payload, setupUrl);
     try {
       const response = await fetch('https://api.resend.com/emails', {
@@ -86,6 +97,22 @@ export class EmailOutboxService {
     const branch = payload.branchName ? ` tại ${this.escape(payload.branchName)}` : '';
     const expiresAt = payload.expiresAt ? new Date(payload.expiresAt).toLocaleString('vi-VN') : '';
     return `<p>Xin chào ${name},</p><p>Tài khoản Smart F&B${branch} đã được tạo.</p><p><a href="${this.escape(setupUrl)}">Đặt mật khẩu</a></p><p>Liên kết chỉ dùng một lần${expiresAt ? ` và hết hạn lúc ${this.escape(expiresAt)}` : ''}.</p>`;
+  }
+
+  private activationHtml(payload: SetupPayload, activationUrl: string): string {
+    const business = this.escape(payload.businessName ?? 'doanh nghiệp');
+    const plan = this.escape(payload.planName ?? 'gói đã duyệt');
+    const expiry = payload.expiresAt ? new Date(payload.expiresAt).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }) : '';
+    return `<p>Hồ sơ ${business} đã được duyệt với ${plan}.</p><p><a href="${this.escape(activationUrl)}">Chọn dùng thử hoặc thanh toán để kích hoạt</a></p><p>Liên kết chỉ dùng một lần${expiry ? `, hết hạn lúc ${this.escape(expiry)}` : ''}. Tài khoản Owner được cấp sau khi kích hoạt.</p>`;
+  }
+
+  private platformInvoiceHtml(payload: SetupPayload): string {
+    const amount = Number(payload.amount ?? 0).toLocaleString('vi-VN');
+    return `<p>Hóa đơn thuê bao Smart F&B: ${this.escape(amount)} ₫.</p><p><a href="${this.escape(payload.checkoutUrl ?? '')}">Thanh toán qua PayOS</a></p><p>Liên kết thanh toán có thời hạn 15 phút. Hệ thống chỉ gia hạn khi PayOS xác nhận đúng số tiền.</p>`;
+  }
+
+  private registrationRejectedHtml(payload: SetupPayload): string {
+    return `<p>Xin chào ${this.escape(payload.representativeName ?? '')},</p><p>Hồ sơ đăng ký ${this.escape(payload.businessName ?? 'doanh nghiệp')} chưa được chấp thuận.</p><p>Lý do: ${this.escape(payload.rejectionReason ?? '')}</p><p>Vui lòng liên hệ bộ phận hỗ trợ nếu cần thêm thông tin.</p>`;
   }
 
   private trialExpiringHtml(payload: SetupPayload, planUrl: string): string {

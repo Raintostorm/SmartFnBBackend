@@ -8,6 +8,7 @@ import { Public } from '../auth/decorators/public.decorator.js';
 import { Roles } from '../auth/decorators/roles.decorator.js';
 import { PlatformBillingService } from './platform-billing.service.js';
 import { StartCheckoutDto } from './dto/start-checkout.dto.js';
+import { PlatformSupportNoteDto } from '../platform-admin/dto/platform-admin.dto.js';
 
 @ApiTags('Platform subscription billing')
 @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
@@ -64,4 +65,21 @@ export class PlatformBillingAdminController {
   confirmWebhook() {
     return this.billing.confirmWebhook();
   }
+}
+
+@ApiTags('Platform staff')
+@ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
+@Roles(AppRole.PLATFORM_STAFF)
+@Controller('platform-staff/businesses/:chainId/billing')
+export class PlatformBillingStaffController {
+  constructor(private readonly billing: PlatformBillingService) {}
+
+  @Get()
+  getBilling(@Param('chainId', new ParseUUIDPipe()) chainId: string) { return this.billing.getBusinessBilling(chainId); }
+
+  @Post('resend-invoice')
+  resendInvoice(@Param('chainId', new ParseUUIDPipe()) chainId: string, @Body() dto: PlatformSupportNoteDto, @CurrentUser() user: AuthenticatedUser) { return this.billing.resendInvoice(chainId, dto.note, user.id); }
+
+  @Post('checkouts/:checkoutId/recheck')
+  recheck(@Param('chainId', new ParseUUIDPipe()) chainId: string, @Param('checkoutId', new ParseUUIDPipe()) checkoutId: string, @Body() dto: PlatformSupportNoteDto, @CurrentUser() user: AuthenticatedUser) { return this.billing.recheckPayment(chainId, checkoutId, dto.note, user.id); }
 }

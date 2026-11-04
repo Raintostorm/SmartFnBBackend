@@ -21,10 +21,12 @@ import type {
 } from './auth.interfaces.js';
 import type { LoginDto } from './dto/login.dto.js';
 import type { SetupPasswordDto } from './dto/setup-password.dto.js';
+import type { ChangePasswordDto } from './dto/change-password.dto.js';
 import { PasswordService } from './password.service.js';
 
 // Roles onboarded or recovered through a one-time setup link rather than a password reset form.
 const PASSWORD_SETUP_ROLES: readonly AppRole[] = [
+  AppRole.PLATFORM_STAFF,
   AppRole.OWNER,
   AppRole.MANAGER,
   AppRole.CASHIER,
@@ -148,7 +150,7 @@ export class AuthService {
       ) {
         throw new UnauthorizedException('Account or invitation is no longer available');
       }
-      if (current.role.code !== AppRole.OWNER) {
+      if (current.role.code !== AppRole.OWNER && current.role.code !== AppRole.PLATFORM_STAFF) {
         const employee = current.employee;
         const branch = employee?.branch;
         const chain = branch?.chain;
@@ -186,6 +188,8 @@ export class AuthService {
           staffInvitationState:
             current.staffInvitationState === 'PENDING' ? 'ACCEPTED' : current.staffInvitationState,
           emailVerifiedAt: now,
+          mustChangePassword: false,
+          temporaryPasswordExpiresAt: null,
         },
       });
       await transaction.authSession.updateMany({
@@ -220,9 +224,23 @@ export class AuthService {
     }
 
     this.assertUserCanAuthenticate(user);
+    if (user.temporaryPasswordExpiresAt && user.mustChangePassword && user.temporaryPasswordExpiresAt <= new Date()) throw new UnauthorizedException('Temporary password expired; ask an Admin to reset it');
     await this.usersService.updateLastLogin(user.id);
 
     return this.createSession(user, metadata);
+  }
+
+  async changePassword(userId: string, dto: ChangePasswordDto): Promise<{ message: string }> {
+    const user = await this.usersService.findByIdForAuth(userId);
+    this.assertUserCanAuthenticate(user);
+    if (!(await this.passwordService.verify(user.passwordHash, dto.currentPassword))) throw new UnauthorizedException('Current password is incorrect');
+    if (user.mustChangePassword && user.temporaryPasswordExpiresAt && user.temporaryPasswordExpiresAt <= new Date()) throw new UnauthorizedException('Temporary password expired');
+    const passwordHash = await this.passwordService.hash(dto.newPassword);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({ where: { id: userId }, data: { passwordHash, mustChangePassword: false, temporaryPasswordExpiresAt: null } });
+      await tx.authSession.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date() } });
+    });
+    return { message: 'Password changed; log in again' };
   }
 
   async refresh(refreshToken: string): Promise<AuthResponse> {
@@ -367,6 +385,7 @@ export class AuthService {
       branchId: user.employee?.branchId ?? null,
       chainId: user.employee?.branch?.chainId ?? null,
       chainIds: user.owner?.chainAssignments?.map(({ chainId }) => chainId) ?? [],
+      mustChangePassword: user.mustChangePassword,
     };
   }
 
@@ -473,6 +492,7 @@ export class AuthService {
       phone: user.phone,
       status: user.status,
       role: this.getAppRole(user),
+      mustChangePassword: user.mustChangePassword,
       employee: user.employee,
       owner: user.owner,
     };

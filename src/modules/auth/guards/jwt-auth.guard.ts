@@ -2,6 +2,7 @@ import {
   type CanActivate,
   type ExecutionContext,
   Injectable,
+  ForbiddenException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
@@ -35,6 +36,9 @@ export class JwtAuthGuard implements CanActivate {
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const token = this.extractBearerToken(request.headers.authorization);
     request.user = await this.authService.authenticateAccessToken(token);
+    if (request.user.mustChangePassword && !['/auth/me', '/auth/change-password'].some((path) => request.path?.endsWith(path))) {
+      throw new ForbiddenException('Change your temporary password before using the system');
+    }
 
     return true;
   }

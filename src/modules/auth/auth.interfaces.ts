@@ -12,6 +12,7 @@ export interface JwtPayload {
 }
 
 export interface AuthenticatedUser {
+  mustChangePassword: boolean;
   id: string;
   email: string;
   phone: string | null;
@@ -34,6 +35,7 @@ export interface RequestMetadata {
 }
 
 export interface AuthUserView {
+  mustChangePassword: boolean;
   id: string;
   email: string;
   phone: string | null;

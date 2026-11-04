@@ -34,4 +34,9 @@ describe('RolesGuard', () => {
     const context = createContext(AppRole.WAITER, [AppRole.ADMIN]);
     assert.throws(() => guard.canActivate(context), /permission/i);
   });
+
+  it('lets Admin inherit Platform Staff permissions, but not the reverse', () => {
+    assert.equal(guard.canActivate(createContext(AppRole.ADMIN, [AppRole.PLATFORM_STAFF])), true);
+    assert.throws(() => guard.canActivate(createContext(AppRole.PLATFORM_STAFF, [AppRole.ADMIN])), /permission/i);
+  });
 });

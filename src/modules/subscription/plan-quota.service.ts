@@ -16,6 +16,7 @@ export interface SubscriptionSnapshot {
   status: BusinessSubscriptionStatus;
   expiresAt: Date;
   plan: PlanSummary;
+  nextPlan: PlanSummary | null;
   quotas: QuotaUsage[];
 }
 
@@ -129,7 +130,7 @@ export class PlanQuotaService {
   async getSubscriptionSnapshot(chainId: string): Promise<SubscriptionSnapshot | null> {
     const subscription = await this.prisma.businessSubscription.findUnique({
       where: { chainId },
-      select: { status: true, expiresAt: true, plan: { select: planSelect } },
+      select: { status: true, expiresAt: true, plan: { select: planSelect }, nextPlan: { select: planSelect } },
     });
     if (!subscription) return null;
 
@@ -144,6 +145,7 @@ export class PlanQuotaService {
       status,
       expiresAt: subscription.expiresAt,
       plan: subscription.plan,
+      nextPlan: subscription.nextPlan,
       quotas: resources.map((resource) =>
         this.toUsage(resource, usage[resource], subscription.plan),
       ),

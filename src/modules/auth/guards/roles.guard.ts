@@ -5,7 +5,7 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import type { AppRole } from '../app-role.enum.js';
+import { AppRole } from '../app-role.enum.js';
 import { ROLES_KEY } from '../auth.constants.js';
 import type { AuthenticatedRequest } from '../auth.interfaces.js';
 
@@ -25,7 +25,7 @@ export class RolesGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
 
-    if (!request.user || !requiredRoles.includes(request.user.role)) {
+    if (!request.user || (!requiredRoles.includes(request.user.role) && !(request.user.role === AppRole.ADMIN && requiredRoles.includes(AppRole.PLATFORM_STAFF)))) {
       throw new ForbiddenException('You do not have permission to access this resource');
     }
 

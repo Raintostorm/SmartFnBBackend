@@ -181,4 +181,26 @@ describe('Platform subscription PayOS checkout', () => {
     assert.deepEqual(await service.webhook(payload), { success: true });
     assert.equal(events, 1);
   });
+
+  it('renews a paid business on the scheduled plan only after verified payment', async () => {
+    const checkout = { id: 'renewal-1', providerOrderCode: '789', chainId: 'chain-1', planId: 'standard-id', amount: new Prisma.Decimal(499000), status: 'PENDING' };
+    const currentExpiry = new Date(Date.now() + 2 * 86_400_000);
+    let updated;
+    let checkoutStatus = 'PENDING';
+    const tx = {
+      $queryRaw: async () => [],
+      subscriptionCheckout: { findUniqueOrThrow: async () => ({ ...checkout, status: checkoutStatus }), update: async ({ data }) => { checkoutStatus = data.status; } },
+      businessSubscription: { findUnique: async () => ({ id: 'sub-paid', chainId: 'chain-1', planId: 'basic-id', nextPlanId: 'standard-id', plan: { code: 'BASIC' }, status: 'ACTIVE', monthlyPrice: new Prisma.Decimal(299000), expiresAt: currentExpiry, trialStartedAt: null, trialConvertedAt: null }), update: async ({ data }) => { updated = data; } },
+      businessSubscriptionEvent: { create: async () => ({}) },
+    };
+    const prisma = { subscriptionCheckout: { findUnique: async () => checkout }, $transaction: async (work) => work(tx) };
+    const service = new PlatformBillingService(prisma, config, access, {});
+    const data = { orderCode: 789, amount: 499000 };
+    await service.webhook({ code: '00', success: true, data, signature: payosSignature(data, 'platform-checksum') });
+    assert.equal(updated.planId, 'standard-id');
+    assert.equal(updated.nextPlanId, null);
+    assert.equal(updated.startsAt.getTime(), currentExpiry.getTime());
+    assert.ok(updated.expiresAt > currentExpiry);
+    assert.equal(checkoutStatus, 'PAID');
+  });
 });

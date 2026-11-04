@@ -26,9 +26,11 @@ import { Roles } from '../auth/decorators/roles.decorator.js';
 import {
   ApproveRegistrationApplicationDto,
   ChangeSubscriptionPlanDto,
+  ChangeApprovedPlanDto,
   CreateServicePlanDto,
   ListRegistrationApplicationsQueryDto,
   PaginationQueryDto,
+  PlatformSupportNoteDto,
   RejectRegistrationApplicationDto,
   RenewSubscriptionDto,
   SubscriptionStatusReasonDto,
@@ -70,6 +72,16 @@ export class PlatformAdminController {
     @CurrentUser() admin: AuthenticatedUser,
   ) {
     return this.platformAdminService.approveRegistrationApplication(id, dto, admin.id);
+  }
+
+  @Post('registration-applications/:id/change-approved-plan')
+  changeApprovedPlan(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: ChangeApprovedPlanDto, @CurrentUser() admin: AuthenticatedUser) {
+    return this.platformAdminService.changeApprovedPlan(id, dto.planId, dto.note, admin.id);
+  }
+
+  @Post('registration-applications/:id/resend-activation')
+  resendActivation(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: PlatformSupportNoteDto, @CurrentUser() admin: AuthenticatedUser) {
+    return this.platformAdminService.resendActivation(id, dto.note, admin.id);
   }
 
   @Post('registration-applications/:id/reject')

@@ -18,6 +18,8 @@ import {
 import { PrismaService } from '../../database/prisma.service.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
+import { EmailOutboxService } from '../email/email-outbox.service.js';
+import { PlatformAdminService } from '../platform-admin/platform-admin.service.js';
 import { PayosApiService, type PayosCredentials } from '../payos/payos-api.service.js';
 import { verifyPayosSignature } from '../payos/payos-signature.js';
 
@@ -36,6 +38,8 @@ export class PlatformBillingService {
     private readonly config: ConfigService,
     private readonly access: BranchAccessService,
     private readonly payos: PayosApiService,
+    private readonly registrations: PlatformAdminService,
+    private readonly emails: EmailOutboxService,
   ) {}
 
   async createCheckout(user: AuthenticatedUser, chainId: string, planId: string) {
@@ -45,13 +49,10 @@ export class PlatformBillingService {
       this.prisma.servicePlan.findUnique({ where: { id: planId } }),
     ]);
     if (!subscription) throw new NotFoundException('Business subscription not found');
-    if (
-      subscription.plan.code !== 'TRIAL' ||
-      !subscription.trialStartedAt ||
-      subscription.trialConvertedAt
-    ) {
-      throw new ConflictException('This checkout is only available for a trial business');
-    }
+    const isTrial = subscription.plan.code === 'TRIAL' && !!subscription.trialStartedAt && !subscription.trialConvertedAt;
+    if (!isTrial && (subscription.plan.code === 'TRIAL' || subscription.status !== BusinessSubscriptionStatus.ACTIVE)) throw new ConflictException('Subscription cannot be renewed');
+    if (!isTrial && planId !== (subscription.nextPlanId ?? subscription.planId)) throw new ConflictException('Checkout must use the scheduled next plan');
+    if (!isTrial && subscription.expiresAt.getTime() - Date.now() > 7 * 24 * 60 * 60_000) throw new ConflictException('Renewal opens 7 days before expiry');
     if (subscription.status === BusinessSubscriptionStatus.SUSPENDED) {
       throw new ConflictException('A suspended business cannot start checkout');
     }
@@ -100,12 +101,18 @@ export class PlatformBillingService {
         cancelUrl: `${webUrl}/owner/plan?checkout=${checkout.id}&cancelled=1`,
         expiredAt: Math.floor(Date.now() / 1000) + 15 * 60,
       });
-      return this.view(
-        await this.prisma.subscriptionCheckout.update({
+      const ready = await this.prisma.subscriptionCheckout.update({
           where: { id: checkout.id },
           data: { checkoutUrl: created.checkoutUrl, paymentLinkId: created.paymentLinkId },
-        }),
-      );
+        });
+      try {
+        const ownerEmail = await this.prisma.user.findUnique({ where: { id: user.id }, select: { email: true } });
+        if (ownerEmail) {
+          const invoice = await this.prisma.emailOutbox.create({ data: { recipient: ownerEmail.email, subject: 'Hóa đơn gói Smart F&B', template: 'PLATFORM_INVOICE', payload: { checkoutUrl: created.checkoutUrl, amount, expiresAt: new Date(Date.now() + 15 * 60_000).toISOString() } } });
+          await this.emails.deliver(invoice.id);
+        }
+      } catch (error) { this.logger.warn(`Platform invoice email could not be queued for checkout ${ready.id}: ${String(error)}`); }
+      return this.view(ready);
     } catch (error) {
       await this.prisma.subscriptionCheckout.update({
         where: { id: checkout.id },
@@ -145,15 +152,64 @@ export class PlatformBillingService {
     const checkout = await this.prisma.subscriptionCheckout.findUnique({
       where: { providerOrderCode: String(data.orderCode) },
     });
-    if (!checkout || payload.code !== '00' || payload.success !== true) return { success: true };
-    const result = await this.prisma.$transaction(
+    if (!checkout || payload.code !== '00' || payload.success !== true) {
+      if (!checkout && payload.code === '00' && payload.success === true) {
+        await this.registrations.completePaidActivation(String(data.orderCode), data.amount ?? -1);
+      }
+      return { success: true };
+    }
+    const result = await this.settleCheckout(checkout.id, checkout.providerOrderCode, data.amount);
+    if (result === 'review') this.logger.error(`Platform checkout ${checkout.id} was paid but requires manual reconciliation`);
+    return { success: true };
+  }
+
+  async getBusinessBilling(chainId: string) {
+    const subscription = await this.prisma.businessSubscription.findUnique({ where: { chainId }, select: { id: true, planId: true, nextPlanId: true, expiresAt: true, status: true } });
+    if (!subscription) throw new NotFoundException('Business subscription not found');
+    const checkouts = await this.prisma.subscriptionCheckout.findMany({ where: { chainId }, select: { id: true, planId: true, amount: true, status: true, createdAt: true, paidAt: true, reviewReason: true, checkoutUrl: true }, orderBy: { createdAt: 'desc' }, take: 20 });
+    return { subscription, checkouts };
+  }
+
+  async resendInvoice(chainId: string, note: string, actorUserId: string) {
+    const checkout = await this.prisma.subscriptionCheckout.findFirst({ where: { chainId, status: SubscriptionCheckoutStatus.PENDING, checkoutUrl: { not: null } }, orderBy: { createdAt: 'desc' } });
+    if (!checkout?.checkoutUrl) throw new ConflictException('No pending platform invoice to resend');
+    if (Date.now() - checkout.createdAt.getTime() >= 15 * 60_000) throw new ConflictException('Payment link expired; Owner must create a new checkout');
+    const owner = await this.prisma.ownerChainAssignment.findFirst({ where: { chainId, owner: { deletedAt: null, user: { status: 'ACTIVE', deletedAt: null } } }, select: { owner: { select: { user: { select: { email: true } } } } } });
+    if (!owner) throw new NotFoundException('Active Owner email not found');
+    const email = await this.prisma.$transaction(async (tx) => {
+      await tx.platformSupportAction.create({ data: { actorUserId, chainId, action: 'RESEND_PLATFORM_INVOICE', note: note.trim(), details: { checkoutId: checkout.id } } });
+      return tx.emailOutbox.create({ data: { recipient: owner.owner.user.email, subject: 'Hóa đơn gói Smart F&B', template: 'PLATFORM_INVOICE', payload: { checkoutUrl: checkout.checkoutUrl, amount: Number(checkout.amount), expiresAt: new Date(checkout.createdAt.getTime() + 15 * 60_000).toISOString() } } });
+    });
+    const emailStatus = await this.emails.deliver(email.id);
+    return { checkoutId: checkout.id, emailStatus };
+  }
+
+  async recheckPayment(chainId: string, checkoutId: string, note: string, actorUserId: string) {
+    const checkout = await this.prisma.subscriptionCheckout.findFirst({ where: { id: checkoutId, chainId } });
+    if (!checkout) throw new NotFoundException('Platform checkout not found');
+    const provider = await this.payos.getPayment(this.credentials(), checkout.paymentLinkId ?? checkout.providerOrderCode);
+    if (provider.orderCode !== Number(checkout.providerOrderCode)) throw new ConflictException('PayOS order code mismatch');
+    let outcome: string = 'pending';
+    if (provider.status === 'PAID') {
+      outcome = await this.settleCheckout(checkout.id, checkout.providerOrderCode, provider.amountPaid ?? -1);
+    }
+    await this.prisma.platformSupportAction.create({ data: { actorUserId, chainId, action: 'RECHECK_PLATFORM_PAYMENT', note: note.trim(), details: { checkoutId, providerStatus: provider.status ?? null, outcome } } });
+    return { outcome, checkout: await this.prisma.subscriptionCheckout.findUniqueOrThrow({ where: { id: checkoutId }, select: { id: true, status: true, paidAt: true, reviewReason: true } }) };
+  }
+
+  private async settleCheckout(checkoutId: string, orderCode: string, amount: number | undefined): Promise<string> {
+    return this.prisma.$transaction(
       async (tx) => {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${checkout.providerOrderCode}))`;
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${orderCode}))`;
         const fresh = await tx.subscriptionCheckout.findUniqueOrThrow({
-          where: { id: checkout.id },
+          where: { id: checkoutId },
         });
         if (fresh.status === SubscriptionCheckoutStatus.PAID || fresh.status === SubscriptionCheckoutStatus.NEEDS_REVIEW) return 'duplicate';
-        if (typeof data.amount !== 'number' || !Number.isSafeInteger(data.amount) || !fresh.amount.equals(data.amount)) {
+        if (fresh.status !== SubscriptionCheckoutStatus.PENDING) {
+          await tx.subscriptionCheckout.update({ where: { id: fresh.id }, data: { status: SubscriptionCheckoutStatus.NEEDS_REVIEW, paidAt: new Date(), reviewReason: 'CHECKOUT_INVALIDATED_BEFORE_PAYMENT' } });
+          return 'review';
+        }
+        if (typeof amount !== 'number' || !Number.isSafeInteger(amount) || !fresh.amount.equals(amount)) {
           await tx.subscriptionCheckout.update({ where: { id: fresh.id }, data: { status: SubscriptionCheckoutStatus.NEEDS_REVIEW, paidAt: new Date(), reviewReason: 'SIGNED_AMOUNT_MISMATCH' } });
           return 'review';
         }
@@ -161,26 +217,30 @@ export class PlatformBillingService {
           where: { chainId: fresh.chainId },
           include: { plan: true },
         });
-        if (!subscription || subscription.plan.code !== 'TRIAL' || subscription.trialConvertedAt) {
-          await tx.subscriptionCheckout.update({ where: { id: fresh.id }, data: { status: SubscriptionCheckoutStatus.NEEDS_REVIEW, paidAt: new Date(), reviewReason: 'TRIAL_ALREADY_CONVERTED' } });
+        const isTrial = subscription?.plan.code === 'TRIAL' && !!subscription.trialStartedAt && !subscription.trialConvertedAt;
+        const expectedPlanId = isTrial ? fresh.planId : (subscription?.nextPlanId ?? subscription?.planId);
+        if (!subscription || expectedPlanId !== fresh.planId || subscription.status !== BusinessSubscriptionStatus.ACTIVE) {
+          await tx.subscriptionCheckout.update({ where: { id: fresh.id }, data: { status: SubscriptionCheckoutStatus.NEEDS_REVIEW, paidAt: new Date(), reviewReason: 'SUBSCRIPTION_STATE_CHANGED' } });
           return 'review';
         }
         const now = new Date();
+        const periodStart = isTrial ? now : subscription.expiresAt > now ? subscription.expiresAt : now;
         await tx.businessSubscription.update({
           where: { id: subscription.id },
           data: {
             planId: fresh.planId,
             monthlyPrice: fresh.amount,
             status: BusinessSubscriptionStatus.ACTIVE,
-            startsAt: now,
-            expiresAt: this.addMonth(now),
-            trialConvertedAt: now,
+            startsAt: periodStart,
+            expiresAt: this.addMonth(periodStart),
+            trialConvertedAt: isTrial ? now : subscription.trialConvertedAt,
+            nextPlanId: null,
           },
         });
         await tx.businessSubscriptionEvent.create({
           data: {
             subscriptionId: subscription.id,
-            type: SubscriptionEventType.UPGRADED,
+            type: isTrial ? SubscriptionEventType.UPGRADED : fresh.planId === subscription.planId ? SubscriptionEventType.RENEWED : Number(fresh.amount) > Number(subscription.monthlyPrice) ? SubscriptionEventType.UPGRADED : SubscriptionEventType.DOWNGRADED,
             fromPlanId: subscription.planId,
             toPlanId: fresh.planId,
             effectiveAt: now,
@@ -195,8 +255,6 @@ export class PlatformBillingService {
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
-    if (result === 'review') this.logger.error(`Platform checkout ${checkout.id} was paid but requires manual reconciliation`);
-    return { success: true };
   }
 
   private credentials(): PayosCredentials {

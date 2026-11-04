@@ -21,6 +21,7 @@ import {
 import { LoginDto } from './dto/login.dto.js';
 import { RefreshTokenDto } from './dto/refresh-token.dto.js';
 import { SetupPasswordDto } from './dto/setup-password.dto.js';
+import { ChangePasswordDto } from './dto/change-password.dto.js';
 
 @ApiTags('Authentication')
 @Controller('auth')
@@ -32,12 +33,19 @@ export class AuthController {
   @Post('setup-password')
   @ApiOperation({
     summary: 'Set or reset a staff password using a one-time email token',
-    description: 'Supports OWNER, MANAGER, CASHIER, and BARISTA invitation/reset links.',
+    description: 'Supports PLATFORM_STAFF, OWNER, MANAGER, CASHIER, and BARISTA invitation/reset links.',
   })
   @ApiOkResponse({ type: MessageResponseDto })
   @ApiUnauthorizedResponse({ description: 'Setup token is invalid or expired' })
   setupPassword(@Body() dto: SetupPasswordDto): Promise<{ message: string }> {
     return this.authService.setupPassword(dto);
+  }
+
+  @Post('change-password')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
+  changePassword(@CurrentUser() user: AuthenticatedUser, @Body() dto: ChangePasswordDto) {
+    return this.authService.changePassword(user.id, dto);
   }
 
   @Public()

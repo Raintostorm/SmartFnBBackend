@@ -44,4 +44,11 @@ describe('JwtAuthGuard', () => {
     const context = createContext('http', { headers: {} }, true);
     assert.equal(await guard.canActivate(context), true);
   });
+
+  it('requires temporary-password users to change it before using protected APIs', async () => {
+    const forced = new JwtAuthGuard(new Reflector(), { authenticateAccessToken: async () => ({ id: 'staff', mustChangePassword: true }) });
+    await assert.rejects(() => forced.canActivate(createContext('http', { path: '/api/v1/platform-staff/businesses', headers: { authorization: 'Bearer abc' } })), /Change your temporary password/);
+    assert.equal(await forced.canActivate(createContext('http', { path: '/api/v1/auth/change-password', headers: { authorization: 'Bearer abc' } })), true);
+    assert.equal(await forced.canActivate(createContext('http', { path: '/api/v1/auth/me', headers: { authorization: 'Bearer abc' } })), true);
+  });
 });

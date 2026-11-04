@@ -2,7 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import { IsString, Matches, MaxLength, MinLength } from 'class-validator';
 
 export class SetupPasswordDto {
-  @ApiProperty({ description: 'One-time token received in the Owner setup email' })
+  @ApiProperty({ description: 'One-time token received in the account setup email' })
   @IsString()
   @MinLength(32)
   @MaxLength(200)

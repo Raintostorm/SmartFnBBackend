@@ -24,25 +24,11 @@ describe('Owner approval email', () => {
     assert.equal(env.EMAIL_FROM, 'Smart FnB <no-reply@mail.smartfnb.tech>');
   });
 
-  it('sends only after approval commits and includes the FE setup path', async () => {
+  it('sends activation link only after approval commits, without provisioning a business', async () => {
     let committed = false;
     let emailId;
     let payload;
-    let subscriptionData;
     const transaction = {
-      restaurantChain: { create: async () => ({ id: 'chain-1' }) },
-      user: { create: async ({ data }) => ({ id: 'owner-user-1', email: data.email }) },
-      owner: { create: async () => ({ id: 'owner-1' }) },
-      ownerChainAssignment: { create: async () => ({}) },
-      businessBranding: { create: async () => ({}) },
-      businessSubscription: {
-        create: async ({ data }) => {
-          subscriptionData = data;
-          return { id: 'subscription-1' };
-        },
-      },
-      businessSubscriptionEvent: { create: async () => ({}) },
-      passwordSetupToken: { create: async () => ({}) },
       emailOutbox: {
         create: async ({ data }) => {
           payload = data.payload;
@@ -50,7 +36,7 @@ describe('Owner approval email', () => {
           return { id: emailId };
         },
       },
-      registrationApplication: { update: async () => ({}) },
+      registrationApplication: { updateMany: async ({ data }) => { assert.equal(data.status, 'APPROVED'); assert.equal(data.approvedPlanId, 'basic'); return { count: 1 }; } },
     };
     const prisma = {
       registrationApplication: {
@@ -60,7 +46,7 @@ describe('Owner approval email', () => {
             : {
                 id: 'application-1',
                 status: 'PENDING',
-                requestedPlanId: null,
+            requestedPlanId: 'basic',
                 representativeEmail: 'owner@example.com',
                 representativePhone: '0900000000',
                 representativeName: 'Test Owner',
@@ -70,8 +56,8 @@ describe('Owner approval email', () => {
               },
       },
       servicePlan: {
-        findUnique: async () => ({
-          id: 'basic',
+        findFirst: async () => ({
+          id: 'basic', code: 'BASIC', name: 'Basic', monthlyPrice: 299000,
           isActive: true,
           maxBranches: 2,
           maxAccounts: 10,
@@ -79,9 +65,7 @@ describe('Owner approval email', () => {
           brandingEnabled: false,
           multiBranchComparisonEnabled: false,
         }),
-        upsert: async ({ create }) => ({ id: 'trial', monthlyPrice: 0, ...create }),
       },
-      role: { findUnique: async () => ({ id: 'owner-role' }) },
       user: { count: async () => 0 },
       $transaction: async (work) => {
         const result = await work(transaction);
@@ -104,15 +88,9 @@ describe('Owner approval email', () => {
     );
     assert.equal(result.status, 'APPROVED');
     assert.equal(payload.employeeName, 'Test Owner');
-    assert.equal(payload.setupPath, '/setup-password');
+    assert.equal(payload.setupPath, '/activate');
     assert.ok(payload.setupToken);
-    assert.equal(subscriptionData.planId, 'trial');
-    assert.equal(subscriptionData.trialStartedAt, subscriptionData.startsAt);
-    assert.equal(subscriptionData.trialEndsAt, subscriptionData.expiresAt);
-    assert.equal(
-      subscriptionData.expiresAt.getTime() - subscriptionData.startsAt.getTime(),
-      14 * 86_400_000,
-    );
+    assert.equal(payload.planName, 'Basic');
   });
 
   it('sends a one-time setup link through Resend and marks outbox SENT', async () => {
@@ -204,5 +182,20 @@ describe('Owner approval email', () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it('renders rejection reason without a password setup link', async () => {
+    const originalFetch = globalThis.fetch;
+    let sent;
+    globalThis.fetch = async (_url, options) => { sent = JSON.parse(options.body); return { ok: true }; };
+    try {
+      const email = new EmailOutboxService(
+        { emailOutbox: { findUnique: async () => ({ id: 'rejection', status: 'PENDING', template: 'REGISTRATION_APPLICATION_REJECTED', recipient: 'owner@example.com', subject: 'Result', payload: { representativeName: 'Owner', businessName: 'Cafe', rejectionReason: 'Thiếu thông tin' } }), update: async () => ({}) } },
+        { get: (name) => ({ EMAIL_API_KEY: 're_test', EMAIL_FROM: 'SmartFnB <test@example.com>', PUBLIC_WEB_URL: 'https://smartfnb.tech' })[name] },
+      );
+      assert.equal(await email.deliver('rejection'), 'SENT');
+      assert.match(sent.html, /Thiếu thông tin/);
+      assert.doesNotMatch(sent.html, /setup-password|token=/);
+    } finally { globalThis.fetch = originalFetch; }
   });
 });

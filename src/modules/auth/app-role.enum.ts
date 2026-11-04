@@ -1,5 +1,6 @@
 export enum AppRole {
   ADMIN = 'ADMIN',
+  PLATFORM_STAFF = 'PLATFORM_STAFF',
   OWNER = 'OWNER',
   MANAGER = 'MANAGER',
   WAITER = 'WAITER',

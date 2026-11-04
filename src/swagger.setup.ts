@@ -12,6 +12,8 @@ export const SWAGGER_TAGS = [
   ['Service plans - public', 'Danh sách gói dịch vụ công khai cho chủ doanh nghiệp.'],
   ['Restaurant chains - public', 'Danh sách chuỗi và chi nhánh đang hoạt động.'],
   ['Platform administration', 'Quản trị đăng ký doanh nghiệp, gói dịch vụ và thuê bao.'],
+  ['Platform staff', 'Hỗ trợ đăng ký và doanh nghiệp trong phạm vi Platform Staff.'],
+  ['Platform Staff accounts', 'Admin cấp, khóa và đặt lại mật khẩu Platform Staff.'],
   ['Platform subscription billing', 'Thanh toán nâng cấp gói SmartFnB và xác nhận webhook PayOS.'],
   ['Users', 'Quản lý trạng thái tài khoản.'],
   ['Restaurant chains - OWNER', 'OWNER quản lý chuỗi nhà hàng của mình.'],

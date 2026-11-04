@@ -111,6 +111,25 @@ export class RejectRegistrationApplicationDto {
   reason!: string;
 }
 
+export class PlatformSupportNoteDto {
+  @IsString()
+  @MinLength(3)
+  @MaxLength(1000)
+  note!: string;
+}
+
+export class ChangeApprovedPlanDto extends PlatformSupportNoteDto {
+  @IsUUID()
+  planId!: string;
+}
+
+export class ActivationTokenDto {
+  @IsString()
+  @MinLength(32)
+  @MaxLength(128)
+  token!: string;
+}
+
 export class CreateServicePlanDto {
   @ApiProperty({ example: 'PRO', maxLength: 50 })
   @Transform(({ value }: { value: unknown }) =>

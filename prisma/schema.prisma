@@ -238,6 +238,7 @@ enum AttendanceStatus {
 enum RegistrationApplicationStatus {
   PENDING
   APPROVED
+  ACTIVATED
   REJECTED
 }
 
@@ -297,6 +298,8 @@ model User {
   emailVerifiedAt DateTime?  @map("email_verified_at") @db.Timestamptz(6)
   lastLoginAt     DateTime?  @map("last_login_at") @db.Timestamptz(6)
   staffInvitationState String? @map("staff_invitation_state") @db.VarChar(20)
+  mustChangePassword Boolean @default(false) @map("must_change_password")
+  temporaryPasswordExpiresAt DateTime? @map("temporary_password_expires_at") @db.Timestamptz(6)
   roleId          String     @map("role_id") @db.Uuid
   createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -311,6 +314,7 @@ model User {
   approvedApplications      RegistrationApplication[]   @relation("RegistrationOwnerUser")
   subscriptionEvents        BusinessSubscriptionEvent[] @relation("SubscriptionChangedBy")
   passwordSetupTokens       PasswordSetupToken[]
+  platformSupportActions    PlatformSupportAction[] @relation("PlatformSupportActor")
 
   @@index([roleId])
   @@index([status])
@@ -357,6 +361,7 @@ model RestaurantChain {
   menuCategories          MenuCategory[]
   ownerAssignments        OwnerChainAssignment[]
   registrationApplication RegistrationApplication?
+  platformSupportActions PlatformSupportAction[]
   subscription            BusinessSubscription?
   subscriptionCheckouts   SubscriptionCheckout[]
   branding                BusinessBranding?
@@ -631,6 +636,10 @@ model RegistrationApplication {
   representativePhone String                        @map("representative_phone") @db.VarChar(20)
   headquartersAddress String?                       @map("headquarters_address") @db.VarChar(500)
   requestedPlanId     String?                       @map("requested_plan_id") @db.Uuid
+  approvedPlanId      String?                       @map("approved_plan_id") @db.Uuid
+  activationTokenHash String?                       @unique @map("activation_token_hash") @db.VarChar(64)
+  activationExpiresAt DateTime?                     @map("activation_expires_at") @db.Timestamptz(6)
+  activatedAt         DateTime?                     @map("activated_at") @db.Timestamptz(6)
   status              RegistrationApplicationStatus @default(PENDING)
   rejectionReason     String?                       @map("rejection_reason") @db.VarChar(1000)
   reviewedById        String?                       @map("reviewed_by_id") @db.Uuid
@@ -641,6 +650,9 @@ model RegistrationApplication {
   updatedAt           DateTime                      @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   requestedPlan ServicePlan?     @relation(fields: [requestedPlanId], references: [id], onDelete: SetNull)
+  approvedPlan  ServicePlan?     @relation("ApprovedRegistrationPlan", fields: [approvedPlanId], references: [id], onDelete: SetNull)
+  activationCheckouts RegistrationCheckout[]
+  supportActions PlatformSupportAction[]
   reviewedBy    User?            @relation("RegistrationReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
   approvedChain RestaurantChain? @relation(fields: [approvedChainId], references: [id], onDelete: SetNull)
   ownerUser     User?            @relation("RegistrationOwnerUser", fields: [ownerUserId], references: [id], onDelete: SetNull)
@@ -667,6 +679,9 @@ model ServicePlan {
   updatedAt                    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   applications  RegistrationApplication[]
+  approvedApplications RegistrationApplication[] @relation("ApprovedRegistrationPlan")
+  registrationCheckouts RegistrationCheckout[]
+  scheduledSubscriptions BusinessSubscription[] @relation("ScheduledSubscriptionPlan")
   subscriptions BusinessSubscription[]
   eventsFrom    BusinessSubscriptionEvent[] @relation("SubscriptionEventFromPlan")
   eventsTo      BusinessSubscriptionEvent[] @relation("SubscriptionEventToPlan")
@@ -675,10 +690,51 @@ model ServicePlan {
   @@map("service_plans")
 }
 
+model RegistrationCheckout {
+  id                String                     @id @default(uuid()) @db.Uuid
+  applicationId     String                     @map("application_id") @db.Uuid
+  planId            String                     @map("plan_id") @db.Uuid
+  providerOrderCode String                     @unique @map("provider_order_code") @db.VarChar(30)
+  amount            Decimal                    @db.Decimal(14, 2)
+  status            SubscriptionCheckoutStatus @default(PENDING)
+  checkoutUrl       String?                    @map("checkout_url") @db.Text
+  paymentLinkId     String?                    @map("payment_link_id") @db.VarChar(100)
+  paidAt            DateTime?                  @map("paid_at") @db.Timestamptz(6)
+  reviewReason      String?                    @map("review_reason") @db.VarChar(255)
+  createdAt         DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  application RegistrationApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  plan        ServicePlan             @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  @@index([applicationId, status, createdAt])
+  @@map("registration_checkouts")
+}
+
+model PlatformSupportAction {
+  id            String   @id @default(uuid()) @db.Uuid
+  actorUserId   String   @map("actor_user_id") @db.Uuid
+  applicationId String?  @map("application_id") @db.Uuid
+  chainId       String?  @map("chain_id") @db.Uuid
+  action        String   @db.VarChar(80)
+  note          String   @db.VarChar(1000)
+  details       Json?
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  actor       User                     @relation("PlatformSupportActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  application RegistrationApplication? @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+  chain       RestaurantChain?         @relation(fields: [chainId], references: [id], onDelete: SetNull)
+
+  @@index([applicationId, createdAt])
+  @@index([chainId, createdAt])
+  @@map("platform_support_actions")
+}
+
 model BusinessSubscription {
   id           String                     @id @default(uuid()) @db.Uuid
   chainId      String                     @unique @map("chain_id") @db.Uuid
   planId       String                     @map("plan_id") @db.Uuid
+  nextPlanId   String?                    @map("next_plan_id") @db.Uuid
   status       BusinessSubscriptionStatus @default(ACTIVE)
   monthlyPrice Decimal                    @map("monthly_price") @db.Decimal(14, 2)
   startsAt     DateTime                   @map("starts_at") @db.Timestamptz(6)
@@ -692,6 +748,7 @@ model BusinessSubscription {
 
   chain  RestaurantChain             @relation(fields: [chainId], references: [id], onDelete: Cascade)
   plan   ServicePlan                 @relation(fields: [planId], references: [id], onDelete: Restrict)
+  nextPlan ServicePlan? @relation("ScheduledSubscriptionPlan", fields: [nextPlanId], references: [id], onDelete: SetNull)
   events BusinessSubscriptionEvent[]
 
   @@index([status, expiresAt])
