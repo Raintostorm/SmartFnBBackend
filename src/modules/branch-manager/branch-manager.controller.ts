@@ -22,7 +22,7 @@ import { ManagerReportsService } from './manager-reports.service.js';
 import {
   ManagerAuditQueryDto,
   ManagerAvailabilityDto,
-  CancelPaidOrderDto,
+  CompleteRefundDto,
   ManagerCreateStaffDto,
   ManagerOrderQueryDto,
   ManagerReportQueryDto,
@@ -37,7 +37,7 @@ import { PaidOrderRefundService } from '../payments/paid-order-refund.service.js
 @Roles(AppRole.MANAGER)
 @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
 @ApiAuthenticatedOperation()
-@ApiTags('Branch Manager')
+@ApiTags('Store Manager')
 @Controller('manager')
 export class BranchManagerController {
   constructor(
@@ -193,18 +193,30 @@ export class BranchManagerController {
     return this.operations.order(user, id);
   }
 
-  @Post('orders/:orderId/cancel-paid')
-  @ApiOperation({
-    summary: 'BM-06: Cancel a paid or late-after-expiry order and record the external refund',
-    description:
-      'Cash is recorded as refunded immediately. Bank transfer creates a pending refund for an Owner or Manager to complete. No PayOS refund is called.',
-  })
-  cancelPaidOrder(
+  @Get('refund-approval-requests')
+  @ApiOperation({ summary: 'BM-06: View Cashier refund requests for your branch' })
+  listRefundApprovalRequests(@CurrentUser() user: AuthenticatedUser) {
+    return this.refunds.listRefundApprovalRequests(user);
+  }
+
+  @Post('refund-approval-requests/:requestId/approve')
+  @ApiOperation({ summary: 'BM-06: Approve a prior-day cash refund request; Cashier pays the customer' })
+  approveRefund(
     @CurrentUser() user: AuthenticatedUser,
-    @Param('orderId', new ParseUUIDPipe()) id: string,
-    @Body() dto: CancelPaidOrderDto,
+    @Param('requestId', new ParseUUIDPipe()) id: string,
+    @Body() dto: CompleteRefundDto,
   ) {
-    return this.refunds.cancelPaidOrder(user, id, dto);
+    return this.refunds.reviewRefundApproval(user, id, true, dto.note);
+  }
+
+  @Post('refund-approval-requests/:requestId/reject')
+  @ApiOperation({ summary: 'BM-06: Reject a prior-day cash refund request' })
+  rejectRefund(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('requestId', new ParseUUIDPipe()) id: string,
+    @Body() dto: CompleteRefundDto,
+  ) {
+    return this.refunds.reviewRefundApproval(user, id, false, dto.note);
   }
 
   @Get('audit-logs')

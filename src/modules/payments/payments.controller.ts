@@ -91,11 +91,11 @@ export class PaymentsController {
     return this.refunds.listRefunds(user, query);
   }
 
-  @Roles(AppRole.MANAGER)
+  @Roles(AppRole.OWNER)
   @Post('refunds/:refundId/complete')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Mark an external bank-transfer refund as completed',
+    summary: 'Owner settles a legacy pending bank-transfer refund',
     description:
       'The platform records the action only; it does not transfer money or call a PayOS refund API.',
   })

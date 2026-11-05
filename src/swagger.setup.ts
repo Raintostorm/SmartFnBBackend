@@ -22,7 +22,7 @@ export const SWAGGER_TAGS = [
   ['Menu - chain wide (OWNER)', 'OWNER quản lý danh mục, món và tùy chọn dùng chung.'],
   ['Reports - OWNER', 'Báo cáo doanh thu và vận hành của OWNER.'],
   [
-    'Branch Manager',
+    'Store Manager',
     'Quản lý Cashier/Barista, tùy chọn, báo cáo, tra cứu đơn và audit trong chi nhánh được gán.',
   ],
   ['Restaurant branding', 'Cấu hình thương hiệu của chuỗi.'],
@@ -34,6 +34,7 @@ export const SWAGGER_TAGS = [
   ['Public order tracking', 'Trang công khai chỉ trả số gọi và trạng thái nhận món qua token.'],
   ['Counter · Pagers', 'Assign and record physical pager calls.'],
   ['Cashier · Cash refunds', 'Same-day cash refunds and receipt data.'],
+  ['Cashier · Refund approvals', 'Cashier gửi yêu cầu hoàn tiền ngày trước và xác nhận sau khi trả tiền mặt.'],
   ['Cashier · Orders', 'Cashier tạo, sửa, chốt, hủy và in lại đơn tại quầy.'],
   ['Cashier · Payments', 'Cashier thu tiền mặt hoặc tạo thanh toán QR PayOS.'],
   ['Cashier receipt documents', 'PDF biên nhận bất biến để xem lại và in từ lịch sử đơn quầy.'],

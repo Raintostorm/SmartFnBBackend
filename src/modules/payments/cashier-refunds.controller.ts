@@ -66,6 +66,15 @@ export class CashierRefundsController {
   ) {
     return this.refunds.cashierRefund(user, id, dto);
   }
+  @Post(':orderId/refund-approval-requests')
+  @ApiOperation({ summary: 'Request Store Manager approval for a prior-day cash refund' })
+  requestApproval(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('orderId', ParseUUIDPipe) id: string,
+    @Body() dto: CashierRefundDto,
+  ) {
+    return this.refunds.requestRefundApproval(user, id, dto);
+  }
   @Get(':orderId/refunds/:refundId/receipt')
   @ApiOperation({ summary: 'Get the immutable refund values for a cash refund receipt' })
   receipt(
@@ -74,5 +83,25 @@ export class CashierRefundsController {
     @Param('refundId', ParseUUIDPipe) refundId: string,
   ) {
     return this.refunds.refundReceipt(user, id, refundId);
+  }
+}
+
+@ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
+@ApiTags('Cashier · Refund approvals')
+@Roles(AppRole.CASHIER)
+@Controller('cashier/refund-approval-requests')
+export class CashierRefundApprovalsController {
+  constructor(private readonly refunds: PaidOrderRefundService) {}
+
+  @Get()
+  @ApiOperation({ summary: 'List your prior-day refund requests' })
+  list(@CurrentUser() user: AuthenticatedUser) {
+    return this.refunds.listRefundApprovalRequests(user);
+  }
+
+  @Post(':requestId/complete')
+  @ApiOperation({ summary: 'Confirm cash paid to the customer after Store Manager approval' })
+  complete(@CurrentUser() user: AuthenticatedUser, @Param('requestId', ParseUUIDPipe) requestId: string) {
+    return this.refunds.completeApprovedRefund(user, requestId);
   }
 }

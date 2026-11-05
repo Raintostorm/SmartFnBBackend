@@ -88,6 +88,12 @@ export class MenuExtrasController {
 @Controller('menu-extras')
 export class ExtraAvailabilityController {
   constructor(private readonly service: MenuExtrasService) {}
+  @Roles(AppRole.MANAGER)
+  @Get('branch')
+  @ApiOperation({ summary: 'List chain extras with availability in the assigned branch' })
+  list(@CurrentUser() user: AuthenticatedUser) {
+    return this.service.listBranch(user);
+  }
   @Patch(':extraId/availability')
   @ApiOperation({ summary: 'Set extra availability for the assigned branch' })
   set(

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
   ApiAuthenticatedOperation,
@@ -66,9 +66,9 @@ export class CashierController {
   }
 
   @Get('orders')
-  @ApiOperation({ summary: 'List today paid and cancelled counter orders for the assigned branch' })
-  history(@CurrentUser() user: AuthenticatedUser) {
-    return this.service.cashierHistory(user);
+  @ApiOperation({ summary: 'List counter orders for today or the prior 30 days in the assigned branch' })
+  history(@CurrentUser() user: AuthenticatedUser, @Query('days') days?: string) {
+    return this.service.cashierHistory(user, days);
   }
 
   @Get('orders/:orderId/receipt')

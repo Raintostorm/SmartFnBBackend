@@ -39,6 +39,7 @@ function fixture({
     receivedAmount: new Prisma.Decimal(receivedAmount),
     providerTransactionId: null,
     failureReason,
+    paidAt: new Date(),
   };
   const items = [
     {
@@ -73,8 +74,10 @@ function fixture({
     branch: { timezone: 'Asia/Ho_Chi_Minh' },
     items,
     refunds: [],
+    payments: [payment],
   };
   let currentOrderStatus = order.status;
+  let approvalRequest = null;
   const tx = {
     $queryRaw: async () => [],
     payment: {
@@ -122,6 +125,17 @@ function fixture({
         };
       },
     },
+    refundApprovalRequest: {
+      findFirst: async () => approvalRequest,
+      create: async ({ data }) => {
+        approvalRequest = { id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', status: 'PENDING', ...data };
+        return approvalRequest;
+      },
+      update: async ({ data }) => {
+        approvalRequest = { ...approvalRequest, ...data };
+        return approvalRequest;
+      },
+    },
     branchAuditLog: {
       create: async ({ data }) => {
         calls.audits.push(data);
@@ -134,6 +148,7 @@ function fixture({
     refund: {
       findUnique: async () => ({ order: { branchId: manager.branchId } }),
     },
+    refundApprovalRequest: { findFirst: async () => approvalRequest },
     ownerChainAssignment: { count: async () => 1 },
   };
   const realtime = {
@@ -292,7 +307,7 @@ describe('Paid order cancellation and external refunds (#43)', () => {
     }
   });
 
-  it('completes a pending bank refund exactly once', async () => {
+  it('allows Owner to settle a legacy bank refund exactly once', async () => {
     const { service, calls, tx, order } = fixture();
     let status = 'PENDING';
     tx.refund.findUnique = async () => ({
@@ -315,21 +330,21 @@ describe('Paid order cancellation and external refunds (#43)', () => {
         ...data,
       };
     };
-    const result = await service.completeRefund(manager, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', {
+    const result = await service.completeRefund(owner, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', {
       note: 'Đã chuyển cho khách',
     });
     assert.equal(result.status, 'COMPLETED');
     assert.equal(calls.events.at(-1).type, 'refund.completed');
     await assert.rejects(
-      service.completeRefund(manager, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', {}),
+      service.completeRefund(owner, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', {}),
       (error) => error?.getStatus?.() === 409,
     );
   });
 
-  it('keeps Owner read only for legacy refunds', async () => {
+  it('keeps Store Manager read only for legacy refunds', async () => {
     const { service } = fixture();
     await assert.rejects(
-      service.completeRefund(owner, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', {}),
+      service.completeRefund(manager, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', {}),
       (error) => error.getStatus() === 403,
     );
   });
@@ -400,6 +415,26 @@ describe('Paid order cancellation and external refunds (#43)', () => {
       (e) => e.getStatus() === 403,
     );
     assert.equal(calls.refundCreates.length, 0);
+  });
+  it('keeps a prior-day order unchanged until Manager approves and Cashier confirms cash payout', async () => {
+    const { service, order, payment, calls } = fixture();
+    const cashier = { ...manager, role: 'CASHIER' };
+    order.paidAt = new Date(Date.now() - 86400000);
+    payment.paidAt = order.paidAt;
+    const request = await service.requestRefundApproval(cashier, order.id, {
+      reasonCode: 'WRONG_ITEM',
+    });
+    assert.equal(request.status, 'PENDING');
+    assert.equal(calls.refundCreates.length, 0);
+    assert.equal(calls.itemUpdates.length, 0);
+    await assert.rejects(service.completeApprovedRefund(cashier, request.id), (e) => e.getStatus() === 409);
+    await service.reviewRefundApproval(manager, request.id, true, 'Đồng ý hoàn tiền');
+    assert.equal(calls.refundCreates.length, 0);
+    const result = await service.completeApprovedRefund(cashier, request.id);
+    assert.equal(result.refund.status, 'COMPLETED');
+    assert.equal(calls.refundCreates.length, 1);
+    assert.equal(calls.itemUpdates.length, 2);
+    await assert.rejects(service.completeApprovedRefund(cashier, request.id), (e) => e.getStatus() === 409);
   });
   it('rejects new bank-transfer refunds', async () => {
     const { service, order } = fixture();

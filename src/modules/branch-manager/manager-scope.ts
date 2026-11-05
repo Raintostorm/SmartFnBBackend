@@ -5,7 +5,7 @@ import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 
 export function managerActor(user: AuthenticatedUser) {
   if (user.role !== AppRole.MANAGER || !user.branchId || !user.employeeId) {
-    throw new ForbiddenException('An assigned Branch Manager is required');
+    throw new ForbiddenException('An assigned Store Manager is required');
   }
   return { branchId: user.branchId, employeeId: user.employeeId, userId: user.id };
 }

@@ -78,6 +78,12 @@ export class CombosController {
 @Controller('branch-combos')
 export class ComboAvailabilityController {
   constructor(private readonly service: CombosService) {}
+  @Roles(AppRole.MANAGER)
+  @Get()
+  @ApiOperation({ summary: 'List combos assigned to the Store Manager branch' })
+  list(@CurrentUser() user: AuthenticatedUser) {
+    return this.service.listBranch(user);
+  }
   @Patch(':id/availability')
   @ApiOperation({
     summary:

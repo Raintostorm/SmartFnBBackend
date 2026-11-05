@@ -115,9 +115,12 @@ export class ManagerReportsService {
             WHERE o.branch_id=${branchId}::uuid AND o.type='COUNTER_PICKUP'
               AND r.method='CASH' AND r.status='COMPLETED'
               AND r.completed_at >= ${startAt} AND r.completed_at < ${endAt}
-          ) SELECT employee_id AS "employeeId", SUM(collected)::text AS "cashCollected",
-            SUM(refunded)::text AS "cashRefunded", (SUM(collected)-SUM(refunded))::text AS "netCash"
-          FROM movements GROUP BY employee_id ORDER BY employee_id`;
+          ) SELECT m.employee_id AS "employeeId",
+            COALESCE(NULLIF(TRIM(CONCAT(e.first_name, ' ', e.last_name)), ''), 'Chưa xác định') AS "employeeName",
+            SUM(m.collected)::text AS "cashCollected",
+            SUM(m.refunded)::text AS "cashRefunded", (SUM(m.collected)-SUM(m.refunded))::text AS "netCash"
+          FROM movements m LEFT JOIN employees e ON e.id=m.employee_id
+          GROUP BY m.employee_id,e.first_name,e.last_name ORDER BY m.employee_id`;
         const topItems = await tx.$queryRaw`
         WITH ${bounds}, ${sales} SELECT i.menu_item_id AS "menuItemId", i.item_name AS name,
           SUM(i.quantity)::int AS quantity, SUM(i.total_price)::text AS "lineRevenue"

@@ -18,6 +18,25 @@ export class MenuExtrasService {
     private readonly access: BranchAccessService,
     private readonly realtime: RealtimePublisher,
   ) {}
+  async listBranch(user: AuthenticatedUser) {
+    if (user.role !== 'MANAGER' || !user.branchId)
+      throw new ForbiddenException('Assigned Store Manager required');
+    await this.access.assertCanAccessBranch(user, user.branchId);
+    const branch = await this.prisma.branch.findUniqueOrThrow({
+      where: { id: user.branchId }, select: { chainId: true },
+    });
+    const extras = await this.prisma.menuExtra.findMany({
+      where: { chainId: branch.chainId },
+      include: { branches: { where: { branchId: user.branchId } } },
+      orderBy: { name: 'asc' },
+    });
+    return extras.map((extra) => ({
+      id: extra.id, name: extra.name, price: extra.price,
+      chainAvailable: extra.isActive,
+      isAvailable: extra.isActive && (extra.branches[0]?.isAvailable ?? true),
+      branchAvailable: extra.branches[0]?.isAvailable ?? true,
+    }));
+  }
   async list(chainId: string, user: AuthenticatedUser) {
     await this.access.assertCanAccessChain(user, chainId);
     return this.prisma.menuExtra.findMany({ where: { chainId }, orderBy: { name: 'asc' } });

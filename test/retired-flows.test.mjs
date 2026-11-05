@@ -28,7 +28,10 @@ it('registers counter and refund operations without retired table-service routes
   assert.ok(routes.some((r) => r.startsWith('barista/')));
   assert.ok(routes.some((r) => r.includes('payments/') && r.endsWith('/confirm')));
   assert.ok(routes.some((r) => r === 'cashier/orders/:orderId/refunds'));
-  assert.ok(routes.some((r) => r === 'manager/orders/:orderId/cancel-paid'));
+  assert.ok(routes.some((r) => r === 'manager/refund-approval-requests/:requestId/approve'));
+  assert.ok(routes.some((r) => r === 'manager/refund-approval-requests/:requestId/reject'));
+  assert.ok(routes.some((r) => r === 'cashier/refund-approval-requests/:requestId/complete'));
+  assert.ok(!routes.some((r) => r === 'manager/orders/:orderId/cancel-paid'));
   assert.deepEqual(
     routes.filter((r) =>
       /^(tables|table-sessions|reservations|invoices|waiter|kitchen)(\/|$)/.test(

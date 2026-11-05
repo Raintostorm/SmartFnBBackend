@@ -140,6 +140,13 @@ enum RefundSource {
   LATE_PAYMENT
 }
 
+enum RefundApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  COMPLETED
+}
+
 enum OrderStatus {
   PENDING
   SUBMITTED
@@ -290,20 +297,20 @@ model Role {
 }
 
 model User {
-  id              String     @id @default(uuid()) @db.Uuid
-  email           String     @unique @db.VarChar(255)
-  phone           String?    @unique @db.VarChar(20)
-  passwordHash    String     @map("password_hash") @db.VarChar(255)
-  status          UserStatus @default(ACTIVE)
-  emailVerifiedAt DateTime?  @map("email_verified_at") @db.Timestamptz(6)
-  lastLoginAt     DateTime?  @map("last_login_at") @db.Timestamptz(6)
-  staffInvitationState String? @map("staff_invitation_state") @db.VarChar(20)
-  mustChangePassword Boolean @default(false) @map("must_change_password")
-  temporaryPasswordExpiresAt DateTime? @map("temporary_password_expires_at") @db.Timestamptz(6)
-  roleId          String     @map("role_id") @db.Uuid
-  createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
-  deletedAt       DateTime?  @map("deleted_at") @db.Timestamptz(6)
+  id                         String     @id @default(uuid()) @db.Uuid
+  email                      String     @unique @db.VarChar(255)
+  phone                      String?    @unique @db.VarChar(20)
+  passwordHash               String     @map("password_hash") @db.VarChar(255)
+  status                     UserStatus @default(ACTIVE)
+  emailVerifiedAt            DateTime?  @map("email_verified_at") @db.Timestamptz(6)
+  lastLoginAt                DateTime?  @map("last_login_at") @db.Timestamptz(6)
+  staffInvitationState       String?    @map("staff_invitation_state") @db.VarChar(20)
+  mustChangePassword         Boolean    @default(false) @map("must_change_password")
+  temporaryPasswordExpiresAt DateTime?  @map("temporary_password_expires_at") @db.Timestamptz(6)
+  roleId                     String     @map("role_id") @db.Uuid
+  createdAt                  DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                  DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt                  DateTime?  @map("deleted_at") @db.Timestamptz(6)
 
   role                      Role                        @relation(fields: [roleId], references: [id], onDelete: Restrict)
   employee                  Employee?
@@ -314,7 +321,7 @@ model User {
   approvedApplications      RegistrationApplication[]   @relation("RegistrationOwnerUser")
   subscriptionEvents        BusinessSubscriptionEvent[] @relation("SubscriptionChangedBy")
   passwordSetupTokens       PasswordSetupToken[]
-  platformSupportActions    PlatformSupportAction[] @relation("PlatformSupportActor")
+  platformSupportActions    PlatformSupportAction[]     @relation("PlatformSupportActor")
 
   @@index([roleId])
   @@index([status])
@@ -361,7 +368,7 @@ model RestaurantChain {
   menuCategories          MenuCategory[]
   ownerAssignments        OwnerChainAssignment[]
   registrationApplication RegistrationApplication?
-  platformSupportActions PlatformSupportAction[]
+  platformSupportActions  PlatformSupportAction[]
   subscription            BusinessSubscription?
   subscriptionCheckouts   SubscriptionCheckout[]
   branding                BusinessBranding?
@@ -378,15 +385,15 @@ model RestaurantChain {
 }
 
 model DisplayPoster {
-  id              String   @id @default(uuid()) @db.Uuid
-  chainId         String   @map("chain_id") @db.Uuid
-  title           String   @db.VarChar(120)
-  imageUrl        String   @map("image_url") @db.VarChar(500)
-  enabled         Boolean  @default(true)
-  sortOrder       Int      @default(0) @map("sort_order")
-  durationSeconds Int      @default(8) @map("duration_seconds")
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id              String    @id @default(uuid()) @db.Uuid
+  chainId         String    @map("chain_id") @db.Uuid
+  title           String    @db.VarChar(120)
+  imageUrl        String    @map("image_url") @db.VarChar(500)
+  enabled         Boolean   @default(true)
+  sortOrder       Int       @default(0) @map("sort_order")
+  durationSeconds Int       @default(8) @map("duration_seconds")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt       DateTime? @map("deleted_at") @db.Timestamptz(6)
 
   chain RestaurantChain @relation(fields: [chainId], references: [id], onDelete: Restrict)
@@ -649,13 +656,13 @@ model RegistrationApplication {
   createdAt           DateTime                      @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt           DateTime                      @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  requestedPlan ServicePlan?     @relation(fields: [requestedPlanId], references: [id], onDelete: SetNull)
-  approvedPlan  ServicePlan?     @relation("ApprovedRegistrationPlan", fields: [approvedPlanId], references: [id], onDelete: SetNull)
+  requestedPlan       ServicePlan?            @relation(fields: [requestedPlanId], references: [id], onDelete: SetNull)
+  approvedPlan        ServicePlan?            @relation("ApprovedRegistrationPlan", fields: [approvedPlanId], references: [id], onDelete: SetNull)
   activationCheckouts RegistrationCheckout[]
-  supportActions PlatformSupportAction[]
-  reviewedBy    User?            @relation("RegistrationReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
-  approvedChain RestaurantChain? @relation(fields: [approvedChainId], references: [id], onDelete: SetNull)
-  ownerUser     User?            @relation("RegistrationOwnerUser", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  supportActions      PlatformSupportAction[]
+  reviewedBy          User?                   @relation("RegistrationReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  approvedChain       RestaurantChain?        @relation(fields: [approvedChainId], references: [id], onDelete: SetNull)
+  ownerUser           User?                   @relation("RegistrationOwnerUser", fields: [ownerUserId], references: [id], onDelete: SetNull)
 
   @@index([status, createdAt])
   @@index([businessName])
@@ -678,14 +685,14 @@ model ServicePlan {
   createdAt                    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  applications  RegistrationApplication[]
-  approvedApplications RegistrationApplication[] @relation("ApprovedRegistrationPlan")
-  registrationCheckouts RegistrationCheckout[]
-  scheduledSubscriptions BusinessSubscription[] @relation("ScheduledSubscriptionPlan")
-  subscriptions BusinessSubscription[]
-  eventsFrom    BusinessSubscriptionEvent[] @relation("SubscriptionEventFromPlan")
-  eventsTo      BusinessSubscriptionEvent[] @relation("SubscriptionEventToPlan")
-  checkouts     SubscriptionCheckout[]
+  applications           RegistrationApplication[]
+  approvedApplications   RegistrationApplication[]   @relation("ApprovedRegistrationPlan")
+  registrationCheckouts  RegistrationCheckout[]
+  scheduledSubscriptions BusinessSubscription[]      @relation("ScheduledSubscriptionPlan")
+  subscriptions          BusinessSubscription[]
+  eventsFrom             BusinessSubscriptionEvent[] @relation("SubscriptionEventFromPlan")
+  eventsTo               BusinessSubscriptionEvent[] @relation("SubscriptionEventToPlan")
+  checkouts              SubscriptionCheckout[]
 
   @@map("service_plans")
 }
@@ -731,25 +738,25 @@ model PlatformSupportAction {
 }
 
 model BusinessSubscription {
-  id           String                     @id @default(uuid()) @db.Uuid
-  chainId      String                     @unique @map("chain_id") @db.Uuid
-  planId       String                     @map("plan_id") @db.Uuid
-  nextPlanId   String?                    @map("next_plan_id") @db.Uuid
-  status       BusinessSubscriptionStatus @default(ACTIVE)
-  monthlyPrice Decimal                    @map("monthly_price") @db.Decimal(14, 2)
-  startsAt     DateTime                   @map("starts_at") @db.Timestamptz(6)
-  expiresAt    DateTime                   @map("expires_at") @db.Timestamptz(6)
-  suspendedAt  DateTime?                  @map("suspended_at") @db.Timestamptz(6)
-  trialStartedAt DateTime?                @map("trial_started_at") @db.Timestamptz(6)
-  trialEndsAt    DateTime?                @map("trial_ends_at") @db.Timestamptz(6)
-  trialConvertedAt DateTime?             @map("trial_converted_at") @db.Timestamptz(6)
-  createdAt    DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt    DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id               String                     @id @default(uuid()) @db.Uuid
+  chainId          String                     @unique @map("chain_id") @db.Uuid
+  planId           String                     @map("plan_id") @db.Uuid
+  nextPlanId       String?                    @map("next_plan_id") @db.Uuid
+  status           BusinessSubscriptionStatus @default(ACTIVE)
+  monthlyPrice     Decimal                    @map("monthly_price") @db.Decimal(14, 2)
+  startsAt         DateTime                   @map("starts_at") @db.Timestamptz(6)
+  expiresAt        DateTime                   @map("expires_at") @db.Timestamptz(6)
+  suspendedAt      DateTime?                  @map("suspended_at") @db.Timestamptz(6)
+  trialStartedAt   DateTime?                  @map("trial_started_at") @db.Timestamptz(6)
+  trialEndsAt      DateTime?                  @map("trial_ends_at") @db.Timestamptz(6)
+  trialConvertedAt DateTime?                  @map("trial_converted_at") @db.Timestamptz(6)
+  createdAt        DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  chain  RestaurantChain             @relation(fields: [chainId], references: [id], onDelete: Cascade)
-  plan   ServicePlan                 @relation(fields: [planId], references: [id], onDelete: Restrict)
-  nextPlan ServicePlan? @relation("ScheduledSubscriptionPlan", fields: [nextPlanId], references: [id], onDelete: SetNull)
-  events BusinessSubscriptionEvent[]
+  chain    RestaurantChain             @relation(fields: [chainId], references: [id], onDelete: Cascade)
+  plan     ServicePlan                 @relation(fields: [planId], references: [id], onDelete: Restrict)
+  nextPlan ServicePlan?                @relation("ScheduledSubscriptionPlan", fields: [nextPlanId], references: [id], onDelete: SetNull)
+  events   BusinessSubscriptionEvent[]
 
   @@index([status, expiresAt])
   @@index([planId])
@@ -771,7 +778,7 @@ model SubscriptionCheckout {
   updatedAt         DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   chain RestaurantChain @relation(fields: [chainId], references: [id], onDelete: Cascade)
-  plan  ServicePlan    @relation(fields: [planId], references: [id], onDelete: Restrict)
+  plan  ServicePlan     @relation(fields: [planId], references: [id], onDelete: Restrict)
 
   @@index([chainId, status, createdAt])
   @@map("subscription_checkouts")
@@ -1019,8 +1026,8 @@ model MenuCategory {
   updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(6)
 
-  chain RestaurantChain @relation(fields: [chainId], references: [id], onDelete: Restrict)
-  items MenuItem[]
+  chain  RestaurantChain @relation(fields: [chainId], references: [id], onDelete: Restrict)
+  items  MenuItem[]
   combos Combo[]
 
   @@unique([chainId, name])
@@ -1045,12 +1052,12 @@ model MenuItem {
   updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt          DateTime? @map("deleted_at") @db.Timestamptz(6)
 
-  category           MenuCategory          @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  category           MenuCategory           @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   comboChoices       ComboComponentChoice[]
   orderItems         OrderItem[]
   branchAvailability BranchMenuItem[]
   extras             MenuItemExtra[]
-  maxExtras          Int @default(5) @map("max_extras")
+  maxExtras          Int                    @default(5) @map("max_extras")
   optionGroups       MenuItemOptionGroup[]
 
   @@index([categoryId, isActive, isAvailable])
@@ -1191,24 +1198,25 @@ model Order {
   createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  branch           Branch                   @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  table            RestaurantTable?         @relation(fields: [tableId], references: [id], onDelete: SetNull)
-  reservation      Reservation?             @relation(fields: [reservationId], references: [id], onDelete: SetNull)
-  waiter           Employee?                @relation("OrderWaiter", fields: [waiterId], references: [id], onDelete: SetNull)
-  tableSession     TableSession?            @relation(fields: [tableSessionId], references: [id], onDelete: Restrict)
-  createdByWaiter  Employee?                @relation("OrderCreatedByWaiter", fields: [createdByWaiterId], references: [id], onDelete: SetNull)
-  createdByCashier Employee?                @relation("OrderCreatedByCashier", fields: [createdByCashierId], references: [id], onDelete: SetNull)
-  deliveredBy      Employee?                @relation("OrderDeliveredBy", fields: [deliveredById], references: [id], onDelete: SetNull)
-  cancelledBy      Employee?                @relation("OrderCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
-  voucher          Voucher?                 @relation(fields: [voucherId], references: [id], onDelete: SetNull)
-  items            OrderItem[]
-  payments         Payment[]
-  invoice          Invoice?
-  printJobs        PrintJob[]
-  displaySessions  CustomerDisplaySession[]
-  trackingToken    OrderTrackingToken?
-  refunds          Refund[]
-  receiptDocuments ReceiptDocument[]
+  branch                 Branch                   @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  table                  RestaurantTable?         @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  reservation            Reservation?             @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+  waiter                 Employee?                @relation("OrderWaiter", fields: [waiterId], references: [id], onDelete: SetNull)
+  tableSession           TableSession?            @relation(fields: [tableSessionId], references: [id], onDelete: Restrict)
+  createdByWaiter        Employee?                @relation("OrderCreatedByWaiter", fields: [createdByWaiterId], references: [id], onDelete: SetNull)
+  createdByCashier       Employee?                @relation("OrderCreatedByCashier", fields: [createdByCashierId], references: [id], onDelete: SetNull)
+  deliveredBy            Employee?                @relation("OrderDeliveredBy", fields: [deliveredById], references: [id], onDelete: SetNull)
+  cancelledBy            Employee?                @relation("OrderCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+  voucher                Voucher?                 @relation(fields: [voucherId], references: [id], onDelete: SetNull)
+  items                  OrderItem[]
+  payments               Payment[]
+  invoice                Invoice?
+  printJobs              PrintJob[]
+  displaySessions        CustomerDisplaySession[]
+  trackingToken          OrderTrackingToken?
+  refunds                Refund[]
+  refundApprovalRequests RefundApprovalRequest[]
+  receiptDocuments       ReceiptDocument[]
 
   @@unique([branchId, businessDate, callNumber])
   @@index([branchId, placedAt])
@@ -1282,7 +1290,7 @@ model OrderItem {
   units              OrderItemUnit[]
   refundItems        RefundItem[]
 
-  @@unique([orderId,id], map:"order_items_order_id_id_unique")
+  @@unique([orderId, id], map: "order_items_order_id_id_unique")
   @@index([parentId])
   @@index([orderId, status])
   @@index([menuItemId])
@@ -1406,6 +1414,36 @@ model RefundItem {
   @@unique([orderItemId])
   @@index([refundId])
   @@map("refund_items")
+}
+
+model RefundApprovalRequest {
+  id                    String               @id @default(uuid()) @db.Uuid
+  orderId               String               @map("order_id") @db.Uuid
+  branchId              String               @map("branch_id") @db.Uuid
+  status                RefundApprovalStatus @default(PENDING)
+  orderItemIds          Json                 @default("[]") @map("order_item_ids")
+  amount                Decimal              @db.Decimal(14, 2)
+  reason                String               @db.VarChar(500)
+  reasonCode            String               @map("reason_code") @db.VarChar(50)
+  requestedByUserId     String               @map("requested_by_user_id") @db.Uuid
+  requestedByEmployeeId String               @map("requested_by_employee_id") @db.Uuid
+  requestedAt           DateTime             @default(now()) @map("requested_at") @db.Timestamptz(6)
+  reviewedByUserId      String?              @map("reviewed_by_user_id") @db.Uuid
+  reviewedByEmployeeId  String?              @map("reviewed_by_employee_id") @db.Uuid
+  reviewedAt            DateTime?            @map("reviewed_at") @db.Timestamptz(6)
+  reviewNote            String?              @map("review_note") @db.VarChar(500)
+  completedByUserId     String?              @map("completed_by_user_id") @db.Uuid
+  completedByEmployeeId String?              @map("completed_by_employee_id") @db.Uuid
+  completedAt           DateTime?            @map("completed_at") @db.Timestamptz(6)
+  refundId              String?              @map("refund_id") @db.Uuid
+  createdAt             DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  @@index([branchId, status, requestedAt])
+  @@index([orderId, status])
+  @@map("refund_approval_requests")
 }
 
 // Immutable actor identifiers survive account archival. No API updates or deletes these rows.
@@ -1822,93 +1860,105 @@ model ServingTask {
 }
 
 model MenuExtra {
-  id String @id @default(uuid()) @db.Uuid
-  chainId String @map("chain_id") @db.Uuid
-  name String @db.VarChar(100)
-  price Decimal @db.Decimal(14, 2)
-  isActive Boolean @default(true) @map("is_active")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
-  chain RestaurantChain @relation(fields: [chainId], references: [id], onDelete: Restrict)
-  items MenuItemExtra[]
-  branches BranchMenuExtra[]
+  id        String            @id @default(uuid()) @db.Uuid
+  chainId   String            @map("chain_id") @db.Uuid
+  name      String            @db.VarChar(100)
+  price     Decimal           @db.Decimal(14, 2)
+  isActive  Boolean           @default(true) @map("is_active")
+  createdAt DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  chain     RestaurantChain   @relation(fields: [chainId], references: [id], onDelete: Restrict)
+  items     MenuItemExtra[]
+  branches  BranchMenuExtra[]
+
   @@unique([chainId, name])
   @@map("menu_extras")
 }
+
 model MenuItemExtra {
-  menuItemId String @map("menu_item_id") @db.Uuid
-  extraId String @map("extra_id") @db.Uuid
-  price Decimal @db.Decimal(14, 2)
-  maxQuantity Int @default(3) @map("max_quantity")
-  displayOrder Int @default(0) @map("display_order")
-  menuItem MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
-  extra MenuExtra @relation(fields: [extraId], references: [id], onDelete: Restrict)
+  menuItemId   String    @map("menu_item_id") @db.Uuid
+  extraId      String    @map("extra_id") @db.Uuid
+  price        Decimal   @db.Decimal(14, 2)
+  maxQuantity  Int       @default(3) @map("max_quantity")
+  displayOrder Int       @default(0) @map("display_order")
+  menuItem     MenuItem  @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  extra        MenuExtra @relation(fields: [extraId], references: [id], onDelete: Restrict)
+
   @@id([menuItemId, extraId])
   @@map("menu_item_extras")
 }
+
 model BranchMenuExtra {
-  branchId String @map("branch_id") @db.Uuid
-  extraId String @map("extra_id") @db.Uuid
-  isAvailable Boolean @default(true) @map("is_available")
-  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  extra MenuExtra @relation(fields: [extraId], references: [id], onDelete: Cascade)
+  branchId    String    @map("branch_id") @db.Uuid
+  extraId     String    @map("extra_id") @db.Uuid
+  isAvailable Boolean   @default(true) @map("is_available")
+  branch      Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  extra       MenuExtra @relation(fields: [extraId], references: [id], onDelete: Cascade)
+
   @@id([branchId, extraId])
   @@map("branch_menu_extras")
 }
 
 model Combo {
-  id String @id @default(uuid()) @db.Uuid
-  chainId String @map("chain_id") @db.Uuid
-  categoryId String @map("category_id") @db.Uuid
-  name String @db.VarChar(150)
-  description String? @db.Text
-  imageUrl String? @map("image_url") @db.VarChar(500)
-  price Decimal @db.Decimal(14,2)
-  isActive Boolean @default(true) @map("is_active")
-  displayOrder Int @default(0) @map("display_order")
-  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
-  chain RestaurantChain @relation(fields:[chainId], references:[id], onDelete:Restrict)
-  category MenuCategory @relation(fields:[categoryId], references:[id], onDelete:Restrict)
-  components ComboComponent[]
-  branches BranchCombo[]
-  orderItems OrderItem[]
-  @@index([chainId,isActive,displayOrder])
+  id           String           @id @default(uuid()) @db.Uuid
+  chainId      String           @map("chain_id") @db.Uuid
+  categoryId   String           @map("category_id") @db.Uuid
+  name         String           @db.VarChar(150)
+  description  String?          @db.Text
+  imageUrl     String?          @map("image_url") @db.VarChar(500)
+  price        Decimal          @db.Decimal(14, 2)
+  isActive     Boolean          @default(true) @map("is_active")
+  displayOrder Int              @default(0) @map("display_order")
+  deletedAt    DateTime?        @map("deleted_at") @db.Timestamptz(6)
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  chain        RestaurantChain  @relation(fields: [chainId], references: [id], onDelete: Restrict)
+  category     MenuCategory     @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  components   ComboComponent[]
+  branches     BranchCombo[]
+  orderItems   OrderItem[]
+
+  @@index([chainId, isActive, displayOrder])
   @@map("combos")
 }
+
 model ComboComponent {
-  id String @id @default(uuid()) @db.Uuid
-  comboId String @map("combo_id") @db.Uuid
-  type String @db.VarChar(10)
-  name String @db.VarChar(100)
-  quantity Int
-  fixedSizeCode String? @map("fixed_size_code") @db.VarChar(50)
-  displayOrder Int @default(0) @map("display_order")
-  combo Combo @relation(fields:[comboId],references:[id],onDelete:Cascade)
-  choices ComboComponentChoice[]
-  @@index([comboId,displayOrder])
+  id            String                 @id @default(uuid()) @db.Uuid
+  comboId       String                 @map("combo_id") @db.Uuid
+  type          String                 @db.VarChar(10)
+  name          String                 @db.VarChar(100)
+  quantity      Int
+  fixedSizeCode String?                @map("fixed_size_code") @db.VarChar(50)
+  displayOrder  Int                    @default(0) @map("display_order")
+  combo         Combo                  @relation(fields: [comboId], references: [id], onDelete: Cascade)
+  choices       ComboComponentChoice[]
+
+  @@index([comboId, displayOrder])
   @@map("combo_components")
 }
+
 model ComboComponentChoice {
-  id String @id @default(uuid()) @db.Uuid
-  componentId String @map("component_id") @db.Uuid
-  menuItemId String @map("menu_item_id") @db.Uuid
-  surcharge Decimal @default(0) @db.Decimal(14,2)
-  isDefault Boolean @default(false) @map("is_default")
-  component ComboComponent @relation(fields:[componentId], references:[id],onDelete:Cascade)
-  menuItem MenuItem @relation(fields:[menuItemId],references:[id],onDelete:Restrict)
-  @@unique([componentId,menuItemId])
+  id          String         @id @default(uuid()) @db.Uuid
+  componentId String         @map("component_id") @db.Uuid
+  menuItemId  String         @map("menu_item_id") @db.Uuid
+  surcharge   Decimal        @default(0) @db.Decimal(14, 2)
+  isDefault   Boolean        @default(false) @map("is_default")
+  component   ComboComponent @relation(fields: [componentId], references: [id], onDelete: Cascade)
+  menuItem    MenuItem       @relation(fields: [menuItemId], references: [id], onDelete: Restrict)
+
+  @@unique([componentId, menuItemId])
   @@map("combo_component_choices")
 }
+
 model BranchCombo {
-  branchId String @map("branch_id") @db.Uuid
-  comboId String @map("combo_id") @db.Uuid
-  isEnabled Boolean @default(true) @map("is_enabled")
-  isAvailable Boolean @default(true) @map("is_available")
-  priceOverride Decimal? @map("price_override") @db.Decimal(14,2)
-  branch Branch @relation(fields:[branchId],references:[id],onDelete:Cascade)
-  combo Combo @relation(fields:[comboId],references:[id],onDelete:Cascade)
-  @@id([branchId,comboId])
+  branchId      String   @map("branch_id") @db.Uuid
+  comboId       String   @map("combo_id") @db.Uuid
+  isEnabled     Boolean  @default(true) @map("is_enabled")
+  isAvailable   Boolean  @default(true) @map("is_available")
+  priceOverride Decimal? @map("price_override") @db.Decimal(14, 2)
+  branch        Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  combo         Combo    @relation(fields: [comboId], references: [id], onDelete: Cascade)
+
+  @@id([branchId, comboId])
   @@map("branch_combos")
 }

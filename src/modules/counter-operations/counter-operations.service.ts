@@ -592,21 +592,28 @@ export class CounterOperationsService {
     );
   }
 
-  async cashierHistory(user: AuthenticatedUser) {
+  async cashierHistory(user: AuthenticatedUser, daysInput?: string) {
     const actor = this.employee(user);
+    const days = daysInput === undefined ? 1 : Number(daysInput);
+    if (!Number.isInteger(days) || days < 1 || days > 30)
+      throw new BadRequestException('days must be an integer from 1 to 30');
     const branch = await this.prisma.branch.findUniqueOrThrow({
       where: { id: actor.branchId },
       select: { timezone: true },
     });
     const { start, end } = this.branchDayRange(branch.timezone);
+    const firstDay = new Date(start);
+    firstDay.setUTCDate(firstDay.getUTCDate() - days + 1);
+    const firstBusinessDate = this.businessDate(branch.timezone);
+    firstBusinessDate.setUTCDate(firstBusinessDate.getUTCDate() - days + 1);
     return this.prisma.order.findMany({
       where: {
         branchId: actor.branchId,
         type: OrderType.COUNTER_PICKUP,
         // businessDate is only stamped on payment, so unpaid orders cancelled today are matched by cancelledAt.
         OR: [
-          { businessDate: this.businessDate(branch.timezone) },
-          { status: OrderStatus.CANCELLED, cancelledAt: { gte: start, lt: end } },
+          { businessDate: { gte: firstBusinessDate } },
+          { status: OrderStatus.CANCELLED, cancelledAt: { gte: firstDay, lt: end } },
         ],
       },
       include: counterOrderInclude,

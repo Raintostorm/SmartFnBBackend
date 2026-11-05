@@ -55,6 +55,12 @@ export class CombosService {
     private readonly access: BranchAccessService,
     private readonly realtime: RealtimePublisher,
   ) {}
+  async listBranch(user: AuthenticatedUser) {
+    if (user.role !== 'MANAGER' || !user.branchId)
+      throw new ForbiddenException('Assigned Store Manager required');
+    await this.access.assertCanAccessBranch(user, user.branchId);
+    return this.branchMenu(user.branchId);
+  }
   async list(chainId: string, user: AuthenticatedUser) {
     await this.access.assertCanAccessChain(user, chainId);
     return this.prisma.combo.findMany({
