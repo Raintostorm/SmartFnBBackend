@@ -3,6 +3,7 @@ import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import {
   IsEmail,
   IsBoolean,
+  IsDateString,
   IsEnum,
   IsInt,
   IsNumber,
@@ -15,7 +16,10 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
-import { RegistrationApplicationStatus } from '../../../generated/prisma/client.js';
+import {
+  RegistrationApplicationStatus,
+  SubscriptionCheckoutStatus,
+} from '../../../generated/prisma/client.js';
 
 export class SubmitRegistrationApplicationDto {
   @ApiProperty({ example: 'Smart F&B Company', maxLength: 150 })
@@ -211,11 +215,11 @@ export class RenewSubscriptionDto {
   @Max(60)
   months!: number;
 
-  @ApiPropertyOptional({ maxLength: 1000 })
-  @IsOptional()
+  @ApiProperty({ minLength: 3, maxLength: 1000 })
   @IsString()
+  @MinLength(3)
   @MaxLength(1000)
-  note?: string;
+  note!: string;
 }
 
 export enum PlanChangeDirection {
@@ -232,17 +236,62 @@ export class ChangeSubscriptionPlanDto {
   @IsEnum(PlanChangeDirection)
   direction!: PlanChangeDirection;
 
-  @ApiPropertyOptional({ maxLength: 1000 })
-  @IsOptional()
+  @ApiProperty({ minLength: 3, maxLength: 1000 })
   @IsString()
+  @MinLength(3)
   @MaxLength(1000)
-  note?: string;
+  note!: string;
 }
 
 export class SubscriptionStatusReasonDto {
-  @ApiPropertyOptional({ maxLength: 1000 })
-  @IsOptional()
+  @ApiProperty({ minLength: 3, maxLength: 1000 })
   @IsString()
+  @MinLength(3)
   @MaxLength(1000)
-  reason?: string;
+  reason!: string;
 }
+
+export enum PlatformRevenueGroupBy {
+  DAY = 'day',
+  MONTH = 'month',
+  YEAR = 'year',
+}
+
+export class PlatformRevenueQueryDto {
+  @ApiPropertyOptional({ example: '2026-01-01' })
+  @IsOptional()
+  @IsDateString({ strict: true })
+  from?: string;
+
+  @ApiPropertyOptional({ example: '2026-12-31' })
+  @IsOptional()
+  @IsDateString({ strict: true })
+  to?: string;
+
+  @ApiPropertyOptional({
+    enum: PlatformRevenueGroupBy,
+    default: PlatformRevenueGroupBy.MONTH,
+  })
+  @IsOptional()
+  @IsEnum(PlatformRevenueGroupBy)
+  groupBy = PlatformRevenueGroupBy.MONTH;
+
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  planId?: string;
+}
+
+export class ListPlatformInvoicesQueryDto extends PaginationQueryDto {
+  @ApiPropertyOptional({ enum: SubscriptionCheckoutStatus })
+  @IsOptional()
+  @IsEnum(SubscriptionCheckoutStatus)
+  status?: SubscriptionCheckoutStatus;
+
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  chainId?: string;
+}
+
+export class ConfirmPlatformInvoiceDto extends PlatformSupportNoteDto {}

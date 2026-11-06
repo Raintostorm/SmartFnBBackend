@@ -197,6 +197,72 @@ export class PlatformBillingService {
     return { outcome, checkout: await this.prisma.subscriptionCheckout.findUniqueOrThrow({ where: { id: checkoutId }, select: { id: true, status: true, paidAt: true, reviewReason: true } }) };
   }
 
+  async confirmCheckoutManually(checkoutId: string, note: string, actorUserId: string) {
+    await this.prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${checkoutId}))`;
+        const checkout = await tx.subscriptionCheckout.findUnique({ where: { id: checkoutId } });
+        if (!checkout) throw new NotFoundException('Platform checkout not found');
+        if (checkout.status !== SubscriptionCheckoutStatus.NEEDS_REVIEW) {
+          throw new ConflictException('Only an invoice that needs review can be confirmed manually');
+        }
+        const subscription = await tx.businessSubscription.findUnique({
+          where: { chainId: checkout.chainId },
+          include: { plan: true },
+        });
+        const isTrial = subscription?.plan.code === 'TRIAL' && !!subscription.trialStartedAt && !subscription.trialConvertedAt;
+        const expectedPlanId = isTrial ? checkout.planId : (subscription?.nextPlanId ?? subscription?.planId);
+        if (!subscription || subscription.status !== BusinessSubscriptionStatus.ACTIVE || expectedPlanId !== checkout.planId) {
+          throw new ConflictException('Subscription state changed; this invoice cannot be confirmed manually');
+        }
+        const now = new Date();
+        const periodStart = isTrial ? now : subscription.expiresAt > now ? subscription.expiresAt : now;
+        await tx.businessSubscription.update({
+          where: { id: subscription.id },
+          data: {
+            planId: checkout.planId,
+            monthlyPrice: checkout.amount,
+            status: BusinessSubscriptionStatus.ACTIVE,
+            startsAt: periodStart,
+            expiresAt: this.addMonth(periodStart),
+            trialConvertedAt: isTrial ? now : subscription.trialConvertedAt,
+            nextPlanId: null,
+          },
+        });
+        await tx.businessSubscriptionEvent.create({
+          data: {
+            subscriptionId: subscription.id,
+            type: isTrial ? SubscriptionEventType.UPGRADED : checkout.planId === subscription.planId ? SubscriptionEventType.RENEWED : Number(checkout.amount) > Number(subscription.monthlyPrice) ? SubscriptionEventType.UPGRADED : SubscriptionEventType.DOWNGRADED,
+            fromPlanId: subscription.planId,
+            toPlanId: checkout.planId,
+            changedById: actorUserId,
+            effectiveAt: now,
+            note: `Admin confirmed platform invoice ${checkout.id}: ${note.trim()}`,
+          },
+        });
+        await tx.subscriptionCheckout.update({
+          where: { id: checkout.id },
+          data: { status: SubscriptionCheckoutStatus.PAID, paidAt: now },
+        });
+        await tx.platformSupportAction.create({
+          data: {
+            actorUserId,
+            chainId: checkout.chainId,
+            action: 'CONFIRM_PLATFORM_INVOICE',
+            note: note.trim(),
+            details: { checkoutId: checkout.id, previousReviewReason: checkout.reviewReason },
+          },
+        });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+    return this.prisma.subscriptionCheckout.findUniqueOrThrow({
+      where: { id: checkoutId },
+      select: { id: true, status: true, paidAt: true, reviewReason: true },
+    });
+  }
+
+
   private async settleCheckout(checkoutId: string, orderCode: string, amount: number | undefined): Promise<string> {
     return this.prisma.$transaction(
       async (tx) => {

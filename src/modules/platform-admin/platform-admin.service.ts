@@ -291,6 +291,50 @@ export class PlatformAdminService {
     return true;
   }
 
+  async confirmRegistrationCheckoutManually(checkoutId: string, note: string, actorUserId: string) {
+    const emailId = await this.prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${checkoutId}))`;
+        const checkout = await tx.registrationCheckout.findUnique({ where: { id: checkoutId } });
+        if (!checkout) throw new NotFoundException('Registration invoice not found');
+        if (checkout.status !== SubscriptionCheckoutStatus.NEEDS_REVIEW) {
+          throw new ConflictException('Only an invoice that needs review can be confirmed manually');
+        }
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${checkout.applicationId}))`;
+        const application = await tx.registrationApplication.findUnique({
+          where: { id: checkout.applicationId },
+        });
+        if (!application || application.status !== 'APPROVED' || application.approvedPlanId !== checkout.planId) {
+          throw new ConflictException('Registration state changed; this invoice cannot be confirmed manually');
+        }
+        const plan = await tx.servicePlan.findUniqueOrThrow({ where: { id: checkout.planId } });
+        const ownerEmailId = await this.provisionRegistration(tx, application, plan, false);
+        const now = new Date();
+        await tx.registrationCheckout.update({
+          where: { id: checkout.id },
+          data: { status: SubscriptionCheckoutStatus.PAID, paidAt: now },
+        });
+        await tx.platformSupportAction.create({
+          data: {
+            actorUserId,
+            applicationId: application.id,
+            action: 'CONFIRM_REGISTRATION_INVOICE',
+            note: note.trim(),
+            details: { checkoutId: checkout.id, previousReviewReason: checkout.reviewReason },
+          },
+        });
+        return ownerEmailId;
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+    await this.emails.deliver(emailId);
+    return this.prisma.registrationCheckout.findUniqueOrThrow({
+      where: { id: checkoutId },
+      select: { id: true, status: true, paidAt: true, reviewReason: true },
+    });
+  }
+
+
   async changeApprovedPlan(id: string, planId: string, note: string, actorUserId: string) {
     const plan = await this.getActivePlan(planId);
     if (plan.code === 'TRIAL') throw new BadRequestException('Select a paid plan');
