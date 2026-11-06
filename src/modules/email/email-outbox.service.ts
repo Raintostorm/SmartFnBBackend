@@ -46,7 +46,7 @@ export class EmailOutboxService {
         : message.template === 'PLATFORM_INVOICE'
         ? this.platformInvoiceHtml(payload)
         : message.template === 'TRIAL_EXPIRING'
-        ? this.trialExpiringHtml(payload, `${publicWebUrl}/owner/plan`)
+        ? this.trialExpiringHtml(payload, `${publicWebUrl}/brand-manager/plan`)
         : message.template === 'REGISTRATION_APPLICATION_REJECTED'
         ? this.registrationRejectedHtml(payload)
         : this.setupHtml(payload, setupUrl);
@@ -103,7 +103,7 @@ export class EmailOutboxService {
     const business = this.escape(payload.businessName ?? 'doanh nghiệp');
     const plan = this.escape(payload.planName ?? 'gói đã duyệt');
     const expiry = payload.expiresAt ? new Date(payload.expiresAt).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }) : '';
-    return `<p>Hồ sơ ${business} đã được duyệt với ${plan}.</p><p><a href="${this.escape(activationUrl)}">Chọn dùng thử hoặc thanh toán để kích hoạt</a></p><p>Liên kết chỉ dùng một lần${expiry ? `, hết hạn lúc ${this.escape(expiry)}` : ''}. Tài khoản Owner được cấp sau khi kích hoạt.</p>`;
+    return `<p>Hồ sơ ${business} đã được duyệt với ${plan}.</p><p><a href="${this.escape(activationUrl)}">Chọn dùng thử hoặc thanh toán để kích hoạt</a></p><p>Liên kết chỉ dùng một lần${expiry ? `, hết hạn lúc ${this.escape(expiry)}` : ''}. Tài khoản Brand Manager được cấp sau khi kích hoạt.</p>`;
   }
 
   private platformInvoiceHtml(payload: SetupPayload): string {

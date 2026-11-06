@@ -393,7 +393,7 @@ export class PlatformAdminService {
     const subscription = await tx.businessSubscription.create({ data: { chainId: chain.id, planId: plan.id, monthlyPrice: plan.monthlyPrice, startsAt: now, expiresAt, trialStartedAt: trial ? now : null, trialEndsAt: trial ? expiresAt : null } });
     await tx.businessSubscriptionEvent.create({ data: { subscriptionId: subscription.id, type: SubscriptionEventType.CREATED, toPlanId: plan.id, changedById: application.reviewedById, note: trial ? 'Basic trial chosen during activation' : 'First month paid through platform PayOS' } });
     await tx.passwordSetupToken.create({ data: { userId: user.id, tokenHash: this.hashToken(setupToken), expiresAt: setupExpiresAt } });
-    const email = await tx.emailOutbox.create({ data: { recipient: user.email, subject: 'Thiết lập tài khoản Owner Smart F&B', template: 'OWNER_ACCOUNT_CREATED', payload: { businessName: application.businessName, employeeName: application.representativeName, loginEmail: user.email, setupToken, setupPath: '/setup-password', expiresAt: setupExpiresAt.toISOString() } } });
+    const email = await tx.emailOutbox.create({ data: { recipient: user.email, subject: 'Thiết lập tài khoản Brand Manager Smart F&B', template: 'OWNER_ACCOUNT_CREATED', payload: { businessName: application.businessName, employeeName: application.representativeName, loginEmail: user.email, setupToken, setupPath: '/setup-password', expiresAt: setupExpiresAt.toISOString() } } });
     await tx.registrationApplication.update({ where: { id: application.id }, data: { status: 'ACTIVATED', activatedAt: now, approvedChainId: chain.id, ownerUserId: user.id } });
     return email.id;
   }
@@ -724,7 +724,7 @@ export class PlatformAdminService {
       },
     });
     if (!owner) {
-      throw new NotFoundException('Owner account not found');
+      throw new NotFoundException('Brand Manager account not found');
     }
     const token = randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
@@ -743,7 +743,7 @@ export class PlatformAdminService {
       await transaction.emailOutbox.create({
         data: {
           recipient: owner.user.email,
-          subject: 'Đặt lại mật khẩu Owner Smart F&B',
+          subject: 'Đặt lại mật khẩu Brand Manager Smart F&B',
           template: 'OWNER_PASSWORD_RESET',
           payload: {
             ownerName: `${owner.firstName} ${owner.lastName}`,

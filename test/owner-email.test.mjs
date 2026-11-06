@@ -176,7 +176,7 @@ describe('Owner approval email', () => {
         },
       );
       assert.equal(await email.deliver('trial-email'), 'SENT');
-      assert.match(sent.html, /owner\/plan/);
+      assert.match(sent.html, /brand-manager\/plan/);
       assert.match(sent.html, /còn 3 ngày/);
       assert.doesNotMatch(sent.html, /setup-password|token=/);
     } finally {

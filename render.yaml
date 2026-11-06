@@ -61,6 +61,13 @@ services:
         sync: false
       - key: EMAIL_FROM
         sync: false
+      # OW-12: Google Vision performs OCR; OpenAI structures OCR text into a reviewable draft.
+      - key: GOOGLE_VISION_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: MENU_IMPORT_AI_MODEL
+        value: gpt-4.1-mini
       # Keep disabled until the S3-compatible secrets below are configured.
       # Render's local filesystem is ephemeral and must not store receipt history.
       - key: RECEIPT_PDF_ENABLED

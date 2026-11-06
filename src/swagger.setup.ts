@@ -20,6 +20,10 @@ export const SWAGGER_TAGS = [
   ['Restaurant chain subscription', 'OWNER và MANAGER xem trạng thái, hạn dùng và hạn mức gói.'],
   ['Employees - OWNER', 'OWNER quản lý tài khoản nhân viên theo phạm vi chuỗi.'],
   ['Menu - chain wide (OWNER)', 'OWNER quản lý danh mục, món và tùy chọn dùng chung.'],
+  [
+    'Menu imports (Brand Manager)',
+    'Brand Manager duyệt bản nháp OCR + AI trước khi nhập vào menu toàn chuỗi.',
+  ],
   ['Reports - OWNER', 'Báo cáo doanh thu và vận hành của OWNER.'],
   [
     'Store Manager',

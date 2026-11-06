@@ -114,7 +114,7 @@ export class CombosService {
             if (
               !item.optionGroups.some(
                 (l) =>
-                  l.group.code.toUpperCase() === 'SIZE' &&
+                  l.group.code.toUpperCase().startsWith('SIZE') &&
                   l.group.isActive &&
                   l.group.options.some((o) => o.code === component.fixedSizeCode && o.isActive),
               )
@@ -262,7 +262,7 @@ export class CombosService {
             !c.fixedSizeCode ||
             item.optionGroups.some(
               (l) =>
-                l.group.code.toUpperCase() === 'SIZE' &&
+                l.group.code.toUpperCase().startsWith('SIZE') &&
                 l.group.isActive &&
                 l.group.options.some(
                   (o) =>
@@ -336,7 +336,7 @@ export class CombosService {
             isActive: true,
             group: {
               isActive: true,
-              code: 'SIZE',
+              code: { startsWith: 'SIZE' },
               menuItems: { some: { menuItemId: choice.menuItemId } },
             },
           },

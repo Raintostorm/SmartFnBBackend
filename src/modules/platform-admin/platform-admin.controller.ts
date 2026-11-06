@@ -54,7 +54,7 @@ export class PlatformAdminController {
   }
 
   @Get('registration-applications/:id')
-  @ApiOperation({ summary: 'View a registration application and issued Owner status' })
+  @ApiOperation({ summary: 'View a registration application and issued Brand Manager status' })
   getApplication(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.platformAdminService.getRegistrationApplication(id);
   }
@@ -62,10 +62,10 @@ export class PlatformAdminController {
   @Post('registration-applications/:id/approve')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Approve an application and provision business, branding, and Owner',
-    description: 'Queues the Owner setup email in the transactional email outbox.',
+    summary: 'Approve an application and provision business, branding, and Brand Manager',
+    description: 'Queues the Brand Manager setup email in the transactional email outbox.',
   })
-  @ApiConflictResponse({ description: 'Application already reviewed or Owner identity conflicts' })
+  @ApiConflictResponse({ description: 'Application already reviewed or Brand Manager identity conflicts' })
   approveApplication(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: ApproveRegistrationApplicationDto,
@@ -177,7 +177,7 @@ export class PlatformAdminController {
 
   @Post('owners/:ownerId/reset-password')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Queue a one-time password setup email for an Owner' })
+  @ApiOperation({ summary: 'Queue a one-time password setup email for a Brand Manager' })
   resetOwnerPassword(
     @Param('ownerId', new ParseUUIDPipe()) ownerId: string,
     @CurrentUser() admin: AuthenticatedUser,

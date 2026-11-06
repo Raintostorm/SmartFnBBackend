@@ -210,6 +210,16 @@ ca làm và branding. Cấu hình bằng `REALTIME_ENABLED`, `REALTIME_PATH` và
 - Màn gọi số nhận các event `calling.order.queued`, `calling.order.preparing`, `calling.order.ready` và `calling.order.delivered`.
 - Cấu hình `PUBLIC_WEB_URL` và `ORDER_TRACKING_SECRET` trước khi deploy để QR trên phiếu mở đúng trang Web.
 
+### Nhập menu từ ảnh (OW-12)
+
+Thiết lập hai secret trên backend (local hoặc Render):
+
+- `GOOGLE_VISION_API_KEY`: Google Cloud Vision API đã bật quyền `images:annotate` để OCR ảnh menu.
+- `OPENAI_API_KEY`: khoá API dùng để chuyển văn bản OCR thành bản nháp có cấu trúc.
+- `MENU_IMPORT_AI_MODEL` là tuỳ chọn; mặc định `gpt-4.1-mini`.
+
+Ảnh được backend đọc từ asset storage và gửi dạng base64 cho OCR; trình duyệt không nhận các khoá dịch vụ. Kết quả AI luôn ở trạng thái chờ Brand Manager duyệt, chưa ghi menu cho tới khi gọi endpoint `commit`.
+
 ### Dữ liệu demo Waiter và Kitchen Staff
 
 Để có dữ liệu kiểm tra trong PostgreSQL/pgAdmin, cấu hình local:

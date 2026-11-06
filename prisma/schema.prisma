@@ -282,6 +282,14 @@ enum SubscriptionCheckoutStatus {
   NEEDS_REVIEW
 }
 
+enum MenuImportStatus {
+  PROCESSING
+  WAITING_REVIEW
+  IMPORTED
+  FAILED
+  CANCELLED
+}
+
 model Role {
   id          String   @id @default(uuid()) @db.Uuid
   code        String   @unique @db.VarChar(50)
@@ -1033,6 +1041,27 @@ model MenuCategory {
   @@unique([chainId, name])
   @@index([chainId, isActive, displayOrder])
   @@map("menu_categories")
+}
+
+model MenuImport {
+  id          String           @id @default(uuid()) @db.Uuid
+  chainId     String           @map("chain_id") @db.Uuid
+  createdById String           @map("created_by_id") @db.Uuid
+  status      MenuImportStatus @default(PROCESSING)
+  imageUrls   Json             @map("image_urls")
+  ocrText     Json?            @map("ocr_text")
+  draft       Json?
+  result      Json?
+  errorReason String?          @map("error_reason") @db.VarChar(1000)
+  expiresAt   DateTime         @map("expires_at") @db.Timestamptz(6)
+  importedAt  DateTime?        @map("imported_at") @db.Timestamptz(6)
+  cancelledAt DateTime?        @map("cancelled_at") @db.Timestamptz(6)
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([chainId, createdAt])
+  @@index([status, expiresAt])
+  @@map("menu_imports")
 }
 
 model MenuItem {

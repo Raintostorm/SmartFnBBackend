@@ -42,7 +42,7 @@ export class PublicServicePlansController {
   constructor(private readonly platformAdminService: PlatformAdminService) {}
 
   @Get()
-  @ApiOperation({ summary: 'List active service plans for prospective Owners' })
+  @ApiOperation({ summary: 'List active service plans for prospective Brand Managers' })
   @ApiOkResponse({ type: PublicServicePlanResponseDto, isArray: true })
   listActivePlans() {
     return this.platformAdminService.listPublicServicePlans();
