@@ -215,8 +215,8 @@ ca làm và branding. Cấu hình bằng `REALTIME_ENABLED`, `REALTIME_PATH` và
 Thiết lập hai secret trên backend (local hoặc Render):
 
 - `GOOGLE_VISION_API_KEY`: Google Cloud Vision API đã bật quyền `images:annotate` để OCR ảnh menu.
-- `OPENAI_API_KEY`: khoá API dùng để chuyển văn bản OCR thành bản nháp có cấu trúc.
-- `MENU_IMPORT_AI_MODEL` là tuỳ chọn; mặc định `gpt-4.1-mini`.
+- `GEMINI_API_KEY`: khoá Gemini Developer API dùng để chuyển văn bản OCR thành bản nháp có cấu trúc.
+- `MENU_IMPORT_AI_MODEL` là tuỳ chọn; mặc định `gemini-2.5-flash`.
 
 Ảnh được backend đọc từ asset storage và gửi dạng base64 cho OCR; trình duyệt không nhận các khoá dịch vụ. Kết quả AI luôn ở trạng thái chờ Brand Manager duyệt, chưa ghi menu cho tới khi gọi endpoint `commit`.
 

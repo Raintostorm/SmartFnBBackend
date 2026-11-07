@@ -399,41 +399,59 @@ export class MenuImportsService implements OnModuleInit {
   }
 
   private async runAi(context: unknown): Promise<unknown> {
-    const apiKey = process.env.OPENAI_API_KEY?.trim();
+    const apiKey = process.env.GEMINI_API_KEY?.trim();
     if (!apiKey)
-      throw new ServiceUnavailableException('OPENAI_API_KEY is required for menu AI structuring');
-    const response = await fetch('https://api.openai.com/v1/responses', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: process.env.MENU_IMPORT_AI_MODEL?.trim() || 'gpt-4.1-mini',
-        instructions:
-          'Structure Vietnamese OCR text into a menu draft. Never invent names or prices. Use only supplied branch and existing item IDs. Convert k and dotted VND prices to integer VND. Put uncertain lines in unresolved and warning. For duplicate items choose UPDATE_PRICE when price differs, otherwise SKIP.',
-        input: JSON.stringify(context),
-        text: {
-          format: {
-            type: 'json_schema',
-            name: 'menu_import_draft',
-            strict: true,
-            schema: draftSchema,
+      throw new ServiceUnavailableException('GEMINI_API_KEY is required for menu AI structuring');
+    const model = (process.env.MENU_IMPORT_AI_MODEL?.trim() || 'gemini-2.5-flash').replace(
+      /^models\//,
+      '',
+    );
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+      {
+        method: 'POST',
+        headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: {
+            parts: [
+              {
+                text: 'Structure Vietnamese OCR text into a menu draft. Never invent names or prices. Use only supplied branch and existing item IDs. Convert k and dotted VND prices to integer VND. Put uncertain lines in unresolved and warning. For duplicate items choose UPDATE_PRICE when price differs, otherwise SKIP.',
+              },
+            ],
           },
-        },
-        store: false,
-      }),
-      signal: AbortSignal.timeout(60_000),
-    });
+          contents: [
+            {
+              role: 'user',
+              parts: [{ text: JSON.stringify(context) }],
+            },
+          ],
+          generationConfig: {
+            temperature: 0,
+            responseMimeType: 'application/json',
+            responseJsonSchema: draftSchema,
+          },
+        }),
+        signal: AbortSignal.timeout(60_000),
+      },
+    );
     const body = (await response.json()) as {
       error?: { message?: string };
-      output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
+      promptFeedback?: { blockReason?: string };
+      candidates?: Array<{
+        finishReason?: string;
+        content?: { parts?: Array<{ text?: string }> };
+      }>;
     };
     if (!response.ok)
+      throw new Error(body.error?.message || `Gemini rejected menu import (${response.status})`);
+    const candidate = body.candidates?.[0];
+    const text = candidate?.content?.parts?.find((part) => part.text)?.text;
+    if (!text)
       throw new Error(
-        body.error?.message || `AI service rejected menu import (${response.status})`,
+        body.promptFeedback?.blockReason
+          ? `Gemini blocked the menu import (${body.promptFeedback.blockReason})`
+          : `Gemini returned no structured menu draft${candidate?.finishReason ? ` (${candidate.finishReason})` : ''}`,
       );
-    const text = body.output
-      ?.flatMap((entry) => entry.content ?? [])
-      .find((part) => part.type === 'output_text')?.text;
-    if (!text) throw new Error('AI service returned no structured menu draft');
     return JSON.parse(text);
   }
 
