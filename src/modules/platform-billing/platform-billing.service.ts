@@ -220,7 +220,7 @@ export class PlatformBillingService {
   async confirmCheckoutManually(checkoutId: string, note: string, actorUserId: string) {
     await this.prisma.$transaction(
       async (tx) => {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${checkoutId}))`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${checkoutId}))`;
         const checkout = await tx.subscriptionCheckout.findUnique({ where: { id: checkoutId } });
         if (!checkout) throw new NotFoundException('Platform checkout not found');
         if (checkout.status !== SubscriptionCheckoutStatus.NEEDS_REVIEW) {
@@ -286,7 +286,7 @@ export class PlatformBillingService {
   private async settleCheckout(checkoutId: string, orderCode: string, amount: number | undefined): Promise<string> {
     return this.prisma.$transaction(
       async (tx) => {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${orderCode}))`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${orderCode}))`;
         const fresh = await tx.subscriptionCheckout.findUniqueOrThrow({
           where: { id: checkoutId },
         });

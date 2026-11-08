@@ -79,7 +79,7 @@ describe('Platform subscription PayOS checkout', () => {
     const prisma = {
       subscriptionCheckout: { findUnique: async () => checkout },
       $transaction: async (callback) => callback({
-        $queryRaw: async () => [],
+        $executeRaw: async () => 1,
         subscriptionCheckout: {
           findUniqueOrThrow: async () => checkout,
           update: async ({ data }) => { reviewStatus = data.status; },
@@ -112,7 +112,7 @@ describe('Platform subscription PayOS checkout', () => {
     const prisma = {
       subscriptionCheckout: { findUnique: async () => checkout },
       $transaction: async (callback) => callback({
-        $queryRaw: async () => [],
+        $executeRaw: async () => 1,
         subscriptionCheckout: {
           findUniqueOrThrow: async () => checkout,
           update: async ({ data }) => { reviewStatus = data.status; },
@@ -138,7 +138,7 @@ describe('Platform subscription PayOS checkout', () => {
       chainId: 'chain-1',
     };
     const tx = {
-      $queryRaw: async () => [],
+      $executeRaw: async () => 1,
       subscriptionCheckout: {
         findUniqueOrThrow: async () => ({ ...checkout, status }),
         update: async ({ data }) => {
@@ -188,7 +188,7 @@ describe('Platform subscription PayOS checkout', () => {
     let updated;
     let checkoutStatus = 'PENDING';
     const tx = {
-      $queryRaw: async () => [],
+      $executeRaw: async () => 1,
       subscriptionCheckout: { findUniqueOrThrow: async () => ({ ...checkout, status: checkoutStatus }), update: async ({ data }) => { checkoutStatus = data.status; } },
       businessSubscription: { findUnique: async () => ({ id: 'sub-paid', chainId: 'chain-1', planId: 'basic-id', nextPlanId: 'standard-id', plan: { code: 'BASIC' }, status: 'ACTIVE', monthlyPrice: new Prisma.Decimal(299000), expiresAt: currentExpiry, trialStartedAt: null, trialConvertedAt: null }), update: async ({ data }) => { updated = data; } },
       businessSubscriptionEvent: { create: async () => ({}) },
@@ -210,7 +210,7 @@ describe('Platform subscription PayOS checkout', () => {
     let events = 0;
     const checkout = { id: 'late-1', chainId: 'chain-1', providerOrderCode: '987', paymentLinkId: 'link-987', planId: paidPlan.id, amount: new Prisma.Decimal(299000) };
     const tx = {
-      $queryRaw: async () => [],
+      $executeRaw: async () => 1,
       subscriptionCheckout: {
         findUniqueOrThrow: async () => ({ ...checkout, status: checkoutStatus }),
         update: async ({ data }) => { checkoutStatus = data.status; },
