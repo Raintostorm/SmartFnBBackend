@@ -203,4 +203,36 @@ describe('Platform subscription PayOS checkout', () => {
     assert.ok(updated.expiresAt > currentExpiry);
     assert.equal(checkoutStatus, 'PAID');
   });
+
+  it('automatically settles a paid checkout after trial expiry exactly once', async () => {
+    let checkoutStatus = 'PENDING';
+    let updated;
+    let events = 0;
+    const checkout = { id: 'late-1', chainId: 'chain-1', providerOrderCode: '987', paymentLinkId: 'link-987', planId: paidPlan.id, amount: new Prisma.Decimal(299000) };
+    const tx = {
+      $queryRaw: async () => [],
+      subscriptionCheckout: {
+        findUniqueOrThrow: async () => ({ ...checkout, status: checkoutStatus }),
+        update: async ({ data }) => { checkoutStatus = data.status; },
+      },
+      businessSubscription: {
+        findUnique: async () => ({ ...trial, status: 'EXPIRED', expiresAt: new Date(0) }),
+        update: async ({ data }) => { updated = data; },
+      },
+      businessSubscriptionEvent: { create: async () => { events++; } },
+    };
+    const prisma = {
+      subscriptionCheckout: { findMany: async () => checkoutStatus === 'PENDING' ? [checkout] : [] },
+      $transaction: async (work) => work(tx),
+    };
+    const payos = { getPayment: async () => ({ orderCode: 987, status: 'PAID', amountPaid: 299000 }) };
+    const service = new PlatformBillingService(prisma, config, access, payos);
+    assert.equal(await service.reconcilePending(), 1);
+    assert.equal(checkoutStatus, 'PAID');
+    assert.equal(updated.status, 'ACTIVE');
+    assert.equal(updated.planId, paidPlan.id);
+    assert.equal(events, 1);
+    assert.equal(await service.reconcilePending(), 0);
+    assert.equal(events, 1);
+  });
 });

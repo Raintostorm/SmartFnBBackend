@@ -50,7 +50,7 @@ export class PlatformBillingService {
     ]);
     if (!subscription) throw new NotFoundException('Business subscription not found');
     const isTrial = subscription.plan.code === 'TRIAL' && !!subscription.trialStartedAt && !subscription.trialConvertedAt;
-    if (!isTrial && (subscription.plan.code === 'TRIAL' || subscription.status !== BusinessSubscriptionStatus.ACTIVE)) throw new ConflictException('Subscription cannot be renewed');
+    if (!isTrial && (subscription.plan.code === 'TRIAL' || (subscription.status !== BusinessSubscriptionStatus.ACTIVE && subscription.status !== BusinessSubscriptionStatus.EXPIRED))) throw new ConflictException('Subscription cannot be renewed');
     if (!isTrial && planId !== (subscription.nextPlanId ?? subscription.planId)) throw new ConflictException('Checkout must use the scheduled next plan');
     if (!isTrial && subscription.expiresAt.getTime() - Date.now() > 7 * 24 * 60 * 60_000) throw new ConflictException('Renewal opens 7 days before expiry');
     if (subscription.status === BusinessSubscriptionStatus.SUSPENDED) {
@@ -197,6 +197,26 @@ export class PlatformBillingService {
     return { outcome, checkout: await this.prisma.subscriptionCheckout.findUniqueOrThrow({ where: { id: checkoutId }, select: { id: true, status: true, paidAt: true, reviewReason: true } }) };
   }
 
+  async reconcilePending(): Promise<number> {
+    const pending = await this.prisma.subscriptionCheckout.findMany({
+      where: { status: SubscriptionCheckoutStatus.PENDING, checkoutUrl: { not: null } },
+      select: { id: true, providerOrderCode: true, paymentLinkId: true },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
+    let settled = 0;
+    for (const checkout of pending) {
+      try {
+        const provider = await this.payos.getPayment(this.credentials(), checkout.paymentLinkId ?? checkout.providerOrderCode);
+        if (provider.orderCode !== Number(checkout.providerOrderCode) || provider.status !== 'PAID') continue;
+        if ((await this.settleCheckout(checkout.id, checkout.providerOrderCode, provider.amountPaid ?? -1)) === 'paid') settled++;
+      } catch (error) {
+        this.logger.warn(`Could not reconcile platform checkout ${checkout.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return settled;
+  }
+
   async confirmCheckoutManually(checkoutId: string, note: string, actorUserId: string) {
     await this.prisma.$transaction(
       async (tx) => {
@@ -212,7 +232,7 @@ export class PlatformBillingService {
         });
         const isTrial = subscription?.plan.code === 'TRIAL' && !!subscription.trialStartedAt && !subscription.trialConvertedAt;
         const expectedPlanId = isTrial ? checkout.planId : (subscription?.nextPlanId ?? subscription?.planId);
-        if (!subscription || subscription.status !== BusinessSubscriptionStatus.ACTIVE || expectedPlanId !== checkout.planId) {
+        if (!subscription || (subscription.status !== BusinessSubscriptionStatus.ACTIVE && subscription.status !== BusinessSubscriptionStatus.EXPIRED) || expectedPlanId !== checkout.planId) {
           throw new ConflictException('Subscription state changed; this invoice cannot be confirmed manually');
         }
         const now = new Date();
@@ -285,7 +305,7 @@ export class PlatformBillingService {
         });
         const isTrial = subscription?.plan.code === 'TRIAL' && !!subscription.trialStartedAt && !subscription.trialConvertedAt;
         const expectedPlanId = isTrial ? fresh.planId : (subscription?.nextPlanId ?? subscription?.planId);
-        if (!subscription || expectedPlanId !== fresh.planId || subscription.status !== BusinessSubscriptionStatus.ACTIVE) {
+        if (!subscription || expectedPlanId !== fresh.planId || (subscription.status !== BusinessSubscriptionStatus.ACTIVE && subscription.status !== BusinessSubscriptionStatus.EXPIRED)) {
           await tx.subscriptionCheckout.update({ where: { id: fresh.id }, data: { status: SubscriptionCheckoutStatus.NEEDS_REVIEW, paidAt: new Date(), reviewReason: 'SUBSCRIPTION_STATE_CHANGED' } });
           return 'review';
         }

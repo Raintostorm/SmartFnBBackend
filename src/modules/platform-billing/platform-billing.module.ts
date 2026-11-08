@@ -13,6 +13,7 @@ import { PlatformBillingService } from './platform-billing.service.js';
 import { TrialReminderWorker } from './trial-reminder.worker.js';
 import { PlatformAdminAnalyticsController } from './platform-admin-analytics.controller.js';
 import { PlatformAdminAnalyticsService } from './platform-admin-analytics.service.js';
+import { PlatformPaymentReconciliationWorker } from './platform-payment-reconciliation.worker.js';
 
 @Module({
   imports: [BranchesModule, EmailModule, PlatformAdminModule],
@@ -28,6 +29,7 @@ import { PlatformAdminAnalyticsService } from './platform-admin-analytics.servic
     PlatformAdminAnalyticsService,
     PayosApiService,
     TrialReminderWorker,
+    PlatformPaymentReconciliationWorker,
   ],
 })
 export class PlatformBillingModule {}
