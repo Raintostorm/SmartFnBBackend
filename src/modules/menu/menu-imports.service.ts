@@ -399,6 +399,11 @@ export class MenuImportsService implements OnModuleInit {
   }
 
   private async runAi(context: unknown): Promise<unknown> {
+    const provider = process.env.MENU_IMPORT_AI_PROVIDER?.trim().toLowerCase() || 'gemini';
+    if (provider === 'qwen') return this.runQwen(context);
+    if (provider !== 'gemini')
+      throw new ServiceUnavailableException('MENU_IMPORT_AI_PROVIDER must be gemini or qwen');
+
     const apiKey = process.env.GEMINI_API_KEY?.trim();
     if (!apiKey)
       throw new ServiceUnavailableException('GEMINI_API_KEY is required for menu AI structuring');
@@ -452,6 +457,62 @@ export class MenuImportsService implements OnModuleInit {
           ? `Gemini blocked the menu import (${body.promptFeedback.blockReason})`
           : `Gemini returned no structured menu draft${candidate?.finishReason ? ` (${candidate.finishReason})` : ''}`,
       );
+    return JSON.parse(text);
+  }
+
+  private async runQwen(context: unknown): Promise<unknown> {
+    const baseUrl = process.env.AI_BASE_URL?.trim().replace(/\/+$/, '');
+    const apiKey = process.env.AI_API_KEY?.trim();
+    if (!baseUrl || !apiKey)
+      throw new ServiceUnavailableException('AI_BASE_URL and AI_API_KEY are required for Qwen');
+    if (!baseUrl.startsWith('https://') && process.env.NODE_ENV === 'production')
+      throw new ServiceUnavailableException('AI_BASE_URL must use HTTPS in production');
+    const model = process.env.AI_MODEL?.trim() || 'qwen3.5:4b';
+    const timeoutMs = Number(process.env.AI_REQUEST_TIMEOUT_MS || 95_000);
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1000)
+      throw new ServiceUnavailableException('AI_REQUEST_TIMEOUT_MS must be an integer of at least 1000');
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    };
+    const accessClientId = process.env.CF_ACCESS_CLIENT_ID?.trim();
+    const accessClientSecret = process.env.CF_ACCESS_CLIENT_SECRET?.trim();
+    if (accessClientId && accessClientSecret) {
+      headers['CF-Access-Client-Id'] = accessClientId;
+      headers['CF-Access-Client-Secret'] = accessClientSecret;
+    }
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Structure Vietnamese OCR text into a menu draft. Never invent names or prices. Use only supplied branch and existing item IDs. Convert k and dotted VND prices to integer VND. Put uncertain lines in unresolved and warning. For duplicate items choose UPDATE_PRICE when price differs, otherwise SKIP.',
+          },
+          { role: 'user', content: JSON.stringify(context) },
+        ],
+        stream: false,
+        temperature: 0,
+        max_tokens: 2048,
+        reasoning_effort: 'none',
+        response_format: {
+          type: 'json_schema',
+          json_schema: { name: 'menu_import_draft', strict: true, schema: draftSchema },
+        },
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const body = (await response.json()) as {
+      error?: { message?: string };
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    if (!response.ok)
+      throw new Error(body.error?.message || `Qwen gateway rejected menu import (${response.status})`);
+    const text = body.choices?.[0]?.message?.content;
+    if (!text) throw new Error('Qwen gateway returned no structured menu draft');
     return JSON.parse(text);
   }
 
