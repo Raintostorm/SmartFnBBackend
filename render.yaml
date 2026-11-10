@@ -70,6 +70,8 @@ services:
         value: gemini-2.5-flash
       - key: MENU_IMPORT_AI_PROVIDER
         value: gemini
+      - key: MENU_IMPORT_OCR_PROVIDER
+        value: google
       # Required only when MENU_IMPORT_AI_PROVIDER=qwen.
       - key: AI_BASE_URL
         sync: false
@@ -78,7 +80,7 @@ services:
       - key: AI_API_KEY
         sync: false
       - key: AI_REQUEST_TIMEOUT_MS
-        value: '95000'
+        value: '190000'
       # Keep disabled until the S3-compatible secrets below are configured.
       # Render's local filesystem is ephemeral and must not store receipt history.
       - key: RECEIPT_PDF_ENABLED

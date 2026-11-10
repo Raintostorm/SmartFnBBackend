@@ -366,6 +366,14 @@ export class MenuImportsService implements OnModuleInit {
   }
 
   private async runOcr(imageUrl: string): Promise<string> {
+    const provider = process.env.MENU_IMPORT_OCR_PROVIDER?.trim().toLowerCase() || 'google';
+    if (provider === 'qwen') {
+      const key = imageUrl.replace(/^\/uploads\//, '');
+      return this.runQwenOcr(await readAsset(key));
+    }
+    if (provider !== 'google')
+      throw new ServiceUnavailableException('MENU_IMPORT_OCR_PROVIDER must be google or qwen');
+
     const apiKey = process.env.GOOGLE_VISION_API_KEY?.trim();
     if (!apiKey)
       throw new ServiceUnavailableException('GOOGLE_VISION_API_KEY is required for menu OCR');
@@ -461,6 +469,50 @@ export class MenuImportsService implements OnModuleInit {
   }
 
   private async runQwen(context: unknown): Promise<unknown> {
+    const text = await this.requestQwen(
+      [
+        {
+          role: 'system',
+          content:
+            'Structure Vietnamese OCR text into a menu draft. Never invent names or prices. Use only supplied branch and existing item IDs. Convert k and dotted VND prices to integer VND. Put uncertain lines in unresolved and warning. For duplicate items choose UPDATE_PRICE when price differs, otherwise SKIP.',
+        },
+        { role: 'user', content: JSON.stringify(context) },
+      ],
+      2048,
+      {
+        type: 'json_schema',
+        json_schema: { name: 'menu_import_draft', strict: true, schema: draftSchema },
+      },
+    );
+    return JSON.parse(text);
+  }
+
+  private async runQwenOcr(image: { data: Buffer; contentType: string }): Promise<string> {
+    return this.requestQwen(
+      [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: 'Transcribe every visible menu line exactly. Preserve Vietnamese diacritics, category headings, item names, descriptions, sizes, and prices. Keep the visual reading order. Do not explain, correct, translate, or invent text. Return plain text only.',
+            },
+            {
+              type: 'image_url',
+              image_url: { url: `data:${image.contentType};base64,${image.data.toString('base64')}` },
+            },
+          ],
+        },
+      ],
+      2048,
+    );
+  }
+
+  private async requestQwen(
+    messages: unknown[],
+    maxTokens: number,
+    responseFormat?: unknown,
+  ): Promise<string> {
     const baseUrl = process.env.AI_BASE_URL?.trim().replace(/\/+$/, '');
     const apiKey = process.env.AI_API_KEY?.trim();
     if (!baseUrl || !apiKey)
@@ -468,7 +520,7 @@ export class MenuImportsService implements OnModuleInit {
     if (!baseUrl.startsWith('https://') && process.env.NODE_ENV === 'production')
       throw new ServiceUnavailableException('AI_BASE_URL must use HTTPS in production');
     const model = process.env.AI_MODEL?.trim() || 'qwen3.5:4b';
-    const timeoutMs = Number(process.env.AI_REQUEST_TIMEOUT_MS || 95_000);
+    const timeoutMs = Number(process.env.AI_REQUEST_TIMEOUT_MS || 190_000);
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1000)
       throw new ServiceUnavailableException('AI_REQUEST_TIMEOUT_MS must be an integer of at least 1000');
     const headers: Record<string, string> = {
@@ -486,22 +538,12 @@ export class MenuImportsService implements OnModuleInit {
       headers,
       body: JSON.stringify({
         model,
-        messages: [
-          {
-            role: 'system',
-            content:
-              'Structure Vietnamese OCR text into a menu draft. Never invent names or prices. Use only supplied branch and existing item IDs. Convert k and dotted VND prices to integer VND. Put uncertain lines in unresolved and warning. For duplicate items choose UPDATE_PRICE when price differs, otherwise SKIP.',
-          },
-          { role: 'user', content: JSON.stringify(context) },
-        ],
+        messages,
         stream: false,
         temperature: 0,
-        max_tokens: 2048,
+        max_tokens: maxTokens,
         reasoning_effort: 'none',
-        response_format: {
-          type: 'json_schema',
-          json_schema: { name: 'menu_import_draft', strict: true, schema: draftSchema },
-        },
+        response_format: responseFormat,
       }),
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -512,8 +554,8 @@ export class MenuImportsService implements OnModuleInit {
     if (!response.ok)
       throw new Error(body.error?.message || `Qwen gateway rejected menu import (${response.status})`);
     const text = body.choices?.[0]?.message?.content;
-    if (!text) throw new Error('Qwen gateway returned no structured menu draft');
-    return JSON.parse(text);
+    if (!text) throw new Error('Qwen gateway returned no content');
+    return text;
   }
 
   private validateDraft(value: unknown): MenuImportDraft {

@@ -174,6 +174,46 @@ describe('Menu imports', () => {
     }
   });
 
+  it('uses Qwen vision to transcribe an image without Google Vision', async () => {
+    const originalFetch = globalThis.fetch;
+    const originalValues = Object.fromEntries(
+      ['AI_BASE_URL', 'AI_API_KEY', 'AI_MODEL'].map((key) => [key, process.env[key]]),
+    );
+    let request;
+    process.env.AI_BASE_URL = 'http://127.0.0.1:11435/v1';
+    process.env.AI_API_KEY = 'qwen-test-key';
+    process.env.AI_MODEL = 'qwen3.5:4b';
+    globalThis.fetch = async (url, options) => {
+      request = { url: String(url), options };
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: 'Cà phê sữa 25.000' } }] }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    };
+
+    try {
+      const service = new MenuImportsService({}, {});
+      const result = await service.runQwenOcr({
+        data: Buffer.from('test-image'),
+        contentType: 'image/png',
+      });
+      const body = JSON.parse(request.options.body);
+      const imagePart = body.messages[0].content[1];
+
+      assert.equal(result, 'Cà phê sữa 25.000');
+      assert.equal(request.url, 'http://127.0.0.1:11435/v1/chat/completions');
+      assert.equal(imagePart.type, 'image_url');
+      assert.match(imagePart.image_url.url, /^data:image\/png;base64,/);
+      assert.equal('response_format' in body, false);
+    } finally {
+      globalThis.fetch = originalFetch;
+      for (const [key, value] of Object.entries(originalValues)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   it('commits a reviewed draft once and records skipped rows in the audit result', async () => {
     const auditRows = [];
     const imported = [];
