@@ -14,9 +14,11 @@ import { TrialReminderWorker } from './trial-reminder.worker.js';
 import { PlatformAdminAnalyticsController } from './platform-admin-analytics.controller.js';
 import { PlatformAdminAnalyticsService } from './platform-admin-analytics.service.js';
 import { PlatformPaymentReconciliationWorker } from './platform-payment-reconciliation.worker.js';
+import { SubscriptionModule } from '../subscription/subscription.module.js';
+import { SubscriptionInvoiceWorker } from './subscription-invoice.worker.js';
 
 @Module({
-  imports: [BranchesModule, EmailModule, PlatformAdminModule],
+  imports: [BranchesModule, EmailModule, PlatformAdminModule, SubscriptionModule],
   controllers: [
     PlatformBillingController,
     PlatformBillingWebhookController,
@@ -30,6 +32,7 @@ import { PlatformPaymentReconciliationWorker } from './platform-payment-reconcil
     PayosApiService,
     TrialReminderWorker,
     PlatformPaymentReconciliationWorker,
+    SubscriptionInvoiceWorker,
   ],
 })
 export class PlatformBillingModule {}

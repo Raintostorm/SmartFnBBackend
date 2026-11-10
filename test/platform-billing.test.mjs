@@ -21,6 +21,7 @@ const trial = {
   plan: { code: 'TRIAL' },
   trialStartedAt: new Date(),
   trialConvertedAt: null,
+  expiresAt: new Date(Date.now() + 14 * 86_400_000),
   status: 'ACTIVE',
 };
 const paidPlan = {
@@ -29,6 +30,7 @@ const paidPlan = {
   isActive: true,
   monthlyPrice: new Prisma.Decimal(299000),
 };
+const schedule = { activateDue: async () => undefined };
 
 describe('Platform subscription PayOS checkout', () => {
   it('lets an expired trial Owner start a paid checkout through platform credentials', async () => {
@@ -36,6 +38,7 @@ describe('Platform subscription PayOS checkout', () => {
     const prisma = {
       businessSubscription: { findUnique: async () => ({ ...trial, expiresAt: new Date(0) }) },
       servicePlan: { findUnique: async () => paidPlan },
+      subscriptionInvoice: { updateMany: async () => ({}), create: async ({ data }) => ({ id: 'invoice-1', total: data.total }) },
       subscriptionCheckout: {
         findFirst: async () => null,
         create: async ({ data }) => ({
@@ -64,7 +67,7 @@ describe('Platform subscription PayOS checkout', () => {
         return { checkoutUrl: 'https://pay.payos.vn/link', paymentLinkId: 'payment-1' };
       },
     };
-    const service = new PlatformBillingService(prisma, config, access, payos);
+    const service = new PlatformBillingService(prisma, config, access, payos, {}, {}, schedule);
     const result = await service.createCheckout(user, 'chain-1', paidPlan.id);
     assert.equal(result.status, 'PENDING');
     assert.equal(result.checkoutUrl, 'https://pay.payos.vn/link');
@@ -156,6 +159,7 @@ describe('Platform subscription PayOS checkout', () => {
           events++;
         },
       },
+      servicePlan: { findUniqueOrThrow: async () => paidPlan },
     };
     const prisma = {
       subscriptionCheckout: { findUnique: async () => checkout },
@@ -192,14 +196,16 @@ describe('Platform subscription PayOS checkout', () => {
       subscriptionCheckout: { findUniqueOrThrow: async () => ({ ...checkout, status: checkoutStatus }), update: async ({ data }) => { checkoutStatus = data.status; } },
       businessSubscription: { findUnique: async () => ({ id: 'sub-paid', chainId: 'chain-1', planId: 'basic-id', nextPlanId: 'standard-id', plan: { code: 'BASIC' }, status: 'ACTIVE', monthlyPrice: new Prisma.Decimal(299000), expiresAt: currentExpiry, trialStartedAt: null, trialConvertedAt: null }), update: async ({ data }) => { updated = data; } },
       businessSubscriptionEvent: { create: async () => ({}) },
+      servicePlan: { findUniqueOrThrow: async () => ({ monthlyPrice: new Prisma.Decimal(499000) }) },
     };
     const prisma = { subscriptionCheckout: { findUnique: async () => checkout }, $transaction: async (work) => work(tx) };
     const service = new PlatformBillingService(prisma, config, access, {});
     const data = { orderCode: 789, amount: 499000 };
     await service.webhook({ code: '00', success: true, data, signature: payosSignature(data, 'platform-checksum') });
-    assert.equal(updated.planId, 'standard-id');
+    assert.equal(updated.planId, 'basic-id');
+    assert.equal(updated.pendingPlanId, 'standard-id');
     assert.equal(updated.nextPlanId, null);
-    assert.equal(updated.startsAt.getTime(), currentExpiry.getTime());
+    assert.equal(updated.pendingStartsAt.getTime(), currentExpiry.getTime());
     assert.ok(updated.expiresAt > currentExpiry);
     assert.equal(checkoutStatus, 'PAID');
   });
@@ -220,6 +226,7 @@ describe('Platform subscription PayOS checkout', () => {
         update: async ({ data }) => { updated = data; },
       },
       businessSubscriptionEvent: { create: async () => { events++; } },
+      servicePlan: { findUniqueOrThrow: async () => paidPlan },
     };
     const prisma = {
       subscriptionCheckout: { findMany: async () => checkoutStatus === 'PENDING' ? [checkout] : [] },

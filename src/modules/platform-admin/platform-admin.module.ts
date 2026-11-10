@@ -9,9 +9,10 @@ import { PlatformStaffAccountsService } from './platform-staff-accounts.service.
 import { PayosApiService } from '../payos/payos-api.service.js';
 import { PublicServicePlansController } from './public-service-plans.controller.js';
 import { RegistrationApplicationsController } from './registration-applications.controller.js';
+import { SubscriptionModule } from '../subscription/subscription.module.js';
 
 @Module({
-  imports: [AuthModule, EmailModule],
+  imports: [AuthModule, EmailModule, SubscriptionModule],
   controllers: [
     RegistrationApplicationsController,
     PublicServicePlansController,

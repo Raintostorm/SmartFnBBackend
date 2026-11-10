@@ -25,7 +25,6 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { Roles } from '../auth/decorators/roles.decorator.js';
 import {
   ApproveRegistrationApplicationDto,
-  ChangeSubscriptionPlanDto,
   ChangeApprovedPlanDto,
   CreateServicePlanDto,
   ListRegistrationApplicationsQueryDto,
@@ -142,15 +141,11 @@ export class PlatformAdminController {
     return this.platformAdminService.renewSubscription(id, dto, admin.id);
   }
 
-  @Post('businesses/:id/subscription/change-plan')
+  @Post('businesses/:id/next-plan')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Upgrade or downgrade a business service plan' })
-  changePlan(
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Body() dto: ChangeSubscriptionPlanDto,
-    @CurrentUser() admin: AuthenticatedUser,
-  ) {
-    return this.platformAdminService.changeSubscriptionPlan(id, dto, admin.id);
+  @ApiOperation({ summary: 'Register a plan for the next unpaid subscription period' })
+  scheduleNextPlan(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: ChangeApprovedPlanDto, @CurrentUser() admin: AuthenticatedUser) {
+    return this.platformAdminService.scheduleNextPlan(id, dto.planId, dto.note, admin.id);
   }
 
   @Post('businesses/:id/suspend')

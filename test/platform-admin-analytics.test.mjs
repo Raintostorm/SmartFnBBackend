@@ -150,6 +150,7 @@ describe('Platform Admin invoice reconciliation', () => {
     };
     const tx = {
       $queryRaw: async () => [],
+      $executeRaw: async () => 1,
       registrationCheckout: {
         findUnique: async () => ({ ...checkout, status }),
         update: async ({ data }) => {
@@ -212,6 +213,7 @@ describe('Platform Admin invoice reconciliation', () => {
     };
     const tx = {
       $queryRaw: async () => [],
+      $executeRaw: async () => 1,
       subscriptionCheckout: {
         findUnique: async () => ({ ...checkout, status }),
         update: async ({ data }) => {
@@ -237,6 +239,7 @@ describe('Platform Admin invoice reconciliation', () => {
           event = data;
         },
       },
+      servicePlan: { findUniqueOrThrow: async () => ({ monthlyPrice: new Prisma.Decimal(499000) }) },
       platformSupportAction: {
         create: async ({ data }) => {
           supportAction = data;

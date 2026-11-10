@@ -22,6 +22,7 @@ import { EmailOutboxService } from '../email/email-outbox.service.js';
 import { PlatformAdminService } from '../platform-admin/platform-admin.service.js';
 import { PayosApiService, type PayosCredentials } from '../payos/payos-api.service.js';
 import { verifyPayosSignature } from '../payos/payos-signature.js';
+import { addSubscriptionMonth, SubscriptionScheduleService } from '../subscription/subscription-schedule.service.js';
 
 type PlatformWebhook = {
   code?: string;
@@ -40,10 +41,12 @@ export class PlatformBillingService {
     private readonly payos: PayosApiService,
     private readonly registrations: PlatformAdminService,
     private readonly emails: EmailOutboxService,
+    private readonly schedule: SubscriptionScheduleService,
   ) {}
 
   async createCheckout(user: AuthenticatedUser, chainId: string, planId: string) {
     await this.access.assertCanAccessChain(user, chainId);
+    await this.schedule.activateDue(chainId);
     const [subscription, plan] = await Promise.all([
       this.prisma.businessSubscription.findUnique({ where: { chainId }, include: { plan: true } }),
       this.prisma.servicePlan.findUnique({ where: { id: planId } }),
@@ -51,6 +54,7 @@ export class PlatformBillingService {
     if (!subscription) throw new NotFoundException('Business subscription not found');
     const isTrial = subscription.plan.code === 'TRIAL' && !!subscription.trialStartedAt && !subscription.trialConvertedAt;
     if (!isTrial && (subscription.plan.code === 'TRIAL' || (subscription.status !== BusinessSubscriptionStatus.ACTIVE && subscription.status !== BusinessSubscriptionStatus.EXPIRED))) throw new ConflictException('Subscription cannot be renewed');
+    if (subscription.pendingStartsAt) throw new ConflictException('Upcoming period has already been paid');
     if (!isTrial && planId !== (subscription.nextPlanId ?? subscription.planId)) throw new ConflictException('Checkout must use the scheduled next plan');
     if (!isTrial && subscription.expiresAt.getTime() - Date.now() > 7 * 24 * 60 * 60_000) throw new ConflictException('Renewal opens 7 days before expiry');
     if (subscription.status === BusinessSubscriptionStatus.SUSPENDED) {
@@ -58,10 +62,6 @@ export class PlatformBillingService {
     }
     if (!plan?.isActive || plan.code === 'TRIAL' || plan.monthlyPrice.lte(0)) {
       throw new BadRequestException('Select an active paid service plan');
-    }
-    const amount = Number(plan.monthlyPrice);
-    if (!Number.isSafeInteger(amount) || amount <= 0) {
-      throw new BadRequestException('PayOS requires a whole VND plan price');
     }
     const credentials = this.credentials();
     const pending = await this.prisma.subscriptionCheckout.findFirst({
@@ -79,11 +79,21 @@ export class PlatformBillingService {
       });
     }
 
+    if (isTrial) await this.prisma.subscriptionInvoice.updateMany({ where: { chainId, status: 'PENDING' }, data: { status: 'CANCELLED' } });
+
+    const invoice = isTrial
+      ? await this.prisma.subscriptionInvoice.create({
+          data: { chainId, subscriptionId: subscription.id, planId, planName: plan.name, periodStartsAt: new Date(), periodEndsAt: addSubscriptionMonth(subscription.expiresAt), total: Number(plan.monthlyPrice), lines: { create: [{ planId, kind: 'PLAN', description: plan.name, quantity: 1, unitPrice: Number(plan.monthlyPrice), amount: Number(plan.monthlyPrice) }] } },
+        })
+      : await this.schedule.getOrCreateInvoice(chainId);
+    const amount = invoice.total;
+    if (!Number.isSafeInteger(amount) || amount <= 0) throw new BadRequestException('PayOS requires a whole VND plan price');
+
     const orderCode = String(Date.now() * 1000 + randomInt(0, 1000));
     let checkout;
     try {
       checkout = await this.prisma.subscriptionCheckout.create({
-        data: { chainId, planId, amount, providerOrderCode: orderCode },
+        data: { chainId, planId, invoiceId: invoice.id, amount, providerOrderCode: orderCode },
       });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -226,6 +236,8 @@ export class PlatformBillingService {
         if (checkout.status !== SubscriptionCheckoutStatus.NEEDS_REVIEW) {
           throw new ConflictException('Only an invoice that needs review can be confirmed manually');
         }
+        const invoice = checkout.invoiceId ? await tx.subscriptionInvoice.findUnique({ where: { id: checkout.invoiceId }, include: { lines: true } }) : null;
+        if (checkout.invoiceId && (!invoice || invoice.status !== 'PENDING')) throw new ConflictException('Invoice is no longer payable');
         const subscription = await tx.businessSubscription.findUnique({
           where: { chainId: checkout.chainId },
           include: { plan: true },
@@ -237,16 +249,28 @@ export class PlatformBillingService {
         }
         const now = new Date();
         const periodStart = isTrial ? now : subscription.expiresAt > now ? subscription.expiresAt : now;
+        const early = !isTrial && periodStart > now;
+        const extraBranches = invoice?.lines.find((line) => line.kind === 'EXTRA_BRANCH')?.quantity ?? 0;
+        const accountPacks = invoice?.lines.find((line) => line.kind === 'ACCOUNT_PACK')?.quantity ?? 0;
         await tx.businessSubscription.update({
           where: { id: subscription.id },
           data: {
-            planId: checkout.planId,
-            monthlyPrice: checkout.amount,
+            planId: early ? subscription.planId : checkout.planId,
+            monthlyPrice: early ? subscription.monthlyPrice : (invoice?.lines.find((line) => line.kind === 'PLAN')?.unitPrice ?? (await tx.servicePlan.findUniqueOrThrow({ where: { id: checkout.planId } })).monthlyPrice),
             status: BusinessSubscriptionStatus.ACTIVE,
-            startsAt: periodStart,
-            expiresAt: this.addMonth(periodStart),
+            startsAt: early ? subscription.startsAt : periodStart,
+            expiresAt: invoice?.periodEndsAt ?? (isTrial ? this.addMonth(subscription.expiresAt) : this.addMonth(periodStart)),
             trialConvertedAt: isTrial ? now : subscription.trialConvertedAt,
             nextPlanId: null,
+            nextExtraBranches: null,
+            nextAccountPacks: null,
+            activeExtraBranches: early ? subscription.activeExtraBranches : extraBranches,
+            activeAccountPacks: early ? subscription.activeAccountPacks : accountPacks,
+            pendingPlanId: early ? checkout.planId : null,
+            pendingMonthlyPrice: early ? (invoice?.lines.find((line) => line.kind === 'PLAN')?.unitPrice ?? subscription.monthlyPrice) : null,
+            pendingExtraBranches: early ? extraBranches : 0,
+            pendingAccountPacks: early ? accountPacks : 0,
+            pendingStartsAt: early ? periodStart : null,
           },
         });
         await tx.businessSubscriptionEvent.create({
@@ -256,7 +280,7 @@ export class PlatformBillingService {
             fromPlanId: subscription.planId,
             toPlanId: checkout.planId,
             changedById: actorUserId,
-            effectiveAt: now,
+            effectiveAt: periodStart,
             note: `Admin confirmed platform invoice ${checkout.id}: ${note.trim()}`,
           },
         });
@@ -264,6 +288,7 @@ export class PlatformBillingService {
           where: { id: checkout.id },
           data: { status: SubscriptionCheckoutStatus.PAID, paidAt: now },
         });
+        if (invoice) await tx.subscriptionInvoice.update({ where: { id: invoice.id }, data: { status: 'PAID', paidAt: now } });
         await tx.platformSupportAction.create({
           data: {
             actorUserId,
@@ -290,9 +315,14 @@ export class PlatformBillingService {
         const fresh = await tx.subscriptionCheckout.findUniqueOrThrow({
           where: { id: checkoutId },
         });
+        const invoice = fresh.invoiceId ? await tx.subscriptionInvoice.findUnique({ where: { id: fresh.invoiceId }, include: { lines: true } }) : null;
         if (fresh.status === SubscriptionCheckoutStatus.PAID || fresh.status === SubscriptionCheckoutStatus.NEEDS_REVIEW) return 'duplicate';
         if (fresh.status !== SubscriptionCheckoutStatus.PENDING) {
           await tx.subscriptionCheckout.update({ where: { id: fresh.id }, data: { status: SubscriptionCheckoutStatus.NEEDS_REVIEW, paidAt: new Date(), reviewReason: 'CHECKOUT_INVALIDATED_BEFORE_PAYMENT' } });
+          return 'review';
+        }
+        if (fresh.invoiceId && (!invoice || invoice.status !== 'PENDING')) {
+          await tx.subscriptionCheckout.update({ where: { id: fresh.id }, data: { status: SubscriptionCheckoutStatus.NEEDS_REVIEW, paidAt: new Date(), reviewReason: 'INVOICE_INVALIDATED_BEFORE_PAYMENT' } });
           return 'review';
         }
         if (typeof amount !== 'number' || !Number.isSafeInteger(amount) || !fresh.amount.equals(amount)) {
@@ -311,16 +341,29 @@ export class PlatformBillingService {
         }
         const now = new Date();
         const periodStart = isTrial ? now : subscription.expiresAt > now ? subscription.expiresAt : now;
+        const periodEnd = invoice?.periodEndsAt ?? (isTrial ? this.addMonth(subscription.expiresAt) : this.addMonth(periodStart));
+        const extraBranches = invoice?.lines.find((line) => line.kind === 'EXTRA_BRANCH')?.quantity ?? 0;
+        const accountPacks = invoice?.lines.find((line) => line.kind === 'ACCOUNT_PACK')?.quantity ?? 0;
+        const early = !isTrial && periodStart > now;
         await tx.businessSubscription.update({
           where: { id: subscription.id },
           data: {
-            planId: fresh.planId,
-            monthlyPrice: fresh.amount,
+            planId: early ? subscription.planId : fresh.planId,
+            monthlyPrice: early ? subscription.monthlyPrice : (invoice?.lines.find((line) => line.kind === 'PLAN')?.unitPrice ?? (await tx.servicePlan.findUniqueOrThrow({ where: { id: fresh.planId } })).monthlyPrice),
             status: BusinessSubscriptionStatus.ACTIVE,
-            startsAt: periodStart,
-            expiresAt: this.addMonth(periodStart),
+            startsAt: early ? subscription.startsAt : periodStart,
+            expiresAt: periodEnd,
             trialConvertedAt: isTrial ? now : subscription.trialConvertedAt,
             nextPlanId: null,
+            nextExtraBranches: null,
+            nextAccountPacks: null,
+            activeExtraBranches: early ? subscription.activeExtraBranches : extraBranches,
+            activeAccountPacks: early ? subscription.activeAccountPacks : accountPacks,
+            pendingPlanId: early ? fresh.planId : null,
+            pendingMonthlyPrice: early ? (invoice?.lines.find((line) => line.kind === 'PLAN')?.unitPrice ?? subscription.monthlyPrice) : null,
+            pendingExtraBranches: early ? extraBranches : 0,
+            pendingAccountPacks: early ? accountPacks : 0,
+            pendingStartsAt: early ? periodStart : null,
           },
         });
         await tx.businessSubscriptionEvent.create({
@@ -329,7 +372,7 @@ export class PlatformBillingService {
             type: isTrial ? SubscriptionEventType.UPGRADED : fresh.planId === subscription.planId ? SubscriptionEventType.RENEWED : Number(fresh.amount) > Number(subscription.monthlyPrice) ? SubscriptionEventType.UPGRADED : SubscriptionEventType.DOWNGRADED,
             fromPlanId: subscription.planId,
             toPlanId: fresh.planId,
-            effectiveAt: now,
+            effectiveAt: periodStart,
             note: `PayOS platform checkout ${fresh.id}`,
           },
         });
@@ -337,6 +380,7 @@ export class PlatformBillingService {
           where: { id: fresh.id },
           data: { status: SubscriptionCheckoutStatus.PAID, paidAt: now },
         });
+        if (invoice) await tx.subscriptionInvoice.update({ where: { id: invoice.id }, data: { status: 'PAID', paidAt: now } });
         return 'paid';
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },

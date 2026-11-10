@@ -307,9 +307,10 @@ describe('Service plan quota', () => {
     });
   });
 
-  it('counts owners and employees together against the account limit', async () => {
+  it('counts staff accounts but excludes the Brand Manager from the account limit', async () => {
     const service = new PlanQuotaService({
       businessSubscription: {
+        findUnique: async () => ({ activeExtraBranches: 0, activeAccountPacks: 0 }),
         findFirst: async () => ({
           plan: {
             id: 'p',
@@ -331,7 +332,7 @@ describe('Service plan quota', () => {
 
     const snapshot = await service.getQuotaSnapshot('chain-one');
     const accounts = snapshot.quotas.find(({ resource }) => resource === 'accounts');
-    assert.deepEqual(accounts, { resource: 'accounts', used: 4, limit: 4, remaining: 0 });
+    assert.deepEqual(accounts, { resource: 'accounts', used: 3, limit: 4, remaining: 1 });
   });
 
   it('returns an expired subscription with its date and quota instead of hiding it', async () => {

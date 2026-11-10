@@ -379,6 +379,7 @@ model RestaurantChain {
   platformSupportActions  PlatformSupportAction[]
   subscription            BusinessSubscription?
   subscriptionCheckouts   SubscriptionCheckout[]
+  subscriptionInvoices   SubscriptionInvoice[]
   branding                BusinessBranding?
   displayPosters          DisplayPoster[]
   invoices                Invoice[]
@@ -686,6 +687,10 @@ model ServicePlan {
   monthlyPrice                 Decimal  @map("monthly_price") @db.Decimal(14, 2)
   maxBranches                  Int      @map("max_branches")
   maxAccounts                  Int      @map("max_accounts")
+  extraBranchPrice             Int      @default(0) @map("extra_branch_price")
+  extraBranchAccounts          Int      @default(8) @map("extra_branch_accounts")
+  extraAccountPackPrice        Int      @default(50000) @map("extra_account_pack_price")
+  extraBranchEnabled           Boolean  @default(false) @map("extra_branch_enabled")
   maxTables                    Int      @map("max_tables")
   brandingEnabled              Boolean  @default(false) @map("branding_enabled")
   multiBranchComparisonEnabled Boolean  @default(false) @map("multi_branch_comparison_enabled")
@@ -697,10 +702,13 @@ model ServicePlan {
   approvedApplications   RegistrationApplication[]   @relation("ApprovedRegistrationPlan")
   registrationCheckouts  RegistrationCheckout[]
   scheduledSubscriptions BusinessSubscription[]      @relation("ScheduledSubscriptionPlan")
+  pendingSubscriptions BusinessSubscription[] @relation("PendingSubscriptionPlan")
   subscriptions          BusinessSubscription[]
   eventsFrom             BusinessSubscriptionEvent[] @relation("SubscriptionEventFromPlan")
   eventsTo               BusinessSubscriptionEvent[] @relation("SubscriptionEventToPlan")
   checkouts              SubscriptionCheckout[]
+  invoiceLines           SubscriptionInvoiceLine[]
+  invoices               SubscriptionInvoice[]
 
   @@map("service_plans")
 }
@@ -750,6 +758,15 @@ model BusinessSubscription {
   chainId          String                     @unique @map("chain_id") @db.Uuid
   planId           String                     @map("plan_id") @db.Uuid
   nextPlanId       String?                    @map("next_plan_id") @db.Uuid
+  nextExtraBranches Int?                     @map("next_extra_branches")
+  nextAccountPacks  Int?                     @map("next_account_packs")
+  activeExtraBranches Int                    @default(0) @map("active_extra_branches")
+  activeAccountPacks  Int                     @default(0) @map("active_account_packs")
+  pendingPlanId String?                      @map("pending_plan_id") @db.Uuid
+  pendingMonthlyPrice Decimal?               @map("pending_monthly_price") @db.Decimal(14, 2)
+  pendingExtraBranches Int                   @default(0) @map("pending_extra_branches")
+  pendingAccountPacks Int                    @default(0) @map("pending_account_packs")
+  pendingStartsAt DateTime?                  @map("pending_starts_at") @db.Timestamptz(6)
   status           BusinessSubscriptionStatus @default(ACTIVE)
   monthlyPrice     Decimal                    @map("monthly_price") @db.Decimal(14, 2)
   startsAt         DateTime                   @map("starts_at") @db.Timestamptz(6)
@@ -764,6 +781,8 @@ model BusinessSubscription {
   chain    RestaurantChain             @relation(fields: [chainId], references: [id], onDelete: Cascade)
   plan     ServicePlan                 @relation(fields: [planId], references: [id], onDelete: Restrict)
   nextPlan ServicePlan?                @relation("ScheduledSubscriptionPlan", fields: [nextPlanId], references: [id], onDelete: SetNull)
+  pendingPlan ServicePlan?             @relation("PendingSubscriptionPlan", fields: [pendingPlanId], references: [id], onDelete: SetNull)
+  invoices SubscriptionInvoice[]
   events   BusinessSubscriptionEvent[]
 
   @@index([status, expiresAt])
@@ -775,6 +794,7 @@ model SubscriptionCheckout {
   id                String                     @id @default(uuid()) @db.Uuid
   chainId           String                     @map("chain_id") @db.Uuid
   planId            String                     @map("plan_id") @db.Uuid
+  invoiceId         String?                    @map("invoice_id") @db.Uuid
   providerOrderCode String                     @unique @map("provider_order_code") @db.VarChar(30)
   amount            Decimal                    @db.Decimal(14, 2)
   status            SubscriptionCheckoutStatus @default(PENDING)
@@ -787,9 +807,47 @@ model SubscriptionCheckout {
 
   chain RestaurantChain @relation(fields: [chainId], references: [id], onDelete: Cascade)
   plan  ServicePlan     @relation(fields: [planId], references: [id], onDelete: Restrict)
+  invoice SubscriptionInvoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
 
   @@index([chainId, status, createdAt])
   @@map("subscription_checkouts")
+}
+
+model SubscriptionInvoice {
+  id String @id @default(uuid()) @db.Uuid
+  chainId String @map("chain_id") @db.Uuid
+  subscriptionId String @map("subscription_id") @db.Uuid
+  planId String @map("plan_id") @db.Uuid
+  planName String @map("plan_name") @db.VarChar(100)
+  periodStartsAt DateTime @map("period_starts_at") @db.Timestamptz(6)
+  periodEndsAt DateTime @map("period_ends_at") @db.Timestamptz(6)
+  total Int
+  status String @default("PENDING") @db.VarChar(20)
+  paidAt DateTime? @map("paid_at") @db.Timestamptz(6)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  chain RestaurantChain @relation(fields: [chainId], references: [id], onDelete: Cascade)
+  subscription BusinessSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  plan ServicePlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+  lines SubscriptionInvoiceLine[]
+  checkouts SubscriptionCheckout[]
+  @@index([chainId, status, createdAt])
+  @@map("subscription_invoices")
+}
+
+model SubscriptionInvoiceLine {
+  id String @id @default(uuid()) @db.Uuid
+  invoiceId String @map("invoice_id") @db.Uuid
+  planId String @map("plan_id") @db.Uuid
+  kind String @db.VarChar(30)
+  description String @db.VarChar(150)
+  quantity Int
+  unitPrice Int @map("unit_price")
+  amount Int
+  invoice SubscriptionInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  plan ServicePlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+  @@index([invoiceId])
+  @@map("subscription_invoice_lines")
 }
 
 model BusinessSubscriptionEvent {

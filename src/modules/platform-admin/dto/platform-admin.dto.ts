@@ -174,6 +174,32 @@ export class CreateServicePlanDto {
   @Min(1)
   maxAccounts!: number;
 
+  @ApiPropertyOptional({ minimum: 0 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  extraBranchPrice?: number;
+
+  @ApiPropertyOptional({ minimum: 0 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  extraBranchAccounts?: number;
+
+  @ApiPropertyOptional({ minimum: 0 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  extraAccountPackPrice?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  extraBranchEnabled?: boolean;
+
   @ApiPropertyOptional({
     example: 100,
     minimum: 1,
@@ -214,27 +240,6 @@ export class RenewSubscriptionDto {
   @Min(1)
   @Max(60)
   months!: number;
-
-  @ApiProperty({ minLength: 3, maxLength: 1000 })
-  @IsString()
-  @MinLength(3)
-  @MaxLength(1000)
-  note!: string;
-}
-
-export enum PlanChangeDirection {
-  UPGRADE = 'UPGRADE',
-  DOWNGRADE = 'DOWNGRADE',
-}
-
-export class ChangeSubscriptionPlanDto {
-  @ApiProperty({ format: 'uuid' })
-  @IsUUID()
-  planId!: string;
-
-  @ApiProperty({ enum: PlanChangeDirection })
-  @IsEnum(PlanChangeDirection)
-  direction!: PlanChangeDirection;
 
   @ApiProperty({ minLength: 3, maxLength: 1000 })
   @IsString()

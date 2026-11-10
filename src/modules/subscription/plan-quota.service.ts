@@ -1,6 +1,7 @@
-import { ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable, Optional } from '@nestjs/common';
 import { BusinessSubscriptionStatus, Prisma } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
+import { SubscriptionScheduleService } from './subscription-schedule.service.js';
 
 export type QuotaResource = 'branches' | 'accounts' | 'tables';
 export type PlanFeature = 'BRANDING' | 'MULTI_BRANCH_COMPARISON';
@@ -17,6 +18,11 @@ export interface SubscriptionSnapshot {
   expiresAt: Date;
   plan: PlanSummary;
   nextPlan: PlanSummary | null;
+  activeExtraBranches: number;
+  activeAccountPacks: number;
+  nextExtraBranches: number | null;
+  nextAccountPacks: number | null;
+  pendingStartsAt: Date | null;
   quotas: QuotaUsage[];
 }
 
@@ -28,6 +34,10 @@ const planSelect = {
   monthlyPrice: true,
   maxBranches: true,
   maxAccounts: true,
+  extraBranchPrice: true,
+  extraBranchAccounts: true,
+  extraAccountPackPrice: true,
+  extraBranchEnabled: true,
   maxTables: true,
   brandingEnabled: true,
   multiBranchComparisonEnabled: true,
@@ -53,10 +63,11 @@ const resourceLabel = {
  */
 @Injectable()
 export class PlanQuotaService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, @Optional() private readonly schedule?: SubscriptionScheduleService) {}
 
   /** Throws unless the chain has a subscription that is ACTIVE and not expired. */
   async getActivePlan(chainId: string): Promise<PlanSummary> {
+    await this.schedule?.activateDue(chainId);
     const subscription = await this.prisma.businessSubscription.findFirst({
       where: {
         chainId,
@@ -74,6 +85,7 @@ export class PlanQuotaService {
   }
 
   async assertFeatureEnabled(chainId: string, feature: PlanFeature): Promise<void> {
+    await this.schedule?.activateDue(chainId);
     const subscription = await this.prisma.businessSubscription.findUnique({
       where: { chainId },
       select: { plan: { select: planSelect } },
@@ -97,40 +109,38 @@ export class PlanQuotaService {
   }
 
   async getUsage(chainId: string) {
-    const [branchCount, employeeCount, ownerCount, tableCount] = await Promise.all([
+    const [branchCount, employeeCount, tableCount] = await Promise.all([
       this.prisma.branch.count({ where: { chainId, deletedAt: null } }),
       this.prisma.employee.count({
         where: { branch: { chainId }, deletedAt: null, user: { deletedAt: null } },
-      }),
-      this.prisma.ownerChainAssignment.count({
-        where: { chainId, owner: { deletedAt: null, user: { deletedAt: null } } },
       }),
       this.prisma.restaurantTable.count({ where: { branch: { chainId }, deletedAt: null } }),
     ]);
 
     return {
       branches: branchCount,
-      accounts: employeeCount + ownerCount,
+      accounts: employeeCount,
       tables: tableCount,
     } satisfies Record<QuotaResource, number>;
   }
 
   /** Usage against the plan limits — what the Owner overview screen renders. */
   async getQuotaSnapshot(chainId: string) {
-    const [plan, usage] = await Promise.all([this.getActivePlan(chainId), this.getUsage(chainId)]);
+    const [plan, usage, sub] = await Promise.all([this.getActivePlan(chainId), this.getUsage(chainId), this.prisma.businessSubscription.findUnique({ where: { chainId } })]);
     const resources = Object.keys(limitFieldByResource) as QuotaResource[];
 
     return {
       plan,
-      quotas: resources.map((resource) => this.toUsage(resource, usage[resource], plan)),
+      quotas: resources.map((resource) => this.toUsage(resource, usage[resource], plan, sub?.activeExtraBranches ?? 0, sub?.activeAccountPacks ?? 0)),
     };
   }
 
   /** Read-only subscription view. Unlike quota enforcement, expired and suspended plans remain visible. */
   async getSubscriptionSnapshot(chainId: string): Promise<SubscriptionSnapshot | null> {
+    await this.schedule?.activateDue(chainId);
     const subscription = await this.prisma.businessSubscription.findUnique({
       where: { chainId },
-      select: { status: true, expiresAt: true, plan: { select: planSelect }, nextPlan: { select: planSelect } },
+      select: { status: true, expiresAt: true, pendingStartsAt: true, activeExtraBranches: true, activeAccountPacks: true, nextExtraBranches: true, nextAccountPacks: true, plan: { select: planSelect }, nextPlan: { select: planSelect } },
     });
     if (!subscription) return null;
 
@@ -138,16 +148,21 @@ export class PlanQuotaService {
     const resources = Object.keys(limitFieldByResource) as QuotaResource[];
     const status =
       subscription.status === BusinessSubscriptionStatus.ACTIVE &&
-      subscription.expiresAt <= new Date()
+      (subscription.pendingStartsAt ?? subscription.expiresAt) <= new Date()
         ? BusinessSubscriptionStatus.EXPIRED
         : subscription.status;
     return {
       status,
-      expiresAt: subscription.expiresAt,
+      expiresAt: subscription.pendingStartsAt ?? subscription.expiresAt,
       plan: subscription.plan,
       nextPlan: subscription.nextPlan,
+      activeExtraBranches: subscription.activeExtraBranches,
+      activeAccountPacks: subscription.activeAccountPacks,
+      nextExtraBranches: subscription.nextExtraBranches,
+      nextAccountPacks: subscription.nextAccountPacks,
+      pendingStartsAt: subscription.pendingStartsAt,
       quotas: resources.map((resource) =>
-        this.toUsage(resource, usage[resource], subscription.plan),
+        this.toUsage(resource, usage[resource], subscription.plan, subscription.activeExtraBranches, subscription.activeAccountPacks),
       ),
     };
   }
@@ -158,8 +173,8 @@ export class PlanQuotaService {
    */
   async assertWithinQuota(chainId: string, resource: QuotaResource): Promise<void> {
     const plan = await this.getActivePlan(chainId);
-    const usage = await this.getUsage(chainId);
-    const quota = this.toUsage(resource, usage[resource], plan);
+    const [usage, sub] = await Promise.all([this.getUsage(chainId), this.prisma.businessSubscription.findUnique({ where: { chainId } })]);
+    const quota = this.toUsage(resource, usage[resource], plan, sub?.activeExtraBranches ?? 0, sub?.activeAccountPacks ?? 0);
 
     if (quota.remaining > 0) {
       return;
@@ -168,10 +183,12 @@ export class PlanQuotaService {
     throw new ConflictException({
       statusCode: 409,
       error: 'PLAN_LIMIT_REACHED',
-      message: `Gói ${plan.name} chỉ cho phép ${quota.limit} ${resourceLabel[resource]}. Nâng gói để thêm mới.`,
+      message: `Gói ${plan.name} chỉ cho phép ${quota.limit} ${resourceLabel[resource]}. Đăng ký gói hoặc mua thêm cho kỳ tới; áp dụng từ ${(sub?.pendingStartsAt ?? sub?.expiresAt)?.toISOString() ?? 'kỳ tới'}.`,
       quota,
       currentPlan: plan,
       suggestedPlans: await this.findUpgradePlans(plan, resource, quota.used + 1),
+      effectiveFrom: sub?.pendingStartsAt ?? sub?.expiresAt ?? null,
+      suggestedAddons: await this.findAddonSuggestion(plan, sub?.activeExtraBranches ?? 0, sub?.activeAccountPacks ?? 0, resource),
     });
   }
 
@@ -186,6 +203,7 @@ export class PlanQuotaService {
       where: {
         isActive: true,
         id: { not: currentPlan.id },
+        code: { not: 'TRIAL' },
         [limitField]: { gte: requiredAmount },
       },
       select: planSelect,
@@ -199,8 +217,19 @@ export class PlanQuotaService {
     }));
   }
 
-  private toUsage(resource: QuotaResource, used: number, plan: PlanSummary): QuotaUsage {
-    const limit = plan[limitFieldByResource[resource]];
+  private async findAddonSuggestion(plan: PlanSummary, currentBranches: number, currentPacks: number, resource: QuotaResource) {
+    if (plan.code === 'TRIAL') return null;
+    if (resource === 'accounts') return currentPacks < 4 ? { accountPacks: currentPacks + 1, effectiveFrom: 'NEXT_PERIOD' } : null;
+    if (resource !== 'branches' || !plan.extraBranchEnabled || plan.extraBranchPrice <= 0 || plan.maxBranches + currentBranches >= 10) return null;
+    const desired = currentBranches + 1;
+    const betterPlan = await this.prisma.servicePlan.findFirst({ where: { isActive: true, code: { not: 'TRIAL' }, maxBranches: { gte: plan.maxBranches + desired } }, orderBy: { monthlyPrice: 'asc' } });
+    return betterPlan && Number(plan.monthlyPrice) + desired * plan.extraBranchPrice >= Number(betterPlan.monthlyPrice)
+      ? null
+      : { extraBranches: desired, effectiveFrom: 'NEXT_PERIOD' };
+  }
+
+  private toUsage(resource: QuotaResource, used: number, plan: PlanSummary, extraBranches = 0, accountPacks = 0): QuotaUsage {
+    const limit = plan[limitFieldByResource[resource]] + (resource === 'branches' ? extraBranches : resource === 'accounts' ? extraBranches * (plan.extraBranchAccounts ?? 8) + accountPacks * 5 : 0);
     return { resource, used, limit, remaining: Math.max(limit - used, 0) };
   }
 }

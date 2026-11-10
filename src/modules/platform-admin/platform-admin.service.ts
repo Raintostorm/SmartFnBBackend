@@ -21,7 +21,6 @@ import { EmailOutboxService } from '../email/email-outbox.service.js';
 import { PayosApiService } from '../payos/payos-api.service.js';
 import type {
   ApproveRegistrationApplicationDto,
-  ChangeSubscriptionPlanDto,
   CreateServicePlanDto,
   ListRegistrationApplicationsQueryDto,
   PaginationQueryDto,
@@ -30,7 +29,7 @@ import type {
   SubscriptionStatusReasonDto,
   UpdateServicePlanDto,
 } from './dto/platform-admin.dto.js';
-import { PlanChangeDirection } from './dto/platform-admin.dto.js';
+import { SubscriptionScheduleService } from '../subscription/subscription-schedule.service.js';
 
 const servicePlanSelect = {
   id: true,
@@ -40,6 +39,10 @@ const servicePlanSelect = {
   monthlyPrice: true,
   maxBranches: true,
   maxAccounts: true,
+  extraBranchPrice: true,
+  extraBranchAccounts: true,
+  extraAccountPackPrice: true,
+  extraBranchEnabled: true,
   maxTables: true,
   brandingEnabled: true,
   multiBranchComparisonEnabled: true,
@@ -56,6 +59,10 @@ const publicServicePlanSelect = {
   monthlyPrice: true,
   maxBranches: true,
   maxAccounts: true,
+  extraBranchPrice: true,
+  extraBranchAccounts: true,
+  extraAccountPackPrice: true,
+  extraBranchEnabled: true,
   maxTables: true,
   brandingEnabled: true,
   multiBranchComparisonEnabled: true,
@@ -69,6 +76,7 @@ export class PlatformAdminService {
     private readonly emails: EmailOutboxService,
     private readonly config: ConfigService,
     private readonly payos: PayosApiService,
+    private readonly schedule: SubscriptionScheduleService,
   ) {}
 
   async submitRegistrationApplication(dto: SubmitRegistrationApplicationDto) {
@@ -545,33 +553,47 @@ export class PlatformAdminService {
   }
 
   async scheduleNextPlan(businessId: string, planId: string, note: string, actorUserId: string) {
-    const [subscription, target] = await Promise.all([this.getSubscription(businessId), this.getActivePlan(planId)]);
-    if (subscription.plan.code === 'TRIAL' || target.code === 'TRIAL') throw new ConflictException('Use registration activation or trial checkout for a trial business');
-    if (subscription.status !== BusinessSubscriptionStatus.ACTIVE) throw new ConflictException('Business subscription is not active');
-    if (subscription.planId === target.id) throw new BadRequestException('Business already uses this plan');
-    if (target.monthlyPrice.lt(subscription.monthlyPrice)) {
-      const usage = await this.getBusinessUsageCounts(businessId);
-      if (usage.branchCount > target.maxBranches || usage.accountCount > target.maxAccounts || usage.tableCount > target.maxTables) throw new ConflictException('Current usage exceeds target plan limits');
-    }
-    await this.prisma.$transaction(async (tx) => {
-      await tx.businessSubscription.update({ where: { id: subscription.id }, data: { nextPlanId: target.id } });
-      await tx.subscriptionCheckout.updateMany({ where: { chainId: businessId, status: 'PENDING' }, data: { status: 'FAILED' } });
-      await tx.platformSupportAction.create({ data: { actorUserId, chainId: businessId, action: 'SCHEDULE_NEXT_PLAN', note: note.trim(), details: { fromPlanId: subscription.planId, toPlanId: target.id } } });
-    });
+    await this.schedule.putNextPlan(businessId, planId);
+    await this.prisma.platformSupportAction.create({ data: { actorUserId, chainId: businessId, action: 'SCHEDULE_NEXT_PLAN', note: note.trim(), details: { toPlanId: planId } } });
     return this.getBusiness(businessId);
   }
 
   async renewSubscription(businessId: string, dto: RenewSubscriptionDto, adminUserId: string) {
     const subscription = await this.getSubscription(businessId);
+    const pendingCheckout = await this.prisma.subscriptionCheckout.findFirst({ where: { chainId: businessId, status: 'PENDING' }, select: { id: true } });
+    if (pendingCheckout) throw new ConflictException('A PayOS payment is still pending; reconcile or cancel it before manual renewal');
     const scheduledPlan = subscription.nextPlanId ? await this.getActivePlan(subscription.nextPlanId) : null;
     if (subscription.plan.code === 'TRIAL') {
       throw new ConflictException('The 14-day trial cannot be renewed');
     }
     const baseDate = subscription.expiresAt > new Date() ? subscription.expiresAt : new Date();
+    if (subscription.pendingStartsAt) throw new ConflictException('Upcoming period has already been paid');
+    const early = baseDate > new Date();
+    const extraBranches = subscription.nextExtraBranches ?? subscription.activeExtraBranches;
+    const accountPacks = subscription.nextAccountPacks ?? subscription.activeAccountPacks;
     await this.prisma.$transaction(async (transaction) => {
+      await transaction.subscriptionInvoice.updateMany({ where: { chainId: businessId, status: 'PENDING' }, data: { status: 'CANCELLED' } });
       await transaction.businessSubscription.update({
         where: { id: subscription.id },
-        data: { expiresAt: this.addMonths(baseDate, dto.months), ...(scheduledPlan ? { planId: scheduledPlan.id, monthlyPrice: scheduledPlan.monthlyPrice, nextPlanId: null } : {}) },
+        data: {
+          expiresAt: this.addMonths(baseDate, dto.months),
+          nextPlanId: null,
+          nextExtraBranches: null,
+          nextAccountPacks: null,
+          ...(early ? {
+            pendingPlanId: scheduledPlan?.id ?? subscription.planId,
+            pendingMonthlyPrice: scheduledPlan?.monthlyPrice ?? subscription.monthlyPrice,
+            pendingExtraBranches: extraBranches,
+            pendingAccountPacks: accountPacks,
+            pendingStartsAt: baseDate,
+          } : {
+            planId: scheduledPlan?.id ?? subscription.planId,
+            monthlyPrice: scheduledPlan?.monthlyPrice ?? subscription.monthlyPrice,
+            activeExtraBranches: extraBranches,
+            activeAccountPacks: accountPacks,
+            startsAt: baseDate,
+          }),
+        },
       });
       await transaction.businessSubscriptionEvent.create({
         data: {
@@ -579,62 +601,7 @@ export class PlatformAdminService {
           type: SubscriptionEventType.RENEWED,
           fromPlanId: subscription.planId,
           toPlanId: subscription.nextPlanId ?? subscription.planId,
-          changedById: adminUserId,
-          note: dto.note?.trim(),
-        },
-      });
-    });
-    return this.getBusiness(businessId);
-  }
-
-  async changeSubscriptionPlan(
-    businessId: string,
-    dto: ChangeSubscriptionPlanDto,
-    adminUserId: string,
-  ) {
-    const [subscription, targetPlan] = await Promise.all([
-      this.getSubscription(businessId),
-      this.getActivePlan(dto.planId),
-    ]);
-    if (subscription.plan.code === 'TRIAL' || targetPlan.code === 'TRIAL') {
-      throw new ConflictException('Trial conversion requires a verified platform PayOS payment');
-    }
-    if (subscription.planId === targetPlan.id) {
-      throw new BadRequestException('Business already uses this service plan');
-    }
-    const currentPrice = Number(subscription.monthlyPrice);
-    const targetPrice = Number(targetPlan.monthlyPrice);
-    if (dto.direction === PlanChangeDirection.UPGRADE && targetPrice < currentPrice) {
-      throw new BadRequestException('Target plan price is lower; use DOWNGRADE');
-    }
-    if (dto.direction === PlanChangeDirection.DOWNGRADE) {
-      if (targetPrice > currentPrice) {
-        throw new BadRequestException('Target plan price is higher; use UPGRADE');
-      }
-      const usage = await this.getBusinessUsageCounts(businessId);
-      if (
-        usage.branchCount > targetPlan.maxBranches ||
-        usage.accountCount > targetPlan.maxAccounts ||
-        usage.tableCount > targetPlan.maxTables
-      ) {
-        throw new ConflictException('Current usage exceeds one or more limits of the target plan');
-      }
-    }
-    const eventType =
-      dto.direction === PlanChangeDirection.UPGRADE
-        ? SubscriptionEventType.UPGRADED
-        : SubscriptionEventType.DOWNGRADED;
-    await this.prisma.$transaction(async (transaction) => {
-      await transaction.businessSubscription.update({
-        where: { id: subscription.id },
-        data: { planId: targetPlan.id, monthlyPrice: targetPlan.monthlyPrice },
-      });
-      await transaction.businessSubscriptionEvent.create({
-        data: {
-          subscriptionId: subscription.id,
-          type: eventType,
-          fromPlanId: subscription.planId,
-          toPlanId: targetPlan.id,
+          effectiveAt: baseDate,
           changedById: adminUserId,
           note: dto.note?.trim(),
         },
