@@ -66,6 +66,11 @@ export class SubmitRegistrationApplicationDto {
   @IsOptional()
   @IsUUID()
   requestedPlanId?: string;
+
+  @ApiPropertyOptional({ description: 'Choose the 14-day Basic trial instead of a paid plan' })
+  @IsOptional()
+  @IsBoolean()
+  trialRequested?: boolean;
 }
 
 export class PaginationQueryDto {

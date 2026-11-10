@@ -81,8 +81,13 @@ export class PlatformAdminService {
   ) {}
 
   async submitRegistrationApplication(dto: SubmitRegistrationApplicationDto) {
-    if (dto.requestedPlanId) {
-      await this.getActivePlan(dto.requestedPlanId);
+    if (dto.trialRequested && dto.requestedPlanId) throw new BadRequestException('Choose either trial or a paid plan');
+    if (!dto.trialRequested && !dto.requestedPlanId) throw new BadRequestException('Choose trial or a paid plan');
+    const plan = dto.trialRequested
+      ? await this.getTrialPlan()
+      : await this.getActivePlan(dto.requestedPlanId!);
+    if (!dto.trialRequested && (plan.code === 'TRIAL' || plan.monthlyPrice.lte(0))) {
+      throw new BadRequestException('Choose an active paid plan');
     }
 
     return this.prisma.registrationApplication.create({
@@ -94,7 +99,7 @@ export class PlatformAdminService {
         representativeEmail: dto.representativeEmail.trim().toLowerCase(),
         representativePhone: dto.representativePhone.trim(),
         headquartersAddress: dto.headquartersAddress?.trim(),
-        requestedPlanId: dto.requestedPlanId,
+        requestedPlanId: plan.id,
       },
       include: { requestedPlan: { select: servicePlanSelect } },
     });
@@ -181,10 +186,13 @@ export class PlatformAdminService {
       throw new ConflictException('Only a pending application can be approved');
     }
 
-    const planId = dto.planId ?? application.requestedPlanId;
+    if (application.requestedPlanId && dto.planId && dto.planId !== application.requestedPlanId) {
+      throw new BadRequestException('Approve the plan selected by the applicant');
+    }
+    const planId = application.requestedPlanId ?? dto.planId;
     if (!planId) throw new BadRequestException('Select a service plan before approval');
     const plan = await this.getActivePlan(planId);
-    if (plan.code === 'TRIAL') throw new BadRequestException('Select a paid plan; Basic trial is chosen by the applicant');
+    if (plan.code === 'TRIAL' && !application.requestedPlanId) throw new BadRequestException('Trial must be chosen by the applicant');
     const duplicateUser = await this.prisma.user.count({
       where: { email: application.representativeEmail, deletedAt: null },
     });
@@ -215,17 +223,17 @@ export class PlatformAdminService {
 
   async getActivation(token: string) {
     const application = await this.findActivation(token);
-    return { businessName: application.businessName, representativeEmail: application.representativeEmail, approvedPlan: application.approvedPlan, expiresAt: application.activationExpiresAt, trialAvailable: application.approvedPlan?.code === 'BASIC' };
+    return { businessName: application.businessName, representativeEmail: application.representativeEmail, approvedPlan: application.approvedPlan, expiresAt: application.activationExpiresAt, trialAvailable: application.approvedPlan?.code === 'TRIAL' || (!application.requestedPlanId && application.approvedPlan?.code === 'BASIC'), activationMode: application.approvedPlan?.code === 'TRIAL' ? 'TRIAL' : application.requestedPlanId ? 'PAID' : 'LEGACY' };
   }
 
   async activateTrial(token: string) {
     const application = await this.findActivation(token);
-    if (application.approvedPlan?.code !== 'BASIC') throw new BadRequestException('The 14-day trial is available only for Basic');
+    if (application.approvedPlan?.code !== 'TRIAL' && !(application.requestedPlanId == null && application.approvedPlan?.code === 'BASIC')) throw new BadRequestException('Trial was not selected for this application');
     const trialPlan = await this.getTrialPlan();
     const emailId = await this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${application.id}))`;
       const fresh = await tx.registrationApplication.findUniqueOrThrow({ where: { id: application.id } });
-      if (fresh.status !== 'APPROVED' || fresh.activationTokenHash !== this.hashToken(token) || !fresh.activationExpiresAt || fresh.activationExpiresAt <= new Date()) throw new ConflictException('Activation link is expired or already used');
+      if (fresh.status !== 'APPROVED' || fresh.activationTokenHash !== this.hashToken(token) || fresh.approvedPlanId !== application.approvedPlanId || !fresh.activationExpiresAt || fresh.activationExpiresAt <= new Date()) throw new ConflictException('Activation link is expired or already used');
       return this.provisionRegistration(tx, fresh, trialPlan, true);
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     await this.emails.deliver(emailId);
@@ -353,6 +361,7 @@ export class PlatformAdminService {
       await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${id}))`;
       const application = await tx.registrationApplication.findUnique({ where: { id } });
       if (!application || application.status !== 'APPROVED') throw new ConflictException('Only approved applications awaiting activation can change plan');
+      if (application.requestedPlanId) throw new ConflictException('The applicant-selected plan cannot be changed after approval');
       await tx.registrationApplication.update({ where: { id }, data: { approvedPlanId: planId, activationTokenHash: this.hashToken(token), activationExpiresAt: expiresAt } });
       await tx.registrationCheckout.updateMany({ where: { applicationId: id, status: 'PENDING' }, data: { status: 'FAILED' } });
       await tx.platformSupportAction.create({ data: { actorUserId, applicationId: id, action: 'CHANGE_APPROVED_PLAN', note: note.trim(), details: { fromPlanId: application.approvedPlanId, toPlanId: planId } } });
