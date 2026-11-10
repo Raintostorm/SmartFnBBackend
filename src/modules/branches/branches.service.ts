@@ -167,19 +167,25 @@ export class BranchesService {
     if (duplicate > 0) {
       throw new ConflictException('Branch code already exists');
     }
-    await this.planQuota.assertWithinQuota(chainId, 'branches');
+    await this.planQuota.getActivePlan(chainId);
 
+    // Count and create under the chain quota lock so two concurrent requests cannot both pass.
     return this.withUniqueConflict('Branch code already exists', () =>
-      this.prisma.branch.create({
-        data: {
-          ...branchData,
-          chainId,
-          ...(weeklyHours ? { operatingHours: { create: weeklyHours } } : {}),
-        },
-        select: {
-          ...branchSummarySelect,
-          operatingHours: { orderBy: { dayOfWeek: 'asc' } },
-        },
+      this.prisma.$transaction(async (tx) => {
+        const reserve = await this.planQuota.assertCanAdd(tx, chainId, 'branches');
+        const branch = await tx.branch.create({
+          data: {
+            ...branchData,
+            chainId,
+            ...(weeklyHours ? { operatingHours: { create: weeklyHours } } : {}),
+          },
+          select: {
+            ...branchSummarySelect,
+            operatingHours: { orderBy: { dayOfWeek: 'asc' } },
+          },
+        });
+        await reserve(branch.id);
+        return branch;
       }),
     );
   }
@@ -326,7 +332,7 @@ export class BranchesService {
     await this.branchAccess.assertCanManageBranch(user, id);
     const branch = await this.prisma.branch.findFirst({
       where: { id, deletedAt: null },
-      select: { status: true },
+      select: { status: true, chainId: true },
     });
     if (!branch) {
       throw new NotFoundException('Branch not found');
@@ -337,10 +343,24 @@ export class BranchesService {
     ) {
       throw new ForbiddenException('Only OWNER can deactivate or reactivate a branch');
     }
-    return this.prisma.branch.update({
-      where: { id },
-      data: { status },
-      select: branchSummarySelect,
+    const reopening = branch.status === BranchStatus.INACTIVE && status !== BranchStatus.INACTIVE;
+    if (!reopening) {
+      return this.prisma.branch.update({
+        where: { id },
+        data: { status, ...(status === BranchStatus.INACTIVE ? { quotaSuspendedAt: null } : {}) },
+        select: branchSummarySelect,
+      });
+    }
+    // BR-11: a suspended branch (manual or over quota) reopens only within the current limit.
+    return this.prisma.$transaction(async (tx) => {
+      const reserve = await this.planQuota.assertCanAdd(tx, branch.chainId, 'branches');
+      const updated = await tx.branch.update({
+        where: { id },
+        data: { status, quotaSuspendedAt: null },
+        select: branchSummarySelect,
+      });
+      await reserve(id);
+      return updated;
     });
   }
 

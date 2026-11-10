@@ -1,3 +1,4 @@
+import { countUsage, effectiveLimits } from '../subscription/subscription-usage.js';
 import {
   BadRequestException,
   ConflictException,
@@ -156,22 +157,12 @@ export class UsersService {
       throw new ForbiddenException('OWNER can only create accounts in an active assigned business');
     }
 
-    const [employeeCount, ownerCount] = await Promise.all([
-      this.prisma.employee.count({
-        where: {
-          branch: { chainId: assignment.chainId },
-          deletedAt: null,
-          user: { deletedAt: null },
-        },
-      }),
-      this.prisma.ownerChainAssignment.count({
-        where: {
-          chainId: assignment.chainId,
-          owner: { deletedAt: null, user: { deletedAt: null } },
-        },
-      }),
+    // Same counting and limits as PlanQuotaService (subscription-usage.ts).
+    const [usage, limits] = await Promise.all([
+      countUsage(this.prisma, assignment.chainId),
+      effectiveLimits(this.prisma, assignment.chainId),
     ]);
-    if (employeeCount + ownerCount >= assignment.chain.subscription.plan.maxAccounts) {
+    if (!limits || usage.accounts >= limits.accountLimit) {
       throw new ConflictException('Service plan account limit has been reached');
     }
   }

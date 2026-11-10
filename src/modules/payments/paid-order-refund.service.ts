@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import {
   OrderItemStatus,
@@ -28,6 +29,7 @@ import type { CancelPaidOrderDto, CompleteRefundDto } from '../branch-manager/ma
 import type { RefundListQueryDto } from './dto/payment.dto.js';
 import type { CashierRefundDto } from './cashier-refunds.controller.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
+import { RefundDocumentsService } from '../receipt-documents/refund-documents.service.js';
 
 const cancellableOrderStatuses = [
   OrderStatus.SUBMITTED,
@@ -53,6 +55,7 @@ export class PaidOrderRefundService {
     private readonly prisma: PrismaService,
     private readonly realtime: RealtimePublisher,
     private readonly branchAccess: BranchAccessService,
+    @Optional() private readonly refundDocuments?: RefundDocumentsService,
   ) {}
 
   async listRefunds(user: AuthenticatedUser, query: RefundListQueryDto) {
@@ -681,7 +684,12 @@ export class PaidOrderRefundService {
     if (result.refund.status === RefundStatus.PENDING) {
       this.realtime.branch(branchId, 'refund.pending', payload);
     }
-    return result;
+    // BR-86: one refund slip PDF per refund, only after the refund transaction committed. A PDF or
+    // storage failure is recorded on the document (FAILED, retryable) and never undoes the refund.
+    const refundDocument = this.refundDocuments
+      ? await this.refundDocuments.generateAfterCommit(result.refund.id)
+      : { id: null, status: 'DISABLED' };
+    return { ...result, refundDocument };
   }
 
   async completeRefund(user: AuthenticatedUser, refundId: string, dto: CompleteRefundDto) {

@@ -2,82 +2,58 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { Prisma } from '../dist/generated/prisma/client.js';
 import { SubscriptionScheduleService } from '../dist/modules/subscription/subscription-schedule.service.js';
+import { BASIC, chainFake, DAY, STANDARD } from './helpers/subscription-fake.mjs';
 
-const basic = {
-  id: 'basic', code: 'BASIC', name: 'Cơ bản', isActive: true,
-  monthlyPrice: new Prisma.Decimal(590000), maxBranches: 3, maxAccounts: 30,
-  extraBranchPrice: 250000, extraBranchAccounts: 8, extraAccountPackPrice: 50000, extraBranchEnabled: true,
-};
-const standard = { ...basic, id: 'standard', code: 'STANDARD', name: 'Tiêu chuẩn', monthlyPrice: new Prisma.Decimal(1090000), maxBranches: 6 };
-
-function fixture(overrides = {}) {
-  const sub = {
-    id: 'sub', chainId: 'chain', planId: 'basic', plan: basic,
-    nextPlanId: null, nextPlan: null, nextExtraBranches: null, nextAccountPacks: null,
-    activeExtraBranches: 0, activeAccountPacks: 0,
-    pendingPlanId: null, pendingStartsAt: null,
-    status: 'ACTIVE', expiresAt: new Date(Date.now() + 5 * 86_400_000),
-    ...overrides,
-  };
-  let invoice;
-  const tx = {
-    $executeRaw: async () => undefined,
-    subscriptionInvoice: {
-      findFirst: async () => invoice,
-      create: async ({ data }) => {
-        invoice = { id: 'invoice', ...data, status: 'PENDING', lines: data.lines.create };
-        return invoice;
-      },
-      updateMany: async () => undefined,
-    },
-    subscriptionCheckout: { updateMany: async () => undefined },
-    businessSubscription: { update: async ({ data }) => Object.assign(sub, data) },
-  };
-  const prisma = {
-    businessSubscription: {
-      findUnique: async () => sub,
-      findUniqueOrThrow: async () => sub,
-      updateMany: async ({ data }) => Object.assign(sub, data),
-    },
-    servicePlan: {
-      findUnique: async ({ where }) => where.id === standard.id ? standard : basic,
-      findFirst: async () => standard,
-    },
-    subscriptionCheckout: { findFirst: async () => null },
-    subscriptionInvoice: { findFirst: async () => invoice },
-    $transaction: async (fn) => fn(tx),
-  };
-  return { service: new SubscriptionScheduleService(prisma, {}, {}), sub, getInvoice: () => invoice };
-}
+const service = (client) => new SubscriptionScheduleService(client, {}, {});
 
 describe('Subscription next period', () => {
-  it('freezes a multi-line invoice with the registered add-ons', async () => {
-    const { service, sub } = fixture({ nextExtraBranches: 1, nextAccountPacks: 1 });
-    const preview = await service.preview('chain');
+  it('freezes a multi-line invoice with the registered add-ons, once', async () => {
+    const { client, state } = chainFake({ subscription: { nextExtraBranches: 1, nextAccountPacks: 1, expiresAt: new Date(Date.now() + 5 * DAY) } });
+    const preview = await service(client).preview('chain');
     assert.equal(preview.total, 890000);
     assert.equal(preview.branchLimit, 4);
     assert.equal(preview.accountLimit, 43);
-    const invoice = await service.getOrCreateInvoice('chain');
+    const invoice = await service(client).getOrCreateInvoice('chain');
     assert.equal(invoice.total, 890000);
     assert.deepEqual(invoice.lines.map((line) => line.amount), [590000, 250000, 50000]);
-    assert.equal((await service.getOrCreateInvoice('chain')).id, invoice.id);
-    assert.equal(sub.planId, 'basic');
+    assert.deepEqual(invoice.lines.map((line) => line.quantity), [1, 1, 1]);
+    assert.equal((await service(client).getOrCreateInvoice('chain')).id, invoice.id);
+    assert.equal(state.invoices.length, 1);
+    assert.equal(state.subscription.planId, 'basic');
   });
 
-  it('rejects a second Basic extra branch when Standard costs no more (BR-92)', async () => {
-    const { service } = fixture({ nextExtraBranches: 2 });
-    await assert.rejects(service.preview('chain'), (error) => error.getResponse().error === 'ADDON_UPGRADE_BETTER');
+  it('keeps an existing registration that a later price change made BR-92-invalid, but reports it', async () => {
+    const { client } = chainFake({ subscription: { nextExtraBranches: 2 } });
+    const preview = await service(client).preview('chain');
+    assert.equal(preview.extraBranches, 2);
+    assert.equal(preview.violation.error, 'ADDON_UPGRADE_BETTER');
+    assert.equal(preview.violation.suggestedPlan.code, 'STANDARD');
   });
 
   it('activates a paid future plan only when its period begins', async () => {
-    const start = new Date(Date.now() + 86_400_000);
-    const { service, sub } = fixture({ pendingPlanId: 'standard', pendingStartsAt: start, pendingExtraBranches: 1, pendingAccountPacks: 2, pendingMonthlyPrice: new Prisma.Decimal(1090000) });
-    await service.activateDue('chain');
-    assert.equal(sub.planId, 'basic');
-    sub.pendingStartsAt = new Date(Date.now() - 1000);
-    await service.activateDue('chain');
-    assert.equal(sub.planId, 'standard');
-    assert.equal(sub.activeExtraBranches, 1);
-    assert.equal(sub.activeAccountPacks, 2);
+    const start = new Date(Date.now() + DAY);
+    const { client, state } = chainFake({
+      subscription: { pendingPlanId: STANDARD.id, pendingStartsAt: start, pendingExtraBranches: 1, pendingAccountPacks: 2, pendingMonthlyPrice: new Prisma.Decimal(1090000) },
+    });
+    await service(client).activateDue('chain');
+    assert.equal(state.subscription.planId, BASIC.id);
+    state.subscription.pendingStartsAt = new Date(Date.now() - 1000);
+    await service(client).activateDue('chain');
+    assert.equal(state.subscription.planId, STANDARD.id);
+    assert.equal(state.subscription.activeExtraBranches, 1);
+    assert.equal(state.subscription.activeAccountPacks, 2);
+    assert.equal(state.subscription.pendingPlanId, null);
+  });
+
+  it('lets a registration made after paying early apply to the period after that one (31.5)', async () => {
+    const paidStart = new Date(Date.now() + 2 * DAY);
+    const { client, state } = chainFake({
+      subscription: { pendingPlanId: STANDARD.id, pendingStartsAt: paidStart, expiresAt: new Date(paidStart.getTime() + 30 * DAY) },
+    });
+    const preview = await service(client).putNextAddons('chain', 2, 0);
+    assert.equal(preview.plan.id, STANDARD.id, 'built on the paid upcoming plan');
+    assert.equal(preview.branchLimit, 8);
+    assert.equal(new Date(preview.startsAt).getTime(), state.subscription.expiresAt.getTime());
+    assert.equal(state.subscription.planId, BASIC.id);
   });
 });

@@ -18,6 +18,10 @@ type SetupPayload = {
   setupToken?: string;
   setupPath?: string;
   expiresAt?: string;
+  heading?: string;
+  paragraphs?: string[];
+  lines?: Array<{ description: string; quantity: number; amount: number }>;
+  total?: number;
 };
 
 @Injectable()
@@ -49,6 +53,8 @@ export class EmailOutboxService {
         ? this.trialExpiringHtml(payload, `${publicWebUrl}/brand-manager/plan`)
         : message.template === 'REGISTRATION_APPLICATION_REJECTED'
         ? this.registrationRejectedHtml(payload)
+        : message.template === 'SUBSCRIPTION_NOTICE'
+        ? this.subscriptionNoticeHtml(payload, `${publicWebUrl}/brand-manager/plan`)
         : this.setupHtml(payload, setupUrl);
     try {
       const response = await fetch('https://api.resend.com/emails', {
@@ -122,6 +128,18 @@ export class EmailOutboxService {
       ? new Date(payload.trialEndsAt).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })
       : '';
     return `<p>Xin chào,</p><p>Gói dùng thử SmartFnB của ${business} còn ${days} ngày${expiry ? `, hết hạn lúc ${this.escape(expiry)}` : ''}.</p><p>Bạn có thể <a href="${this.escape(planUrl)}">xem và nâng cấp gói ngay</a>; không cần đợi hết 14 ngày. Gói trả phí chỉ bắt đầu khi thanh toán được xác nhận.</p><p>Nếu không nâng cấp, dữ liệu vẫn được giữ nhưng doanh nghiệp sẽ chuyển sang chế độ chỉ đọc khi hết hạn.</p>`;
+  }
+
+  /** Reminders, receipts and registration confirmations (25.5): platform branding, no QR or secrets. */
+  private subscriptionNoticeHtml(payload: SetupPayload, planUrl: string): string {
+    const lines = (payload.lines ?? [])
+      .map((line) => `<tr><td>${this.escape(line.description)}</td><td>× ${line.quantity}</td><td style="text-align:right">${Number(line.amount).toLocaleString('vi-VN')}đ</td></tr>`)
+      .join('');
+    const table = lines
+      ? `<table cellpadding="4">${lines}${payload.total !== undefined ? `<tr><td colspan="2"><strong>Tổng</strong></td><td style="text-align:right"><strong>${Number(payload.total).toLocaleString('vi-VN')}đ</strong></td></tr>` : ''}</table>`
+      : '';
+    const paragraphs = (payload.paragraphs ?? []).map((text) => `<p>${this.escape(text)}</p>`).join('');
+    return `<p><strong>Smart F&amp;B</strong></p><h3>${this.escape(payload.heading ?? 'Thông báo thuê bao')}</h3>${paragraphs}${table}<p><a href="${this.escape(planUrl)}">Mở trang Gói dịch vụ</a></p>`;
   }
 
   private escape(value: string): string {

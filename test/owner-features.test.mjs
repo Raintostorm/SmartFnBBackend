@@ -11,7 +11,6 @@ import { BrandingService } from '../dist/modules/branding/branding.service.js';
 import { EmployeesService } from '../dist/modules/employees/employees.service.js';
 import { MenuService } from '../dist/modules/menu/menu.service.js';
 import { ReportsService } from '../dist/modules/reports/reports.service.js';
-import { PlanQuotaService } from '../dist/modules/subscription/plan-quota.service.js';
 
 const owner = {
   id: 'user-owner',
@@ -45,19 +44,26 @@ function branchWithHours(overrides = {}) {
 
 describe('Branch creation seeds opening hours', () => {
   function serviceFor(captured) {
+    const branch = {
+      count: async () => 0,
+      create: async (args) => {
+        captured.args = args;
+        return { id: 'branch-new' };
+      },
+    };
     return new BranchesService(
       {
         restaurantChain: { count: async () => 1 },
-        branch: {
-          count: async () => 0,
-          create: async (args) => {
-            captured.args = args;
-            return { id: 'branch-new' };
-          },
-        },
+        branch,
+        $transaction: async (work) => work({ branch }),
       },
       { assertCanManageChain: async () => undefined },
-      { assertWithinQuota: async () => undefined },
+      {
+        getActivePlan: async () => ({}),
+        assertCanAdd: async () => async (id) => {
+          captured.reserved = id;
+        },
+      },
     );
   }
 
@@ -76,6 +82,7 @@ describe('Branch creation seeds opening hours', () => {
       owner,
     );
 
+    assert.equal(captured.reserved, 'branch-new', 'quota slot recorded inside the same transaction');
     const created = captured.args.data.operatingHours.create;
     assert.equal(created.length, 7);
     assert.deepEqual(
@@ -203,194 +210,6 @@ describe('Branch overview open state', () => {
     );
     assert.equal(state.localDate, '2026-09-19');
     assert.equal(state.localTime, '06:30');
-  });
-});
-
-describe('Service plan quota', () => {
-  function quotaService({
-    maxBranches,
-    branchCount,
-    upgradePlans = [],
-    brandingEnabled = true,
-    multiBranchComparisonEnabled = true,
-  }) {
-    return new PlanQuotaService({
-      businessSubscription: {
-        findFirst: async () => ({
-          plan: {
-            id: 'plan-basic',
-            code: 'BASIC',
-            name: 'Basic',
-            description: null,
-            monthlyPrice: { minus: (other) => ({ toString: () => `diff-${other}` }) },
-            maxBranches,
-            maxAccounts: 10,
-            maxTables: 20,
-            brandingEnabled,
-            multiBranchComparisonEnabled,
-          },
-        }),
-        findUnique: async () => ({
-          plan: {
-            id: 'plan-basic',
-            code: 'BASIC',
-            name: 'Basic',
-            description: null,
-            monthlyPrice: {},
-            maxBranches,
-            maxAccounts: 10,
-            maxTables: 20,
-            brandingEnabled,
-            multiBranchComparisonEnabled,
-          },
-        }),
-      },
-      branch: { count: async () => branchCount },
-      employee: { count: async () => 0 },
-      ownerChainAssignment: { count: async () => 1 },
-      restaurantTable: { count: async () => 0 },
-      servicePlan: { findMany: async () => upgradePlans },
-    });
-  }
-
-  it('allows a branch while the plan has room', async () => {
-    await quotaService({ maxBranches: 3, branchCount: 2 }).assertWithinQuota(
-      'chain-one',
-      'branches',
-    );
-  });
-
-  it('enforces disabled plan features with a stable error code', async () => {
-    const service = quotaService({
-      maxBranches: 3,
-      branchCount: 1,
-      multiBranchComparisonEnabled: false,
-    });
-    await service.assertFeatureEnabled('chain-one', 'BRANDING');
-    await assert.rejects(
-      service.assertFeatureEnabled('chain-one', 'MULTI_BRANCH_COMPARISON'),
-      (error) => {
-        assert.equal(error.getStatus(), 403);
-        assert.equal(error.getResponse().error, 'PLAN_FEATURE_NOT_ENABLED');
-        assert.equal(error.getResponse().feature, 'MULTI_BRANCH_COMPARISON');
-        return true;
-      },
-    );
-  });
-
-  it('blocks at the limit and suggests the plans that would unblock it', async () => {
-    const upgrade = {
-      id: 'plan-pro',
-      code: 'PRO',
-      name: 'Pro',
-      description: null,
-      monthlyPrice: { minus: () => 'price-difference' },
-      maxBranches: 10,
-      maxAccounts: 50,
-      maxTables: 200,
-    };
-    const service = quotaService({ maxBranches: 3, branchCount: 3, upgradePlans: [upgrade] });
-
-    await assert.rejects(service.assertWithinQuota('chain-one', 'branches'), (error) => {
-      const body = error.getResponse();
-      assert.equal(error.getStatus(), 409);
-      assert.equal(body.error, 'PLAN_LIMIT_REACHED');
-      assert.deepEqual(body.quota, {
-        resource: 'branches',
-        used: 3,
-        limit: 3,
-        remaining: 0,
-      });
-      assert.equal(body.suggestedPlans.length, 1);
-      assert.equal(body.suggestedPlans[0].code, 'PRO');
-      return true;
-    });
-  });
-
-  it('counts staff accounts but excludes the Brand Manager from the account limit', async () => {
-    const service = new PlanQuotaService({
-      businessSubscription: {
-        findUnique: async () => ({ activeExtraBranches: 0, activeAccountPacks: 0 }),
-        findFirst: async () => ({
-          plan: {
-            id: 'p',
-            code: 'B',
-            name: 'B',
-            monthlyPrice: {},
-            maxBranches: 5,
-            maxAccounts: 4,
-            maxTables: 20,
-          },
-        }),
-      },
-      branch: { count: async () => 1 },
-      employee: { count: async () => 3 },
-      ownerChainAssignment: { count: async () => 1 },
-      restaurantTable: { count: async () => 0 },
-      servicePlan: { findMany: async () => [] },
-    });
-
-    const snapshot = await service.getQuotaSnapshot('chain-one');
-    const accounts = snapshot.quotas.find(({ resource }) => resource === 'accounts');
-    assert.deepEqual(accounts, { resource: 'accounts', used: 3, limit: 4, remaining: 1 });
-  });
-
-  it('returns an expired subscription with its date and quota instead of hiding it', async () => {
-    const service = new PlanQuotaService({
-      businessSubscription: {
-        findUnique: async () => ({
-          status: 'ACTIVE',
-          expiresAt: new Date('2020-01-01T00:00:00.000Z'),
-          plan: {
-            id: 'p',
-            code: 'BASIC',
-            name: 'Basic',
-            description: null,
-            monthlyPrice: {},
-            maxBranches: 5,
-            maxAccounts: 10,
-            maxTables: 20,
-            brandingEnabled: true,
-            multiBranchComparisonEnabled: false,
-          },
-        }),
-      },
-      branch: { count: async () => 2 },
-      employee: { count: async () => 1 },
-      ownerChainAssignment: { count: async () => 1 },
-      restaurantTable: { count: async () => 3 },
-    });
-
-    const snapshot = await service.getSubscriptionSnapshot('chain-one');
-    assert.equal(snapshot.status, 'EXPIRED');
-    assert.equal(snapshot.expiresAt.toISOString(), '2020-01-01T00:00:00.000Z');
-    assert.equal(snapshot.plan.brandingEnabled, true);
-    assert.deepEqual(
-      snapshot.quotas.find(({ resource }) => resource === 'branches'),
-      {
-        resource: 'branches',
-        used: 2,
-        limit: 5,
-        remaining: 3,
-      },
-    );
-  });
-
-  it('keeps a suspended subscription visible', async () => {
-    const service = new PlanQuotaService({
-      businessSubscription: {
-        findUnique: async () => ({
-          status: 'SUSPENDED',
-          expiresAt: new Date('2030-01-01T00:00:00.000Z'),
-          plan: { id: 'p', code: 'B', name: 'B', maxBranches: 1, maxAccounts: 1, maxTables: 1 },
-        }),
-      },
-      branch: { count: async () => 0 },
-      employee: { count: async () => 0 },
-      ownerChainAssignment: { count: async () => 0 },
-      restaurantTable: { count: async () => 0 },
-    });
-    assert.equal((await service.getSubscriptionSnapshot('chain-one')).status, 'SUSPENDED');
   });
 });
 

@@ -222,6 +222,7 @@ export class CounterOperationsService {
   async checkout(user: AuthenticatedUser, dto: CheckoutCounterOrderDto) {
     const actor = this.employee(user);
     await this.branchAccess.assertSubscriptionAllowsWrite(actor.branchId);
+    await this.branchAccess.assertBranchCanSell(actor.branchId);
     if (!(dto.items?.length || dto.combos?.length))
       throw new BadRequestException('Cannot checkout an empty cart');
 

@@ -18,6 +18,17 @@ const input = {
 };
 function fixture() {
   const calls = [];
+  const quota = {
+    full: false,
+    assertCanAdd: async (tx, chainId, resource) => {
+      calls.push({ quota: { chainId, resource } });
+      if (quota.full) {
+        const { ConflictException } = await import('@nestjs/common');
+        throw new ConflictException({ statusCode: 409, error: 'PLAN_LIMIT_REACHED', limit: 5, used: 5 });
+      }
+      return async (id) => calls.push({ reserved: id });
+    },
+  };
   const staff = {
     id: 'employee',
     branchId: 'branch',
@@ -83,8 +94,9 @@ function fixture() {
         return 'SENT';
       },
     },
+    quota,
   );
-  return { service, tx, calls, staff };
+  return { service, tx, calls, staff, quota };
 }
 const status = (code) => (error) => error.getStatus?.() === code;
 
@@ -138,9 +150,16 @@ describe('Staff email invitations', () => {
     f.tx.ownerChainAssignment.count = async () => 0;
     await assert.rejects(f.service.invite(owner, input), status(403));
   });
-  it('counts pending accounts against quota and rejects inactive subscriptions', async () => {
+  it('checks the shared account quota inside the invite transaction and rejects inactive subscriptions', async () => {
+    const ok = fixture();
+    await ok.service.invite(owner, input);
+    const quotaIndex = ok.calls.findIndex((c) => c.quota);
+    const createdIndex = ok.calls.findIndex((c) => c.created);
+    assert.deepEqual(ok.calls[quotaIndex].quota, { chainId: 'chain', resource: 'accounts' });
+    assert.ok(quotaIndex < createdIndex, 'quota is checked before the account is created');
+    assert.equal(ok.calls.find((c) => c.reserved).reserved, 'employee');
     const f = fixture();
-    f.tx.employee.count = async () => 4;
+    f.quota.full = true;
     await assert.rejects(f.service.invite(owner, input), status(409));
     assert.equal(
       f.calls.some((c) => c.created),
@@ -149,6 +168,23 @@ describe('Staff email invitations', () => {
     const g = fixture();
     g.tx.businessSubscription.findFirst = async () => null;
     await assert.rejects(g.service.invite(owner, input), status(403));
+  });
+  it('unlocks a locked account only within the current quota and clears the over-quota marker', async () => {
+    const f = fixture();
+    f.staff.user.status = 'SUSPENDED';
+    f.staff.user.staffInvitationState = 'ACCEPTED';
+    f.quota.full = true;
+    await assert.rejects(f.service.status(owner, 'employee', 'ACTIVE', 'Mở lại'), status(409));
+    assert.equal(f.calls.some((c) => c.user), false);
+    f.quota.full = false;
+    await f.service.status(owner, 'employee', 'ACTIVE', 'Mở lại');
+    assert.deepEqual(f.calls.find((c) => c.user).user, { status: 'ACTIVE', quotaLockedAt: null });
+    assert.equal(f.calls.find((c) => c.reserved).reserved, 'employee');
+    const lock = fixture();
+    lock.staff.user.status = 'ACTIVE';
+    lock.staff.user.staffInvitationState = 'ACCEPTED';
+    await lock.service.status(owner, 'employee', 'SUSPENDED', 'Khoá thủ công');
+    assert.equal(lock.calls.some((c) => c.quota), false, 'locking never needs quota');
   });
   it('rotates setup token on resend and enforces cooldown', async () => {
     const f = fixture();

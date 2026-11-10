@@ -16,7 +16,7 @@ const cashier = {
 };
 
 const barista = { ...cashier, role: 'BARISTA', employeeId: 'barista-id' };
-const writableBranch = { assertSubscriptionAllowsWrite: async () => undefined };
+const writableBranch = { assertSubscriptionAllowsWrite: async () => undefined, assertBranchCanSell: async () => undefined };
 const counterService = (prisma, branchAccess = writableBranch) =>
   new CounterOperationsService(prisma, branchAccess);
 

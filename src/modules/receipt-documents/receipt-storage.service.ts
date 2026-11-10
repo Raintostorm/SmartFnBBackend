@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
 
 @Injectable()
 export class ReceiptStorageService {
@@ -55,10 +55,11 @@ export class ReceiptStorageService {
     await writeFile(path, data);
   }
 
-  async access(key: string, orderId: string) {
+  /** Local storage serves files through `localDownloadPath`; S3/R2 returns a 10-minute signed URL. */
+  async access(key: string, orderId: string, localDownloadPath = `/api/v1/cashier/orders/${orderId}/receipt-document/download`) {
     if (!this.s3) {
       return {
-        downloadUrl: `/api/v1/cashier/orders/${orderId}/receipt-document/download`,
+        downloadUrl: localDownloadPath,
         expiresAt: null,
       };
     }
@@ -88,7 +89,9 @@ export class ReceiptStorageService {
 
   private localPath(key: string) {
     const path = resolve(this.localRoot, key);
-    if (!path.startsWith(`${this.localRoot}/`)) throw new NotFoundException('Invalid receipt key');
+    // Separator-agnostic containment check (the old '/'-suffix test rejected every key on Windows).
+    const inside = relative(this.localRoot, path);
+    if (!inside || inside.startsWith('..') || isAbsolute(inside)) throw new NotFoundException('Invalid receipt key');
     return path;
   }
 }

@@ -29,6 +29,7 @@ import type {
   SubscriptionStatusReasonDto,
   UpdateServicePlanDto,
 } from './dto/platform-admin.dto.js';
+import { countUsage, effectiveLimits } from '../subscription/subscription-usage.js';
 import { SubscriptionScheduleService } from '../subscription/subscription-schedule.service.js';
 
 const servicePlanSelect = {
@@ -399,6 +400,14 @@ export class PlatformAdminService {
     await tx.ownerChainAssignment.create({ data: { ownerId: owner.id, chainId: chain.id, assignedById: application.reviewedById } });
     await tx.businessBranding.create({ data: { chainId: chain.id, displayName: application.businessName } });
     const subscription = await tx.businessSubscription.create({ data: { chainId: chain.id, planId: plan.id, monthlyPrice: plan.monthlyPrice, startsAt: now, expiresAt, trialStartedAt: trial ? now : null, trialEndsAt: trial ? expiresAt : null } });
+    // Freeze the first period like every later one (BR-72); trial periods carry the TRIAL limits.
+    const fullPlan = await tx.servicePlan.findUniqueOrThrow({ where: { id: plan.id } });
+    await this.schedule.recordPeriod(tx, {
+      subscriptionId: subscription.id, chainId: chain.id, plan: fullPlan, selection: { extraBranches: 0, accountPacks: 0 },
+      monthlyPrice: Math.round(Number(plan.monthlyPrice)), extraBranchPrice: 0, accountPackPrice: 0,
+      startsAt: now, endsAt: expiresAt, invoiceId: null, source: trial ? 'TRIAL' : 'ACTIVATION', keepBranchIds: null, keepAccountIds: null,
+    });
+    await tx.subscriptionPeriod.updateMany({ where: { subscriptionId: subscription.id, startsAt: now }, data: { appliedAt: now } });
     await tx.businessSubscriptionEvent.create({ data: { subscriptionId: subscription.id, type: SubscriptionEventType.CREATED, toPlanId: plan.id, changedById: application.reviewedById, note: trial ? 'Basic trial chosen during activation' : 'First month paid through platform PayOS' } });
     await tx.passwordSetupToken.create({ data: { userId: user.id, tokenHash: this.hashToken(setupToken), expiresAt: setupExpiresAt } });
     const email = await tx.emailOutbox.create({ data: { recipient: user.email, subject: 'Thiết lập tài khoản Brand Manager Smart F&B', template: 'OWNER_ACCOUNT_CREATED', payload: { businessName: application.businessName, employeeName: application.representativeName, loginEmail: user.email, setupToken, setupPath: '/setup-password', expiresAt: setupExpiresAt.toISOString() } } });
@@ -552,10 +561,45 @@ export class PlatformAdminService {
     return this.addBusinessUsage(chain);
   }
 
-  async scheduleNextPlan(businessId: string, planId: string, note: string, actorUserId: string) {
-    await this.schedule.putNextPlan(businessId, planId);
-    await this.prisma.platformSupportAction.create({ data: { actorUserId, chainId: businessId, action: 'SCHEDULE_NEXT_PLAN', note: note.trim(), details: { toPlanId: planId } } });
+  /** Legacy single-plan endpoint; same audited registration as {@link scheduleNextPeriod}. */
+  async scheduleNextPlan(businessId: string, planId: string, note: string, actorUserId: string, role: 'PLATFORM_STAFF' | 'PLATFORM_ADMIN' = 'PLATFORM_STAFF') {
+    await this.ensureBusiness(businessId);
+    await this.schedule.putNextPlan(businessId, planId, {}, { role, userId: actorUserId, note });
     return this.getBusiness(businessId);
+  }
+
+  /**
+   * Platform Staff (and Admin) register the next period on the customer's request: plan, add-ons and
+   * the BR-11 keep lists, with a mandatory note and an audit row. Never pays and never changes the
+   * current period (BR-10, BR-74).
+   */
+  async scheduleNextPeriod(
+    businessId: string,
+    dto: { planId?: string; extraBranches?: number; accountPacks?: number; keepBranchIds?: string[]; keepAccountIds?: string[]; clear?: boolean; note: string },
+    actorUserId: string,
+    role: 'PLATFORM_STAFF' | 'PLATFORM_ADMIN',
+  ) {
+    await this.ensureBusiness(businessId);
+    const actor = { role, userId: actorUserId, note: dto.note };
+    const keep = { keepBranchIds: dto.keepBranchIds, keepAccountIds: dto.keepAccountIds };
+    return dto.clear
+      ? this.schedule.clearNextPlan(businessId, keep, actor)
+      : this.schedule.register(businessId, { planId: dto.planId, extraBranches: dto.extraBranches, accountPacks: dto.accountPacks, ...keep }, actor);
+  }
+
+  async getNextPeriod(businessId: string, draft?: { planId?: string; extraBranches?: number; accountPacks?: number }) {
+    await this.ensureBusiness(businessId);
+    const [preview, candidates, invoices] = await Promise.all([
+      this.schedule.preview(businessId, draft),
+      this.schedule.keepCandidates(businessId),
+      this.prisma.subscriptionInvoice.findMany({ where: { chainId: businessId }, include: { lines: true }, orderBy: { createdAt: 'desc' }, take: 12 }),
+    ]);
+    return { preview, candidates, invoices };
+  }
+
+  private async ensureBusiness(id: string) {
+    const exists = await this.prisma.restaurantChain.count({ where: { id, deletedAt: null } });
+    if (!exists) throw new NotFoundException('Business not found');
   }
 
   async renewSubscription(businessId: string, dto: RenewSubscriptionDto, adminUserId: string) {
@@ -569,8 +613,9 @@ export class PlatformAdminService {
     const baseDate = subscription.expiresAt > new Date() ? subscription.expiresAt : new Date();
     if (subscription.pendingStartsAt) throw new ConflictException('Upcoming period has already been paid');
     const early = baseDate > new Date();
-    const extraBranches = subscription.nextExtraBranches ?? subscription.activeExtraBranches;
+    const extraBranches = subscription.nextExtraBranches ?? (scheduledPlan && scheduledPlan.id !== subscription.planId ? 0 : subscription.activeExtraBranches);
     const accountPacks = subscription.nextAccountPacks ?? subscription.activeAccountPacks;
+    const periodPlan = await this.prisma.servicePlan.findUniqueOrThrow({ where: { id: scheduledPlan?.id ?? subscription.planId } });
     await this.prisma.$transaction(async (transaction) => {
       await transaction.subscriptionInvoice.updateMany({ where: { chainId: businessId, status: 'PENDING' }, data: { status: 'CANCELLED' } });
       await transaction.businessSubscription.update({
@@ -595,6 +640,18 @@ export class PlatformAdminService {
           }),
         },
       });
+      const period = await this.schedule.recordPeriod(transaction, {
+        subscriptionId: subscription.id, chainId: businessId, plan: periodPlan, selection: { extraBranches, accountPacks },
+        monthlyPrice: Math.round(Number(periodPlan.monthlyPrice)), extraBranchPrice: periodPlan.extraBranchPrice, accountPackPrice: periodPlan.extraAccountPackPrice,
+        startsAt: baseDate, endsAt: this.addMonths(baseDate, dto.months), invoiceId: null, source: 'MANUAL_ADMIN',
+        keepBranchIds: Array.isArray(subscription.nextKeepBranchIds) ? (subscription.nextKeepBranchIds as string[]) : null,
+        keepAccountIds: Array.isArray(subscription.nextKeepAccountIds) ? (subscription.nextKeepAccountIds as string[]) : null,
+      });
+      await transaction.businessSubscription.update({ where: { id: subscription.id }, data: { nextKeepBranchIds: Prisma.DbNull, nextKeepAccountIds: Prisma.DbNull, nextRegisteredByRole: null, nextRegisteredAt: null } });
+      if (!early) {
+        await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'quota:' + businessId}))`;
+        await this.schedule.applyPeriodStart(transaction, period);
+      }
       await transaction.businessSubscriptionEvent.create({
         data: {
           subscriptionId: subscription.id,
@@ -778,18 +835,21 @@ export class PlatformAdminService {
     };
   }
 
+  /** Same counting and limits as the Brand Manager screen and every quota check (subscription-usage.ts). */
   private async getBusinessUsageCounts(chainId: string) {
-    const [branchCount, employeeCount, ownerCount, tableCount] = await Promise.all([
-      this.prisma.branch.count({ where: { chainId, deletedAt: null } }),
-      this.prisma.employee.count({
-        where: { branch: { chainId }, deletedAt: null, user: { deletedAt: null } },
-      }),
-      this.prisma.ownerChainAssignment.count({
-        where: { chainId, owner: { deletedAt: null, user: { deletedAt: null } } },
-      }),
-      this.prisma.restaurantTable.count({ where: { branch: { chainId }, deletedAt: null } }),
-    ]);
-    return { branchCount, accountCount: employeeCount + ownerCount, tableCount };
+    const [usage, limits] = await Promise.all([countUsage(this.prisma, chainId), effectiveLimits(this.prisma, chainId)]);
+    return {
+      branchCount: usage.branches,
+      accountCount: usage.accounts,
+      tableCount: usage.tables,
+      ownerCount: usage.owners,
+      pendingInvitationCount: usage.pendingInvitations,
+      branchLimit: limits?.branchLimit ?? null,
+      accountLimit: limits?.accountLimit ?? null,
+      activeExtraBranches: limits?.extraBranches ?? 0,
+      activeAccountPacks: limits?.accountPacks ?? 0,
+      limitsPeriodEndsAt: limits?.periodEndsAt ?? null,
+    };
   }
 
   private async getBusinessUserIds(chainId: string): Promise<string[]> {

@@ -57,7 +57,9 @@ export class TrialReminderWorker implements OnModuleInit, OnModuleDestroy {
       let queued = 0;
       for (const trial of trials) {
         const days = (trial.expiresAt.getTime() - now.getTime()) / (24 * 60 * 60_000);
-        const reminderDays = days > 3 ? 7 : days > 1 ? 3 : 1;
+        // BR-69: trial reminders at 5 and 3 days left, each at most once per trial.
+        if (days > 5) continue;
+        const reminderDays = days > 3 ? 5 : 3;
         for (const assignment of trial.chain.ownerAssignments) {
           const email = assignment.owner.user.email;
           const recipientHash = createHash('sha256')

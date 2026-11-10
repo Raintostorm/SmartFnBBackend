@@ -248,30 +248,12 @@ export class PlatformBillingService {
           throw new ConflictException('Subscription state changed; this invoice cannot be confirmed manually');
         }
         const now = new Date();
-        const periodStart = isTrial ? now : subscription.expiresAt > now ? subscription.expiresAt : now;
-        const early = !isTrial && periodStart > now;
-        const extraBranches = invoice?.lines.find((line) => line.kind === 'EXTRA_BRANCH')?.quantity ?? 0;
-        const accountPacks = invoice?.lines.find((line) => line.kind === 'ACCOUNT_PACK')?.quantity ?? 0;
-        await tx.businessSubscription.update({
-          where: { id: subscription.id },
-          data: {
-            planId: early ? subscription.planId : checkout.planId,
-            monthlyPrice: early ? subscription.monthlyPrice : (invoice?.lines.find((line) => line.kind === 'PLAN')?.unitPrice ?? (await tx.servicePlan.findUniqueOrThrow({ where: { id: checkout.planId } })).monthlyPrice),
-            status: BusinessSubscriptionStatus.ACTIVE,
-            startsAt: early ? subscription.startsAt : periodStart,
-            expiresAt: invoice?.periodEndsAt ?? (isTrial ? this.addMonth(subscription.expiresAt) : this.addMonth(periodStart)),
-            trialConvertedAt: isTrial ? now : subscription.trialConvertedAt,
-            nextPlanId: null,
-            nextExtraBranches: null,
-            nextAccountPacks: null,
-            activeExtraBranches: early ? subscription.activeExtraBranches : extraBranches,
-            activeAccountPacks: early ? subscription.activeAccountPacks : accountPacks,
-            pendingPlanId: early ? checkout.planId : null,
-            pendingMonthlyPrice: early ? (invoice?.lines.find((line) => line.kind === 'PLAN')?.unitPrice ?? subscription.monthlyPrice) : null,
-            pendingExtraBranches: early ? extraBranches : 0,
-            pendingAccountPacks: early ? accountPacks : 0,
-            pendingStartsAt: early ? periodStart : null,
-          },
+        const { periodStart, periodEnd } = await this.schedule.applyPayment(tx, {
+          subscription, planId: checkout.planId, invoice, isTrial, now, source: 'MANUAL_CONFIRMATION',
+        });
+        await this.queueReceipt(tx, checkout.chainId, invoice?.id ?? checkout.id, {
+          planName: invoice?.planName ?? (await tx.servicePlan.findUniqueOrThrow({ where: { id: checkout.planId } })).name,
+          lines: invoice?.lines ?? [], total: Number(checkout.amount), periodStart, periodEnd, paidAt: now,
         });
         await tx.businessSubscriptionEvent.create({
           data: {
@@ -340,31 +322,12 @@ export class PlatformBillingService {
           return 'review';
         }
         const now = new Date();
-        const periodStart = isTrial ? now : subscription.expiresAt > now ? subscription.expiresAt : now;
-        const periodEnd = invoice?.periodEndsAt ?? (isTrial ? this.addMonth(subscription.expiresAt) : this.addMonth(periodStart));
-        const extraBranches = invoice?.lines.find((line) => line.kind === 'EXTRA_BRANCH')?.quantity ?? 0;
-        const accountPacks = invoice?.lines.find((line) => line.kind === 'ACCOUNT_PACK')?.quantity ?? 0;
-        const early = !isTrial && periodStart > now;
-        await tx.businessSubscription.update({
-          where: { id: subscription.id },
-          data: {
-            planId: early ? subscription.planId : fresh.planId,
-            monthlyPrice: early ? subscription.monthlyPrice : (invoice?.lines.find((line) => line.kind === 'PLAN')?.unitPrice ?? (await tx.servicePlan.findUniqueOrThrow({ where: { id: fresh.planId } })).monthlyPrice),
-            status: BusinessSubscriptionStatus.ACTIVE,
-            startsAt: early ? subscription.startsAt : periodStart,
-            expiresAt: periodEnd,
-            trialConvertedAt: isTrial ? now : subscription.trialConvertedAt,
-            nextPlanId: null,
-            nextExtraBranches: null,
-            nextAccountPacks: null,
-            activeExtraBranches: early ? subscription.activeExtraBranches : extraBranches,
-            activeAccountPacks: early ? subscription.activeAccountPacks : accountPacks,
-            pendingPlanId: early ? fresh.planId : null,
-            pendingMonthlyPrice: early ? (invoice?.lines.find((line) => line.kind === 'PLAN')?.unitPrice ?? subscription.monthlyPrice) : null,
-            pendingExtraBranches: early ? extraBranches : 0,
-            pendingAccountPacks: early ? accountPacks : 0,
-            pendingStartsAt: early ? periodStart : null,
-          },
+        const { periodStart, periodEnd } = await this.schedule.applyPayment(tx, {
+          subscription, planId: fresh.planId, invoice, isTrial, now, source: 'PAYOS',
+        });
+        await this.queueReceipt(tx, fresh.chainId, invoice?.id ?? fresh.id, {
+          planName: invoice?.planName ?? (await tx.servicePlan.findUniqueOrThrow({ where: { id: fresh.planId } })).name,
+          lines: invoice?.lines ?? [], total: Number(fresh.amount), periodStart, periodEnd, paidAt: now,
         });
         await tx.businessSubscriptionEvent.create({
           data: {
@@ -387,6 +350,27 @@ export class PlatformBillingService {
     );
   }
 
+  /** 25.3 receipt, queued in the payment transaction; the dedupe key makes webhook replays harmless. */
+  private queueReceipt(
+    tx: Prisma.TransactionClient,
+    chainId: string,
+    invoiceOrCheckoutId: string,
+    receipt: { planName: string; lines: Array<{ description: string; quantity: number; amount: number }>; total: number; periodStart: Date; periodEnd: Date; paidAt: Date },
+  ) {
+    const date = (value: Date) => value.toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
+    return this.schedule.queueNotice(tx, chainId, `subscription-receipt:${invoiceOrCheckoutId}`, {
+      subject: 'Smart F&B: biên nhận thanh toán thuê bao',
+      heading: 'Đã nhận thanh toán thuê bao',
+      paragraphs: [
+        `Mã hoá đơn: ${invoiceOrCheckoutId}. Gói ${receipt.planName}, kỳ ${date(receipt.periodStart)} – ${date(receipt.periodEnd)}.`,
+        `Số tiền: ${receipt.total.toLocaleString('vi-VN')}đ, thanh toán lúc ${receipt.paidAt.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}.`,
+        `Gói và hạn mức của kỳ này áp dụng từ ${date(receipt.periodStart)}. Biên nhận không phải hoá đơn VAT.`,
+      ],
+      lines: receipt.lines.map((line) => ({ description: line.description, quantity: line.quantity, amount: line.amount })),
+      total: receipt.total,
+    });
+  }
+
   private credentials(): PayosCredentials {
     const clientId = this.config.get<string>('PLATFORM_PAYOS_CLIENT_ID')?.trim();
     const apiKey = this.config.get<string>('PLATFORM_PAYOS_API_KEY')?.trim();
@@ -395,18 +379,6 @@ export class PlatformBillingService {
       throw new ServiceUnavailableException('Platform PayOS credentials are not configured');
     }
     return { clientId, apiKey, checksumKey };
-  }
-
-  private addMonth(date: Date): Date {
-    const result = new Date(date);
-    const day = result.getUTCDate();
-    result.setUTCDate(1);
-    result.setUTCMonth(result.getUTCMonth() + 1);
-    const lastDay = new Date(
-      Date.UTC(result.getUTCFullYear(), result.getUTCMonth() + 1, 0),
-    ).getUTCDate();
-    result.setUTCDate(Math.min(day, lastDay));
-    return result;
   }
 
   private view(checkout: {

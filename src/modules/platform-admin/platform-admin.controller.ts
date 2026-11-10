@@ -8,6 +8,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
 } from '@nestjs/common';
 import {
@@ -28,11 +29,13 @@ import {
   ChangeApprovedPlanDto,
   CreateServicePlanDto,
   ListRegistrationApplicationsQueryDto,
+  NextPeriodDraftQueryDto,
   PaginationQueryDto,
   PlatformSupportNoteDto,
   RejectRegistrationApplicationDto,
   RenewSubscriptionDto,
   SubscriptionStatusReasonDto,
+  SupportNextPeriodDto,
   UpdateServicePlanDto,
 } from './dto/platform-admin.dto.js';
 import { PlatformAdminService } from './platform-admin.service.js';
@@ -145,7 +148,20 @@ export class PlatformAdminController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Register a plan for the next unpaid subscription period' })
   scheduleNextPlan(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: ChangeApprovedPlanDto, @CurrentUser() admin: AuthenticatedUser) {
-    return this.platformAdminService.scheduleNextPlan(id, dto.planId, dto.note, admin.id);
+    return this.platformAdminService.scheduleNextPlan(id, dto.planId, dto.note, admin.id, 'PLATFORM_ADMIN');
+  }
+
+  @Get('businesses/:id/next-period')
+  @ApiOperation({ summary: 'Next-period preview, keep candidates and invoices of a business' })
+  nextPeriod(@Param('id', new ParseUUIDPipe()) id: string, @Query() query: NextPeriodDraftQueryDto) {
+    const draft = query.planId !== undefined || query.extraBranches !== undefined || query.accountPacks !== undefined ? query : undefined;
+    return this.platformAdminService.getNextPeriod(id, draft);
+  }
+
+  @Put('businesses/:id/next-period')
+  @ApiOperation({ summary: 'Register plan and add-ons for the next period (never changes the current period)' })
+  scheduleNextPeriod(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: SupportNextPeriodDto, @CurrentUser() admin: AuthenticatedUser) {
+    return this.platformAdminService.scheduleNextPeriod(id, dto, admin.id, 'PLATFORM_ADMIN');
   }
 
   @Post('businesses/:id/suspend')

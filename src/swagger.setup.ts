@@ -42,6 +42,7 @@ export const SWAGGER_TAGS = [
   ['Cashier · Orders', 'Cashier tạo, sửa, chốt, hủy và in lại đơn tại quầy.'],
   ['Cashier · Payments', 'Cashier thu tiền mặt hoặc tạo thanh toán QR PayOS.'],
   ['Cashier receipt documents', 'PDF biên nhận bất biến để xem lại và in từ lịch sử đơn quầy.'],
+  ['Cashier refund documents', 'PDF phiếu hoàn tiền bất biến (mỗi khoản hoàn một PDF), ảnh in và nhật ký in lại.'],
   ['Barista · Queue', 'Barista nhận mẻ, pha chế, hoàn tác và giao đơn.'],
   ['Barista · Availability', 'Barista báo hết món hoặc tùy chọn tại chi nhánh.'],
   ['Payments', 'Lịch sử thanh toán tại quầy và xác nhận chuyển khoản.'],

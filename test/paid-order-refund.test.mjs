@@ -22,6 +22,7 @@ function fixture({
   orderStatus = 'SUBMITTED',
   receivedAmount = 50_000,
   failureReason = null,
+  documents,
 } = {}) {
   const calls = {
     audits: [],
@@ -157,7 +158,7 @@ function fixture({
       calls.events.push({ branchId, type: `calling:${type}`, data }),
   };
   return {
-    service: new PaidOrderRefundService(prisma, realtime),
+    service: new PaidOrderRefundService(prisma, realtime, undefined, documents),
     calls,
     order,
     payment,
@@ -445,5 +446,55 @@ describe('Paid order cancellation and external refunds (#43)', () => {
       }),
       (e) => e.getStatus() === 400,
     );
+  });
+});
+
+describe('Refund slip PDF hook (BR-86)', () => {
+  const recorder = (status = 'READY') => {
+    const calls = [];
+    return {
+      calls,
+      generateAfterCommit: async (refundId) => {
+        calls.push(refundId);
+        return { id: `doc-${refundId}`, status };
+      },
+    };
+  };
+
+  it('generates exactly one PDF after a Store Manager refund commits', async () => {
+    const documents = recorder();
+    const { service, order } = fixture({ documents });
+    const result = await service.cancelPaidOrder(manager, order.id, { reason: 'WRONG_ITEM', refundMethod: 'CASH', reasonCode: 'WRONG_ITEM' });
+    assert.deepEqual(documents.calls, [result.refund.id]);
+    assert.equal(result.refundDocument.status, 'READY');
+    await assert.rejects(service.cancelPaidOrder(manager, order.id, { reason: 'WRONG_ITEM', refundMethod: 'CASH' }));
+    assert.equal(documents.calls.length, 1, 'a rejected repeat creates neither refund nor PDF');
+  });
+
+  it('generates the PDF for a same-day Cashier refund and for an approved prior-day payout', async () => {
+    const sameDay = recorder();
+    const today = fixture({ documents: sameDay });
+    const cashier = { ...manager, role: 'CASHIER' };
+    const first = await today.service.cashierRefund(cashier, today.order.id, { reasonCode: 'WRONG_ITEM', items: [{ orderItemId: today.order.items[1].id }] });
+    assert.deepEqual(sameDay.calls, [first.refund.id]);
+
+    const approved = recorder();
+    const prior = fixture({ documents: approved });
+    prior.order.paidAt = new Date(Date.now() - 86_400_000);
+    prior.payment.paidAt = prior.order.paidAt;
+    const request = await prior.service.requestRefundApproval(cashier, prior.order.id, { reasonCode: 'WRONG_ITEM' });
+    assert.equal(approved.calls.length, 0, 'no PDF for a request that is only pending');
+    await prior.service.reviewRefundApproval(manager, request.id, true);
+    const done = await prior.service.completeApprovedRefund(cashier, request.id);
+    assert.deepEqual(approved.calls, [done.refund.id]);
+  });
+
+  it('keeps the refund when the PDF fails', async () => {
+    const documents = recorder('FAILED');
+    const { service, order, calls } = fixture({ documents });
+    const result = await service.cancelPaidOrder(manager, order.id, { reason: 'WRONG_ITEM', refundMethod: 'CASH' });
+    assert.equal(result.refund.status, 'COMPLETED');
+    assert.equal(result.refundDocument.status, 'FAILED');
+    assert.equal(calls.refundCreates.length, 1);
   });
 });

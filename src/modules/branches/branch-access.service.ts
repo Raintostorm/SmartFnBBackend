@@ -1,5 +1,6 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import {
+  BranchStatus,
   BusinessSubscriptionStatus,
   RestaurantChainStatus,
 } from '../../generated/prisma/client.js';
@@ -81,6 +82,27 @@ export class BranchAccessService {
       throw new ForbiddenException(
         'The business subscription is read-only; renew it before making this change',
       );
+    }
+  }
+
+  /**
+   * New sales need a branch that is not suspended (Tạm ngưng, e.g. over the plan limit, BR-11).
+   * Reading history, finishing paid orders and refunds keep working through the other guards.
+   */
+  async assertBranchCanSell(branchId: string): Promise<void> {
+    const branch = await this.prisma.branch.findFirst({
+      where: { id: branchId, deletedAt: null },
+      select: { status: true, quotaSuspendedAt: true },
+    });
+    if (!branch || branch.status === BranchStatus.INACTIVE) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        error: 'BRANCH_SUSPENDED',
+        overQuota: !!branch?.quotaSuspendedAt,
+        message: branch?.quotaSuspendedAt
+          ? 'Chi nhánh đang tạm ngưng vì vượt hạn mức gói; không thể bán. Brand Manager mở lại khi còn hạn mức.'
+          : 'Chi nhánh đang tạm ngưng; không thể bán.',
+      });
     }
   }
 

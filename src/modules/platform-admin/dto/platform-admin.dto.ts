@@ -1,6 +1,9 @@
 import { Transform, Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import {
+  ArrayMaxSize,
+  ArrayUnique,
+  IsArray,
   IsEmail,
   IsBoolean,
   IsDateString,
@@ -125,6 +128,22 @@ export class PlatformSupportNoteDto {
 export class ChangeApprovedPlanDto extends PlatformSupportNoteDto {
   @IsUUID()
   planId!: string;
+}
+
+/** Platform Staff/Admin registering the next period on the customer's request (BR-74, 31.5). */
+export class SupportNextPeriodDto extends PlatformSupportNoteDto {
+  @ApiPropertyOptional({ format: 'uuid' }) @IsOptional() @IsUUID() planId?: string;
+  @ApiPropertyOptional() @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(10) extraBranches?: number;
+  @ApiPropertyOptional() @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(4) accountPacks?: number;
+  @ApiPropertyOptional({ type: [String] }) @IsOptional() @IsArray() @ArrayMaxSize(100) @ArrayUnique() @IsUUID('all', { each: true }) keepBranchIds?: string[];
+  @ApiPropertyOptional({ type: [String] }) @IsOptional() @IsArray() @ArrayMaxSize(500) @ArrayUnique() @IsUUID('all', { each: true }) keepAccountIds?: string[];
+  @ApiPropertyOptional({ description: 'Cancel the registration instead' }) @IsOptional() @IsBoolean() clear?: boolean;
+}
+
+export class NextPeriodDraftQueryDto {
+  @ApiPropertyOptional() @IsOptional() @IsUUID() planId?: string;
+  @ApiPropertyOptional() @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(10) extraBranches?: number;
+  @ApiPropertyOptional() @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(4) accountPacks?: number;
 }
 
 export class ActivationTokenDto {

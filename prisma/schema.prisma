@@ -315,6 +315,8 @@ model User {
   staffInvitationState       String?    @map("staff_invitation_state") @db.VarChar(20)
   mustChangePassword         Boolean    @default(false) @map("must_change_password")
   temporaryPasswordExpiresAt DateTime?  @map("temporary_password_expires_at") @db.Timestamptz(6)
+  /// Set when the account was locked at a period start because it exceeded the plan (BR-11).
+  quotaLockedAt              DateTime?  @map("quota_locked_at") @db.Timestamptz(6)
   roleId                     String     @map("role_id") @db.Uuid
   createdAt                  DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                  DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -380,6 +382,7 @@ model RestaurantChain {
   subscription            BusinessSubscription?
   subscriptionCheckouts   SubscriptionCheckout[]
   subscriptionInvoices   SubscriptionInvoice[]
+  subscriptionPeriods     SubscriptionPeriod[]
   branding                BusinessBranding?
   displayPosters          DisplayPoster[]
   invoices                Invoice[]
@@ -464,6 +467,8 @@ model Branch {
   country      String       @default("Vietnam") @db.VarChar(100)
   timezone     String       @default("Asia/Ho_Chi_Minh") @db.VarChar(50)
   status       BranchStatus @default(ACTIVE)
+  /// Set when the branch was suspended at a period start because it exceeded the plan (BR-11).
+  quotaSuspendedAt DateTime? @map("quota_suspended_at") @db.Timestamptz(6)
   createdAt    DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt    DateTime?    @map("deleted_at") @db.Timestamptz(6)
@@ -492,6 +497,7 @@ model Branch {
   customerDisplays  CustomerDisplaySession[]
   printJobs         PrintJob[]
   receiptDocuments  ReceiptDocument[]
+  refundDocuments   RefundDocument[]
   dailySequences    BranchDailySequence[]
   posStations       PosStation[]
   displayDevices    DisplayDevice[]
@@ -709,6 +715,7 @@ model ServicePlan {
   checkouts              SubscriptionCheckout[]
   invoiceLines           SubscriptionInvoiceLine[]
   invoices               SubscriptionInvoice[]
+  periods                SubscriptionPeriod[]
 
   @@map("service_plans")
 }
@@ -767,6 +774,11 @@ model BusinessSubscription {
   pendingExtraBranches Int                   @default(0) @map("pending_extra_branches")
   pendingAccountPacks Int                    @default(0) @map("pending_account_packs")
   pendingStartsAt DateTime?                  @map("pending_starts_at") @db.Timestamptz(6)
+  /// BR-11 selection for the next registration: branch ids / employee ids kept when limits shrink.
+  nextKeepBranchIds Json?                    @map("next_keep_branch_ids")
+  nextKeepAccountIds Json?                   @map("next_keep_account_ids")
+  nextRegisteredByRole String?               @map("next_registered_by_role") @db.VarChar(30)
+  nextRegisteredAt DateTime?                 @map("next_registered_at") @db.Timestamptz(6)
   status           BusinessSubscriptionStatus @default(ACTIVE)
   monthlyPrice     Decimal                    @map("monthly_price") @db.Decimal(14, 2)
   startsAt         DateTime                   @map("starts_at") @db.Timestamptz(6)
@@ -783,6 +795,7 @@ model BusinessSubscription {
   nextPlan ServicePlan?                @relation("ScheduledSubscriptionPlan", fields: [nextPlanId], references: [id], onDelete: SetNull)
   pendingPlan ServicePlan?             @relation("PendingSubscriptionPlan", fields: [pendingPlanId], references: [id], onDelete: SetNull)
   invoices SubscriptionInvoice[]
+  periods  SubscriptionPeriod[]
   events   BusinessSubscriptionEvent[]
 
   @@index([status, expiresAt])
@@ -831,6 +844,7 @@ model SubscriptionInvoice {
   plan ServicePlan @relation(fields: [planId], references: [id], onDelete: Restrict)
   lines SubscriptionInvoiceLine[]
   checkouts SubscriptionCheckout[]
+  period SubscriptionPeriod?
   @@index([chainId, status, createdAt])
   @@map("subscription_invoices")
 }
@@ -848,6 +862,47 @@ model SubscriptionInvoiceLine {
   plan ServicePlan @relation(fields: [planId], references: [id], onDelete: Restrict)
   @@index([invoiceId])
   @@map("subscription_invoice_lines")
+}
+
+/// One billing period with everything frozen when it was paid: plan, prices, add-ons, limits, features.
+model SubscriptionPeriod {
+  id                           String    @id @default(uuid()) @db.Uuid
+  subscriptionId               String    @map("subscription_id") @db.Uuid
+  chainId                      String    @map("chain_id") @db.Uuid
+  invoiceId                    String?   @unique @map("invoice_id") @db.Uuid
+  planId                       String    @map("plan_id") @db.Uuid
+  planCode                     String    @map("plan_code") @db.VarChar(50)
+  planName                     String    @map("plan_name") @db.VarChar(100)
+  monthlyPrice                 Int       @map("monthly_price")
+  planMaxBranches              Int       @map("plan_max_branches")
+  planMaxAccounts              Int       @map("plan_max_accounts")
+  extraBranches                Int       @default(0) @map("extra_branches")
+  extraBranchPrice             Int       @default(0) @map("extra_branch_price")
+  extraBranchAccounts          Int       @default(8) @map("extra_branch_accounts")
+  accountPacks                 Int       @default(0) @map("account_packs")
+  accountPackPrice             Int       @default(0) @map("account_pack_price")
+  accountPackSize              Int       @default(5) @map("account_pack_size")
+  branchLimit                  Int       @map("branch_limit")
+  accountLimit                 Int       @map("account_limit")
+  brandingEnabled              Boolean   @default(false) @map("branding_enabled")
+  multiBranchComparisonEnabled Boolean   @default(false) @map("multi_branch_comparison_enabled")
+  startsAt                     DateTime  @map("starts_at") @db.Timestamptz(6)
+  endsAt                       DateTime  @map("ends_at") @db.Timestamptz(6)
+  source                       String    @db.VarChar(30)
+  keepBranchIds                Json?     @map("keep_branch_ids")
+  keepAccountIds               Json?     @map("keep_account_ids")
+  appliedAt                    DateTime? @map("applied_at") @db.Timestamptz(6)
+  createdAt                    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  subscription BusinessSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  chain        RestaurantChain      @relation(fields: [chainId], references: [id], onDelete: Cascade)
+  invoice      SubscriptionInvoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  plan         ServicePlan          @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  @@unique([subscriptionId, startsAt])
+  @@index([chainId, startsAt])
+  @@index([appliedAt, startsAt])
+  @@map("subscription_periods")
 }
 
 model BusinessSubscriptionEvent {
@@ -1304,6 +1359,7 @@ model Order {
   refunds                Refund[]
   refundApprovalRequests RefundApprovalRequest[]
   receiptDocuments       ReceiptDocument[]
+  refundDocuments        RefundDocument[]
 
   @@unique([branchId, businessDate, callNumber])
   @@index([branchId, placedAt])
@@ -1480,6 +1536,8 @@ model Refund {
   order   Order        @relation(fields: [orderId], references: [id], onDelete: Restrict)
   payment Payment      @relation(fields: [paymentId], references: [id], onDelete: Restrict)
   items   RefundItem[]
+  document  RefundDocument?
+  printLogs RefundPrintLog[]
 
   @@index([orderId, status])
   @@index([paymentId, status])
@@ -1672,6 +1730,57 @@ model ReceiptDocument {
   @@index([branchId, createdAt])
   @@index([status, updatedAt])
   @@map("receipt_documents")
+}
+
+/// Immutable refund slip PDF (BR-86): exactly one per refund; bytes live in object storage.
+model RefundDocument {
+  id                  String                @id @default(uuid()) @db.Uuid
+  refundId            String                @unique @map("refund_id") @db.Uuid
+  orderId             String                @map("order_id") @db.Uuid
+  branchId            String                @map("branch_id") @db.Uuid
+  status              ReceiptDocumentStatus @default(PENDING)
+  storageKey          String?               @map("storage_key") @db.VarChar(1000)
+  fileName            String?               @map("file_name") @db.VarChar(255)
+  mimeType            String?               @map("mime_type") @db.VarChar(100)
+  fileSize            Int?                  @map("file_size")
+  checksum            String?               @db.VarChar(64)
+  generatedAt         DateTime?             @map("generated_at") @db.Timestamptz(6)
+  generationStartedAt DateTime?             @map("generation_started_at") @db.Timestamptz(6)
+  attempts            Int                   @default(0)
+  errorMessage        String?               @map("error_message") @db.VarChar(1000)
+  createdAt           DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  refund Refund @relation(fields: [refundId], references: [id], onDelete: Cascade)
+  order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@index([branchId, createdAt])
+  @@index([status, updatedAt])
+  @@map("refund_documents")
+}
+
+/// One row per refund slip print or reprint (BR-53). Printer results never change the refund.
+model RefundPrintLog {
+  id                  String         @id @default(uuid()) @db.Uuid
+  refundId            String         @map("refund_id") @db.Uuid
+  branchId            String         @map("branch_id") @db.Uuid
+  printedByUserId     String         @map("printed_by_user_id") @db.Uuid
+  printedByEmployeeId String?        @map("printed_by_employee_id") @db.Uuid
+  printedByRole       String         @map("printed_by_role") @db.VarChar(50)
+  isReprint           Boolean        @default(true) @map("is_reprint")
+  reason              String?        @db.VarChar(500)
+  status              PrintJobStatus @default(PENDING)
+  errorMessage        String?        @map("error_message") @db.VarChar(500)
+  printedAt           DateTime?      @map("printed_at") @db.Timestamptz(6)
+  createdAt           DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  refund Refund @relation(fields: [refundId], references: [id], onDelete: Cascade)
+
+  @@index([refundId, createdAt])
+  @@index([branchId, createdAt])
+  @@map("refund_print_logs")
 }
 
 model PosStation {

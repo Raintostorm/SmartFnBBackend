@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import { Prisma } from '../dist/generated/prisma/client.js';
 import { PlatformAdminService } from '../dist/modules/platform-admin/platform-admin.service.js';
 import { PlatformAdminAnalyticsService } from '../dist/modules/platform-billing/platform-admin-analytics.service.js';
+import { SubscriptionScheduleService } from '../dist/modules/subscription/subscription-schedule.service.js';
 import { PlatformBillingService } from '../dist/modules/platform-billing/platform-billing.service.js';
 
 describe('Platform Admin analytics', () => {
@@ -203,6 +204,7 @@ describe('Platform Admin invoice reconciliation', () => {
     let status = 'NEEDS_REVIEW';
     let event;
     let supportAction;
+    const periods = [];
     const checkout = {
       id: 'checkout-1',
       chainId: 'chain-1',
@@ -223,6 +225,8 @@ describe('Platform Admin invoice reconciliation', () => {
       businessSubscription: {
         findUnique: async () => ({
           id: 'sub-1',
+          chainId: 'chain-1',
+          startsAt: new Date(Date.now() - 29 * 86_400_000),
           planId: 'basic',
           nextPlanId: 'standard',
           plan: { code: 'BASIC' },
@@ -239,7 +243,18 @@ describe('Platform Admin invoice reconciliation', () => {
           event = data;
         },
       },
-      servicePlan: { findUniqueOrThrow: async () => ({ monthlyPrice: new Prisma.Decimal(499000) }) },
+      servicePlan: {
+        findUniqueOrThrow: async () => ({
+          id: 'standard', code: 'STANDARD', name: 'Tiêu chuẩn', monthlyPrice: new Prisma.Decimal(499000),
+          maxBranches: 6, maxAccounts: 55, extraBranchAccounts: 8, extraBranchPrice: 220000, extraAccountPackPrice: 50000,
+          extraBranchEnabled: true, brandingEnabled: true, multiBranchComparisonEnabled: true,
+        }),
+      },
+      subscriptionPeriod: {
+        upsert: async ({ create }) => { periods.push({ id: `p${periods.length}`, appliedAt: null, ...create }); return periods.at(-1); },
+        updateMany: async ({ data }) => { Object.assign(periods.at(-1), data); return { count: 1 }; },
+      },
+      ownerChainAssignment: { findMany: async () => [] },
       platformSupportAction: {
         create: async ({ data }) => {
           supportAction = data;
@@ -257,7 +272,7 @@ describe('Platform Admin invoice reconciliation', () => {
         }),
       },
     };
-    const service = new PlatformBillingService(prisma, {}, {}, {}, {}, {});
+    const service = new PlatformBillingService(prisma, {}, {}, {}, {}, {}, new SubscriptionScheduleService({}, {}, {}));
     const result = await service.confirmCheckoutManually(
       checkout.id,
       'Đã đối chiếu sao kê PayOS',
@@ -267,5 +282,10 @@ describe('Platform Admin invoice reconciliation', () => {
     assert.equal(event.changedById, 'admin-1');
     assert.equal(supportAction.action, 'CONFIRM_PLATFORM_INVOICE');
     assert.equal(supportAction.note, 'Đã đối chiếu sao kê PayOS');
+    // Manual confirmation records the same frozen period as the webhook; early → not started yet.
+    assert.equal(periods.length, 1);
+    assert.equal(periods[0].source, 'MANUAL_CONFIRMATION');
+    assert.equal(periods[0].branchLimit, 6);
+    assert.equal(periods[0].appliedAt, null);
   });
 });

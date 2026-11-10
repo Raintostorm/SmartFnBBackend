@@ -12,6 +12,7 @@ import { AppRole } from '../auth/app-role.enum.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { PasswordService } from '../auth/password.service.js';
 import { EmailOutboxService } from '../email/email-outbox.service.js';
+import { PlanQuotaService } from '../subscription/plan-quota.service.js';
 
 const roles: readonly string[] = [AppRole.MANAGER, AppRole.CASHIER, AppRole.BARISTA];
 const ttl = 24 * 60 * 60 * 1000;
@@ -52,6 +53,7 @@ export class StaffAccountsService {
     private readonly prisma: PrismaService,
     private readonly passwords: PasswordService,
     private readonly emails: EmailOutboxService,
+    private readonly quota: PlanQuotaService,
   ) {}
 
   private assertRole(actor: AuthenticatedUser, role: string) {
@@ -111,10 +113,10 @@ export class StaffAccountsService {
         status: 'ACTIVE',
         expiresAt: { gt: new Date() },
       },
-      select: { plan: { select: { maxAccounts: true } } },
+      select: { id: true },
     });
     if (!subscription) throw new ForbiddenException('Business subscription is not active');
-    return { ...branch, maxAccounts: subscription.plan.maxAccounts };
+    return branch;
   }
 
   private async target(tx: Prisma.TransactionClient, actor: AuthenticatedUser, employeeId: string) {
@@ -218,18 +220,8 @@ export class StaffAccountsService {
     const expiresAt = new Date(Date.now() + ttl);
     const result = await this.transaction(async (tx) => {
       const branch = await this.branch(tx, actor, dto.branchId);
-      const employees = await tx.employee.count({
-        where: { branch: { chainId: branch.chainId }, deletedAt: null, user: { deletedAt: null } },
-      });
-      const owners = await tx.ownerChainAssignment.count({
-        where: { chainId: branch.chainId, owner: { deletedAt: null, user: { deletedAt: null } } },
-      });
-      if (employees + owners >= branch.maxAccounts)
-        throw new ConflictException({
-          statusCode: 409,
-          error: 'PLAN_LIMIT_REACHED',
-          message: 'Account quota reached; contact Owner to upgrade',
-        });
+      // Same rule as the plan screen: Brand Managers + unlocked staff + pending invitations (13.1).
+      const reserve = await this.quota.assertCanAdd(tx, branch.chainId, 'accounts');
       const role = await tx.role.findUniqueOrThrow({
         where: { code: dto.role },
         select: { id: true },
@@ -258,6 +250,7 @@ export class StaffAccountsService {
         },
         select: staffAccountSelect,
       });
+      await reserve(account.id);
       const email = await this.tokenEmail(tx, actor, account, branch.name, token, expiresAt);
       await this.audit(tx, actor, account, 'STAFF_INVITED', undefined, {
         role: dto.role,
@@ -338,13 +331,20 @@ export class StaffAccountsService {
 
   async status(actor: AuthenticatedUser, employeeId: string, status: UserStatus, reason: string) {
     return this.transaction(async (tx) => {
-      const { staff } = await this.target(tx, actor, employeeId);
+      const { staff, branch } = await this.target(tx, actor, employeeId);
       if (
         staff.user.staffInvitationState === 'CANCELLED' ||
         (status === 'ACTIVE' && staff.user.staffInvitationState === 'PENDING')
       )
         throw new ConflictException('Invitation must be accepted before activation');
-      await tx.user.update({ where: { id: staff.user.id }, data: { status } });
+      // Unlocking re-enters the quota (BR-11: only reopen within the current limit).
+      const reserve =
+        staff.user.status === 'SUSPENDED' && status !== 'SUSPENDED'
+          ? await this.quota.assertCanAdd(tx, branch.chainId, 'accounts')
+          : null;
+      // Any manual change clears the over-quota marker: from here on the state is the manager's call.
+      await tx.user.update({ where: { id: staff.user.id }, data: { status, quotaLockedAt: null } });
+      await reserve?.(staff.id);
       if (status !== 'ACTIVE') {
         await tx.authSession.updateMany({
           where: { userId: staff.user.id, revokedAt: null },
