@@ -231,7 +231,7 @@ export class PlatformAdminService {
     if (application.approvedPlan?.code !== 'TRIAL' && !(application.requestedPlanId == null && application.approvedPlan?.code === 'BASIC')) throw new BadRequestException('Trial was not selected for this application');
     const trialPlan = await this.getTrialPlan();
     const emailId = await this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${application.id}))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${application.id}))`;
       const fresh = await tx.registrationApplication.findUniqueOrThrow({ where: { id: application.id } });
       if (fresh.status !== 'APPROVED' || fresh.activationTokenHash !== this.hashToken(token) || fresh.approvedPlanId !== application.approvedPlanId || !fresh.activationExpiresAt || fresh.activationExpiresAt <= new Date()) throw new ConflictException('Activation link is expired or already used');
       return this.provisionRegistration(tx, fresh, trialPlan, true);
@@ -248,7 +248,7 @@ export class PlatformAdminService {
     if (!Number.isSafeInteger(amount) || amount <= 0) throw new BadRequestException('Plan price must be a whole VND amount');
     const orderCode = String(Date.now() * 1000 + Math.floor(Math.random() * 1000));
     const checkout = await this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${application.id}))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${application.id}))`;
       const fresh = await tx.registrationApplication.findUniqueOrThrow({ where: { id: application.id } });
       if (fresh.status !== 'APPROVED' || fresh.activationTokenHash !== this.hashToken(token) || fresh.approvedPlanId !== plan.id || !fresh.activationExpiresAt || fresh.activationExpiresAt <= new Date()) throw new ConflictException('Activation link or approved plan changed');
       const pending = await tx.registrationCheckout.findFirst({ where: { applicationId: application.id, status: 'PENDING' }, orderBy: { createdAt: 'desc' } });
@@ -266,7 +266,7 @@ export class PlatformAdminService {
         expiredAt: Math.floor(Date.now() / 1000) + 15 * 60,
       });
       const updated = await this.prisma.$transaction(async (tx) => {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${application.id}))`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${application.id}))`;
         const fresh = await tx.registrationApplication.findUniqueOrThrow({ where: { id: application.id } });
         const currentCheckout = await tx.registrationCheckout.findUniqueOrThrow({ where: { id: checkout.id } });
         if (fresh.status !== 'APPROVED' || fresh.activationTokenHash !== this.hashToken(token) || fresh.approvedPlanId !== plan.id || currentCheckout.status !== 'PENDING') throw new ConflictException('Activation changed while creating payment link');
@@ -290,10 +290,10 @@ export class PlatformAdminService {
     const checkout = await this.prisma.registrationCheckout.findUnique({ where: { providerOrderCode: orderCode } });
     if (!checkout) return false;
     const emailId = await this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${orderCode}))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${orderCode}))`;
       const fresh = await tx.registrationCheckout.findUniqueOrThrow({ where: { id: checkout.id } });
       if (fresh.status === SubscriptionCheckoutStatus.PAID || fresh.status === SubscriptionCheckoutStatus.NEEDS_REVIEW) return null;
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${fresh.applicationId}))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${fresh.applicationId}))`;
       const application = await tx.registrationApplication.findUniqueOrThrow({ where: { id: fresh.applicationId } });
       if (!Number.isSafeInteger(amount) || !fresh.amount.equals(amount) || fresh.status !== SubscriptionCheckoutStatus.PENDING || application.status !== 'APPROVED' || application.approvedPlanId !== fresh.planId || !application.activationExpiresAt || application.activationExpiresAt <= new Date()) {
         await tx.registrationCheckout.update({ where: { id: fresh.id }, data: { status: 'NEEDS_REVIEW', paidAt: new Date(), reviewReason: 'AMOUNT_OR_ACTIVATION_STATE_MISMATCH' } });
@@ -311,13 +311,13 @@ export class PlatformAdminService {
   async confirmRegistrationCheckoutManually(checkoutId: string, note: string, actorUserId: string) {
     const emailId = await this.prisma.$transaction(
       async (tx) => {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${checkoutId}))`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${checkoutId}))`;
         const checkout = await tx.registrationCheckout.findUnique({ where: { id: checkoutId } });
         if (!checkout) throw new NotFoundException('Registration invoice not found');
         if (checkout.status !== SubscriptionCheckoutStatus.NEEDS_REVIEW) {
           throw new ConflictException('Only an invoice that needs review can be confirmed manually');
         }
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${checkout.applicationId}))`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${checkout.applicationId}))`;
         const application = await tx.registrationApplication.findUnique({
           where: { id: checkout.applicationId },
         });
@@ -358,7 +358,7 @@ export class PlatformAdminService {
     const token = randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60_000);
     const emailId = await this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${id}))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${id}))`;
       const application = await tx.registrationApplication.findUnique({ where: { id } });
       if (!application || application.status !== 'APPROVED') throw new ConflictException('Only approved applications awaiting activation can change plan');
       if (application.requestedPlanId) throw new ConflictException('The applicant-selected plan cannot be changed after approval');
@@ -376,7 +376,7 @@ export class PlatformAdminService {
     const token = randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60_000);
     const email = await this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${id}))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${id}))`;
       const application = await tx.registrationApplication.findUnique({ where: { id }, include: { approvedPlan: true } });
       if (!application || application.status !== 'APPROVED') throw new ConflictException('Only approved applications awaiting activation can receive a new link');
       await tx.registrationApplication.update({ where: { id }, data: { activationTokenHash: this.hashToken(token), activationExpiresAt: expiresAt } });

@@ -299,6 +299,7 @@ describe('V9 PayOS channel credentials', () => {
     const data = { orderCode: 123, amount: 40_000, reference: 'bank-ref' };
     let mismatch;
     let eventStatus;
+    let advisoryLocks = 0;
     const payment = {
       id: 'payment-id',
       status: 'PENDING',
@@ -320,6 +321,7 @@ describe('V9 PayOS channel credentials', () => {
       },
       $transaction: async (work) =>
         work({
+          $executeRaw: async () => { advisoryLocks += 1; return 1; },
           paymentWebhookEvent: {
             findUnique: async () => null,
             create: async () => ({ id: 'event-id' }),
@@ -347,6 +349,7 @@ describe('V9 PayOS channel credentials', () => {
       signature: payosSignature(data, 'checksum'),
     });
     assert.deepEqual(mismatch, ['payment-id', 40_000, 'bank-ref']);
+    assert.equal(advisoryLocks, 1);
     assert.equal(eventStatus, 'PROCESSED');
   });
 

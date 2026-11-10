@@ -21,7 +21,7 @@ it('activates a Basic trial once, provisions Owner after the choice, and emails 
     taxCode: null, headquartersAddress: null, reviewedById: 'staff-1',
   };
   const tx = {
-    $queryRaw: async () => [],
+    $executeRaw: async () => 1,
     registrationApplication: {
       findUniqueOrThrow: async () => ({ ...app, status }),
       update: async ({ data }) => { status = data.status; },

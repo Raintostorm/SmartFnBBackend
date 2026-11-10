@@ -189,8 +189,8 @@ export class PayosPaymentService {
       async (tx) => {
         // Serialize the same provider event before checking the unique key. This prevents two
         // Render instances from both processing one PayOS webhook at the same time.
-        if (typeof tx.$queryRaw === 'function') {
-          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${idempotencyKey}))`;
+        if (typeof tx.$executeRaw === 'function') {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${idempotencyKey}))`;
         }
         const existing = await tx.paymentWebhookEvent.findUnique({
           where: { provider_idempotencyKey: { provider: PaymentProvider.PAYOS, idempotencyKey } },
