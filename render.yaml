@@ -61,18 +61,8 @@ services:
         sync: false
       - key: EMAIL_FROM
         sync: false
-      # OW-12: Google Vision performs OCR; Gemini structures OCR text into a reviewable draft.
-      - key: GOOGLE_VISION_API_KEY
-        sync: false
-      - key: GEMINI_API_KEY
-        sync: false
-      - key: MENU_IMPORT_AI_MODEL
-        value: gemini-2.5-flash
-      - key: MENU_IMPORT_AI_PROVIDER
-        value: gemini
-      - key: MENU_IMPORT_OCR_PROVIDER
-        value: google
-      # Required only when MENU_IMPORT_AI_PROVIDER=qwen.
+      # OW-12: Qwen local performs OCR and structures the reviewable menu draft.
+      # Render needs a reachable, authenticated HTTPS gateway ending in /v1.
       - key: AI_BASE_URL
         sync: false
       - key: AI_MODEL
@@ -81,6 +71,10 @@ services:
         sync: false
       - key: AI_REQUEST_TIMEOUT_MS
         value: '190000'
+      - key: CF_ACCESS_CLIENT_ID
+        sync: false
+      - key: CF_ACCESS_CLIENT_SECRET
+        sync: false
       # Keep disabled until the S3-compatible secrets below are configured.
       # Render's local filesystem is ephemeral and must not store receipt history.
       - key: RECEIPT_PDF_ENABLED

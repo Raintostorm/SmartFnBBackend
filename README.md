@@ -212,13 +212,15 @@ ca làm và branding. Cấu hình bằng `REALTIME_ENABLED`, `REALTIME_PATH` và
 
 ### Nhập menu từ ảnh (OW-12)
 
-Thiết lập hai secret trên backend (local hoặc Render):
+Qwen local xử lý cả OCR ảnh và tạo bản nháp. Thiết lập trên backend:
 
-- `GOOGLE_VISION_API_KEY`: Google Cloud Vision API đã bật quyền `images:annotate` để OCR ảnh menu.
-- `GEMINI_API_KEY`: khoá Gemini Developer API dùng để chuyển văn bản OCR thành bản nháp có cấu trúc.
-- `MENU_IMPORT_AI_MODEL` là tuỳ chọn; mặc định `gemini-2.5-flash`.
+- `AI_BASE_URL`: URL gốc của gateway tương thích OpenAI, kết thúc bằng `/v1` (ví dụ local: `http://127.0.0.1:11434/v1`). Render cần URL HTTPS có thể truy cập từ Internet hoặc mạng riêng; `localhost` trên Render không trỏ về máy chạy Qwen của bạn.
+- `AI_MODEL`: model có khả năng đọc ảnh, mặc định `qwen3.5:4b`. Cần tải model trên máy chạy gateway.
+- `AI_API_KEY`: khoá Bearer của gateway. Ollama local bỏ qua giá trị này nên có thể dùng `ollama` khi chạy BE cùng máy; gateway công khai phải xác thực thật.
+- `AI_REQUEST_TIMEOUT_MS`: timeout cho mỗi lần gọi, mặc định 190000 ms.
+- `CF_ACCESS_CLIENT_ID` và `CF_ACCESS_CLIENT_SECRET`: tuỳ chọn nếu gateway được bảo vệ bằng Cloudflare Access.
 
-Ảnh được backend đọc từ asset storage và gửi dạng base64 cho OCR; trình duyệt không nhận các khoá dịch vụ. Kết quả AI luôn ở trạng thái chờ Brand Manager duyệt, chưa ghi menu cho tới khi gọi endpoint `commit`.
+Ảnh được backend đọc từ asset storage và gửi dạng base64 cho Qwen; trình duyệt không nhận khoá gateway. Trên Render, dùng asset storage bền vững (S3 tương thích) để ảnh vẫn có sau khi instance khởi động lại. Kết quả AI luôn chờ Brand Manager duyệt và chỉnh sửa; menu chỉ được ghi khi gọi endpoint `commit`.
 
 ### Dữ liệu demo Waiter và Kitchen Staff
 

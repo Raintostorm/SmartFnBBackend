@@ -149,6 +149,7 @@ export class MenuImportsService implements OnModuleInit {
 
   async create(chainId: string, files: MenuImportFile[] | undefined, user: AuthenticatedUser) {
     await this.access.assertCanManageChain(user, chainId);
+    this.qwenConfig();
     if (!files?.length || files.length > MENU_IMPORT_MAX_FILES)
       throw new BadRequestException('Upload 1–5 menu images');
     const extensions = files.map((file) => this.validateImage(file));
@@ -366,106 +367,12 @@ export class MenuImportsService implements OnModuleInit {
   }
 
   private async runOcr(imageUrl: string): Promise<string> {
-    const provider = process.env.MENU_IMPORT_OCR_PROVIDER?.trim().toLowerCase() || 'google';
-    if (provider === 'qwen') {
-      const key = imageUrl.replace(/^\/uploads\//, '');
-      return this.runQwenOcr(await readAsset(key));
-    }
-    if (provider !== 'google')
-      throw new ServiceUnavailableException('MENU_IMPORT_OCR_PROVIDER must be google or qwen');
-
-    const apiKey = process.env.GOOGLE_VISION_API_KEY?.trim();
-    if (!apiKey)
-      throw new ServiceUnavailableException('GOOGLE_VISION_API_KEY is required for menu OCR');
     const key = imageUrl.replace(/^\/uploads\//, '');
-    const image = await readAsset(key);
-    const response = await fetch(
-      `https://vision.googleapis.com/v1/images:annotate?key=${encodeURIComponent(apiKey)}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          requests: [
-            {
-              image: { content: image.data.toString('base64') },
-              features: [{ type: 'DOCUMENT_TEXT_DETECTION' }],
-              imageContext: { languageHints: ['vi'] },
-            },
-          ],
-        }),
-        signal: AbortSignal.timeout(45_000),
-      },
-    );
-    const body = (await response.json()) as {
-      responses?: Array<{ fullTextAnnotation?: { text?: string }; error?: { message?: string } }>;
-    };
-    if (!response.ok || body.responses?.[0]?.error)
-      throw new Error(
-        body.responses?.[0]?.error?.message || `Google Vision rejected OCR (${response.status})`,
-      );
-    return body.responses?.[0]?.fullTextAnnotation?.text?.trim() ?? '';
+    return this.runQwenOcr(await readAsset(key));
   }
 
   private async runAi(context: unknown): Promise<unknown> {
-    const provider = process.env.MENU_IMPORT_AI_PROVIDER?.trim().toLowerCase() || 'gemini';
-    if (provider === 'qwen') return this.runQwen(context);
-    if (provider !== 'gemini')
-      throw new ServiceUnavailableException('MENU_IMPORT_AI_PROVIDER must be gemini or qwen');
-
-    const apiKey = process.env.GEMINI_API_KEY?.trim();
-    if (!apiKey)
-      throw new ServiceUnavailableException('GEMINI_API_KEY is required for menu AI structuring');
-    const model = (process.env.MENU_IMPORT_AI_MODEL?.trim() || 'gemini-2.5-flash').replace(
-      /^models\//,
-      '',
-    );
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-      {
-        method: 'POST',
-        headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          systemInstruction: {
-            parts: [
-              {
-                text: 'Structure Vietnamese OCR text into a menu draft. Never invent names or prices. Use only supplied branch and existing item IDs. Convert k and dotted VND prices to integer VND. Put uncertain lines in unresolved and warning. For duplicate items choose UPDATE_PRICE when price differs, otherwise SKIP.',
-              },
-            ],
-          },
-          contents: [
-            {
-              role: 'user',
-              parts: [{ text: JSON.stringify(context) }],
-            },
-          ],
-          generationConfig: {
-            temperature: 0,
-            responseMimeType: 'application/json',
-            responseJsonSchema: draftSchema,
-          },
-        }),
-        signal: AbortSignal.timeout(60_000),
-      },
-    );
-    const body = (await response.json()) as {
-      error?: { message?: string };
-      promptFeedback?: { blockReason?: string };
-      candidates?: Array<{
-        finishReason?: string;
-        content?: { parts?: Array<{ text?: string }> };
-      }>;
-    };
-    if (!response.ok)
-      throw new Error(body.error?.message || `Gemini rejected menu import (${response.status})`);
-    const candidate = body.candidates?.[0];
-    const text = candidate?.content?.parts?.find((part) => part.text)?.text;
-    if (!text)
-      throw new Error(
-        body.promptFeedback?.blockReason
-          ? `Gemini blocked the menu import (${body.promptFeedback.blockReason})`
-          : `Gemini returned no structured menu draft${candidate?.finishReason ? ` (${candidate.finishReason})` : ''}`,
-      );
-    return JSON.parse(text);
+    return this.runQwen(context);
   }
 
   private async runQwen(context: unknown): Promise<unknown> {
@@ -478,7 +385,7 @@ export class MenuImportsService implements OnModuleInit {
         },
         { role: 'user', content: JSON.stringify(context) },
       ],
-      2048,
+      8192,
       {
         type: 'json_schema',
         json_schema: { name: 'menu_import_draft', strict: true, schema: draftSchema },
@@ -504,7 +411,7 @@ export class MenuImportsService implements OnModuleInit {
           ],
         },
       ],
-      2048,
+      8192,
     );
   }
 
@@ -513,12 +420,7 @@ export class MenuImportsService implements OnModuleInit {
     maxTokens: number,
     responseFormat?: unknown,
   ): Promise<string> {
-    const baseUrl = process.env.AI_BASE_URL?.trim().replace(/\/+$/, '');
-    const apiKey = process.env.AI_API_KEY?.trim();
-    if (!baseUrl || !apiKey)
-      throw new ServiceUnavailableException('AI_BASE_URL and AI_API_KEY are required for Qwen');
-    if (!baseUrl.startsWith('https://') && process.env.NODE_ENV === 'production')
-      throw new ServiceUnavailableException('AI_BASE_URL must use HTTPS in production');
+    const { baseUrl, apiKey } = this.qwenConfig();
     const model = process.env.AI_MODEL?.trim() || 'qwen3.5:4b';
     const timeoutMs = Number(process.env.AI_REQUEST_TIMEOUT_MS || 190_000);
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1000)
@@ -556,6 +458,16 @@ export class MenuImportsService implements OnModuleInit {
     const text = body.choices?.[0]?.message?.content;
     if (!text) throw new Error('Qwen gateway returned no content');
     return text;
+  }
+
+  private qwenConfig(): { baseUrl: string; apiKey: string } {
+    const baseUrl = process.env.AI_BASE_URL?.trim().replace(/\/+$/, '');
+    const apiKey = process.env.AI_API_KEY?.trim();
+    if (!baseUrl || !apiKey)
+      throw new ServiceUnavailableException('AI_BASE_URL and AI_API_KEY are required for Qwen');
+    if (!baseUrl.startsWith('https://') && process.env.NODE_ENV === 'production')
+      throw new ServiceUnavailableException('AI_BASE_URL must use HTTPS in production');
+    return { baseUrl, apiKey };
   }
 
   private validateDraft(value: unknown): MenuImportDraft {

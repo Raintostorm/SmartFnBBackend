@@ -86,59 +86,15 @@ describe('Menu imports', () => {
     assert.equal('menuItem' in prisma, false);
   });
 
-  it('uses Gemini structured output for the menu draft', async () => {
-    const originalFetch = globalThis.fetch;
-    const originalGeminiKey = process.env.GEMINI_API_KEY;
-    const originalModel = process.env.MENU_IMPORT_AI_MODEL;
-    let request;
-    process.env.GEMINI_API_KEY = 'gemini-test-key';
-    process.env.MENU_IMPORT_AI_MODEL = 'models/gemini-test-model';
-    globalThis.fetch = async (url, options) => {
-      request = { url: String(url), options };
-      return new Response(
-        JSON.stringify({
-          candidates: [{ content: { parts: [{ text: JSON.stringify(draft) }] } }],
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      );
-    };
-
-    try {
-      const service = new MenuImportsService({}, {});
-      const result = await service.runAi({ texts: ['Cà phê sữa 25.000'] });
-      const body = JSON.parse(request.options.body);
-
-      assert.deepEqual(result, draft);
-      assert.equal(
-        request.url,
-        'https://generativelanguage.googleapis.com/v1beta/models/gemini-test-model:generateContent',
-      );
-      assert.equal(request.options.headers['x-goog-api-key'], 'gemini-test-key');
-      assert.equal(body.generationConfig.responseMimeType, 'application/json');
-      assert.deepEqual(body.generationConfig.responseJsonSchema.required, [
-        'categories',
-        'unresolved',
-      ]);
-      assert.equal(body.contents[0].role, 'user');
-    } finally {
-      globalThis.fetch = originalFetch;
-      if (originalGeminiKey === undefined) delete process.env.GEMINI_API_KEY;
-      else process.env.GEMINI_API_KEY = originalGeminiKey;
-      if (originalModel === undefined) delete process.env.MENU_IMPORT_AI_MODEL;
-      else process.env.MENU_IMPORT_AI_MODEL = originalModel;
-    }
-  });
-
-  it('uses the authenticated Qwen gateway when selected', async () => {
+  it('uses the authenticated Qwen gateway for the menu draft', async () => {
     const originalFetch = globalThis.fetch;
     const originalValues = Object.fromEntries(
-      ['MENU_IMPORT_AI_PROVIDER', 'AI_BASE_URL', 'AI_API_KEY', 'AI_MODEL'].map((key) => [
+      ['AI_BASE_URL', 'AI_API_KEY', 'AI_MODEL'].map((key) => [
         key,
         process.env[key],
       ]),
     );
     let request;
-    process.env.MENU_IMPORT_AI_PROVIDER = 'qwen';
     process.env.AI_BASE_URL = 'http://127.0.0.1:11435/v1/';
     process.env.AI_API_KEY = 'qwen-test-key';
     process.env.AI_MODEL = 'qwen3.5:4b';
@@ -160,6 +116,7 @@ describe('Menu imports', () => {
       assert.equal(request.options.headers.Authorization, 'Bearer qwen-test-key');
       assert.equal(body.model, 'qwen3.5:4b');
       assert.equal(body.stream, false);
+      assert.equal(body.max_tokens, 8192);
       assert.equal(body.response_format.type, 'json_schema');
       assert.deepEqual(body.response_format.json_schema.schema.required, [
         'categories',
@@ -174,7 +131,7 @@ describe('Menu imports', () => {
     }
   });
 
-  it('uses Qwen vision to transcribe an image without Google Vision', async () => {
+  it('uses Qwen vision to transcribe a menu image', async () => {
     const originalFetch = globalThis.fetch;
     const originalValues = Object.fromEntries(
       ['AI_BASE_URL', 'AI_API_KEY', 'AI_MODEL'].map((key) => [key, process.env[key]]),
@@ -204,6 +161,7 @@ describe('Menu imports', () => {
       assert.equal(request.url, 'http://127.0.0.1:11435/v1/chat/completions');
       assert.equal(imagePart.type, 'image_url');
       assert.match(imagePart.image_url.url, /^data:image\/png;base64,/);
+      assert.equal(body.max_tokens, 8192);
       assert.equal('response_format' in body, false);
     } finally {
       globalThis.fetch = originalFetch;
@@ -211,6 +169,22 @@ describe('Menu imports', () => {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
+    }
+  });
+
+  it('rejects an upload before saving files when the Qwen gateway is not configured', async () => {
+    const originalBaseUrl = process.env.AI_BASE_URL;
+    const originalApiKey = process.env.AI_API_KEY;
+    delete process.env.AI_BASE_URL;
+    delete process.env.AI_API_KEY;
+    try {
+      const service = new MenuImportsService({}, { assertCanManageChain: async () => undefined });
+      await assert.rejects(() => service.create('chain-1', [{ buffer: Buffer.from('image'), mimetype: 'image/png', size: 5 }], owner), /AI_BASE_URL and AI_API_KEY/);
+    } finally {
+      if (originalBaseUrl === undefined) delete process.env.AI_BASE_URL;
+      else process.env.AI_BASE_URL = originalBaseUrl;
+      if (originalApiKey === undefined) delete process.env.AI_API_KEY;
+      else process.env.AI_API_KEY = originalApiKey;
     }
   });
 
