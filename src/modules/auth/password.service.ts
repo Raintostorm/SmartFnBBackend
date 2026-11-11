@@ -1,18 +1,17 @@
 import { Injectable } from '@nestjs/common';
-import { argon2id, hash, verify } from 'argon2';
+import { verify as verifyArgon2 } from 'argon2';
+import { compare, hash } from 'bcryptjs';
 
 @Injectable()
 export class PasswordService {
   hash(password: string): Promise<string> {
-    return hash(password, {
-      type: argon2id,
-      memoryCost: 19_456,
-      timeCost: 2,
-      parallelism: 1,
-    });
+    return hash(password, 12);
   }
 
   verify(passwordHash: string, password: string): Promise<boolean> {
-    return verify(passwordHash, password);
+    // Existing accounts were issued with Argon2. Keep them usable until their next password change.
+    return passwordHash.startsWith('$argon2')
+      ? verifyArgon2(passwordHash, password)
+      : compare(password, passwordHash);
   }
 }

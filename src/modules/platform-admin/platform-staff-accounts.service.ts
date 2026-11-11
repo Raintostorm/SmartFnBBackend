@@ -98,6 +98,7 @@ export class PlatformStaffAccountsService {
     const token = randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + SETUP_LINK_TTL_MS);
     const isInvitation = !user.emailVerifiedAt;
+    const invalidHash = isInvitation ? null : await this.passwords.hash(randomBytes(48).toString('base64url'));
     const result = await this.prisma.$transaction(async (tx) => {
       const latest = await tx.passwordSetupToken.findFirst({
         where: { userId: id }, orderBy: { createdAt: 'desc' }, select: { createdAt: true },
@@ -105,7 +106,9 @@ export class PlatformStaffAccountsService {
       if (latest && Date.now() - latest.createdAt.getTime() < 60_000)
         throw new HttpException('Wait 60 seconds before requesting another email', 429);
       await tx.passwordSetupToken.updateMany({ where: { userId: id, usedAt: null }, data: { usedAt: new Date() } });
-      await tx.passwordSetupToken.create({ data: { userId: id, tokenHash: this.hashToken(token), expiresAt } });
+      await tx.passwordSetupToken.create({ data: { userId: id, tokenHash: this.hashToken(token), expiresAt, purpose: isInvitation ? 'INVITATION' : 'SUPERIOR_RESET' } });
+      if (!isInvitation) await tx.user.update({ where: { id }, data: { passwordHash: invalidHash!, status: UserStatus.INACTIVE, staffInvitationState: 'PENDING' } });
+      if (!isInvitation) await tx.passwordResetRequest.updateMany({ where: { userId: id, status: 'PENDING' }, data: { status: 'RESET', handledById: actorUserId, handledAt: new Date() } });
       await tx.authSession.updateMany({ where: { userId: id, revokedAt: null }, data: { revokedAt: new Date() } });
       const message = await tx.emailOutbox.create({
         data: {

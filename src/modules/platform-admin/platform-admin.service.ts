@@ -761,19 +761,22 @@ export class PlatformAdminService {
     }
     const token = randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    await this.prisma.$transaction(async (transaction) => {
+    const invalidHash = await this.passwordService.hash(randomBytes(48).toString('base64url'));
+    const emailId = await this.prisma.$transaction(async (transaction) => {
       await transaction.passwordSetupToken.updateMany({
         where: { userId: owner.user.id, usedAt: null },
         data: { usedAt: new Date() },
       });
       await transaction.passwordSetupToken.create({
-        data: { userId: owner.user.id, tokenHash: this.hashToken(token), expiresAt },
+        data: { userId: owner.user.id, tokenHash: this.hashToken(token), expiresAt, purpose: 'SUPERIOR_RESET' },
       });
+      await transaction.user.update({ where: { id: owner.user.id }, data: { passwordHash: invalidHash, status: UserStatus.INACTIVE } });
+      await transaction.passwordResetRequest.updateMany({ where: { userId: owner.user.id, status: 'PENDING' }, data: { status: 'RESET', handledById: adminUserId, handledAt: new Date() } });
       await transaction.authSession.updateMany({
         where: { userId: owner.user.id, revokedAt: null },
         data: { revokedAt: new Date() },
       });
-      await transaction.emailOutbox.create({
+      const mail = await transaction.emailOutbox.create({
         data: {
           recipient: owner.user.email,
           subject: 'Đặt lại mật khẩu Brand Manager Smart F&B',
@@ -781,14 +784,15 @@ export class PlatformAdminService {
           payload: {
             ownerName: `${owner.firstName} ${owner.lastName}`,
             setupToken: token,
-            setupPath: '/auth/setup-password',
+            setupPath: '/setup-password',
             expiresAt: expiresAt.toISOString(),
             requestedByAdminId: adminUserId,
           },
         },
       });
+      return mail.id;
     });
-    return { message: 'Password setup email queued', ownerId: owner.id, expiresAt };
+    return { message: 'Password setup email queued', ownerId: owner.id, expiresAt, emailStatus: await this.emails.deliver(emailId) };
   }
 
   private businessBaseSelect() {

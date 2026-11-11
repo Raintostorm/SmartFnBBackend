@@ -1,0 +1,135 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { PasswordResetService } from '../dist/modules/auth/password-reset.service.js';
+import { AuthService } from '../dist/modules/auth/auth.service.js';
+
+const now = new Date();
+const metadata = { ipAddress: '127.0.0.1', userAgent: 'test' };
+const events = () => { const published = []; return { published, publish: (event) => published.push(event) }; };
+
+test('unknown and Platform Admin emails receive the same public response without creating a request', async () => {
+  const created = [];
+  let user = null;
+  const prisma = {
+    $transaction: (run) => run({ $executeRaw: async () => 1, passwordResetAttempt: { count: async () => 0, create: async () => ({}) } }),
+    user: { findFirst: async () => user },
+    passwordResetRequest: { create: async (input) => created.push(input) },
+  };
+  const service = new PasswordResetService(prisma, {}, {}, events());
+  const unknown = await service.request('unknown@example.com', metadata);
+  user = { status: 'ACTIVE', role: { code: 'ADMIN' }, staffInvitationState: null };
+  const admin = await service.request('admin@example.com', metadata);
+  assert.deepEqual(unknown, admin);
+  assert.equal(created.length, 0);
+});
+
+test('Store Manager creates one request in the Brand Manager chain room', async () => {
+  const published = events();
+  const created = [];
+  const prisma = {
+    $transaction: (run) => run({
+      $executeRaw: async () => 1,
+      passwordResetAttempt: { count: async () => 0, create: async () => ({}) },
+      passwordResetRequest: {
+        updateMany: async () => ({ count: 0 }),
+        findFirst: async () => null,
+        create: async ({ data }) => { created.push(data); return { id: 'request-1' }; },
+      },
+    }),
+    user: { findFirst: async () => ({ id: 'manager-1', email: 'manager@example.com', status: 'ACTIVE', staffInvitationState: 'ACCEPTED', role: { code: 'MANAGER' }, employee: { branch: { chainId: 'chain-1' } } }) },
+  };
+  const service = new PasswordResetService(prisma, {}, {}, published);
+  await service.request('manager@example.com', metadata);
+  assert.equal(created[0].scopeChainId, 'chain-1');
+  assert.deepEqual(published.published, [{ type: 'password-reset.requested', chainId: 'chain-1', requestId: 'request-1' }]);
+});
+
+test('Cashier receives a 30-minute self-reset link without invalidating current sessions', async () => {
+  const writes = [];
+  const prisma = {
+    $transaction: (run) => run({
+      $executeRaw: async () => 1,
+      $queryRaw: async () => [],
+      passwordResetAttempt: { count: async () => 0, create: async () => ({}) },
+      user: { findUnique: async () => ({ status: 'ACTIVE', staffInvitationState: 'ACCEPTED' }) },
+      passwordSetupToken: { findFirst: async () => null, count: async () => 0, updateMany: async ({ data }) => writes.push({ cancelled: data }), create: async ({ data }) => writes.push({ token: data }) },
+      emailOutbox: { create: async ({ data }) => { writes.push({ mail: data }); return { id: 'email-1' }; } },
+    }),
+    user: { findFirst: async () => ({ id: 'cashier-1', email: 'cashier@example.com', status: 'ACTIVE', staffInvitationState: 'ACCEPTED', role: { code: 'CASHIER' } }) },
+    passwordSetupToken: { findFirst: async () => null, count: async () => 0 },
+  };
+  const delivered = [];
+  const service = new PasswordResetService(prisma, {}, { deliver: async (id) => delivered.push(id) }, events());
+  await service.request('cashier@example.com', metadata);
+  assert.equal(writes.find((write) => write.token).token.purpose, 'SELF_RESET');
+  assert.ok(writes.find((write) => write.token).token.expiresAt > now);
+  assert.equal(writes.find((write) => write.mail).mail.recipient, 'cashier@example.com');
+  assert.deepEqual(delivered, ['email-1']);
+  assert.equal(writes.some((write) => write.session), false);
+});
+
+test('sixth request from one IP is rate limited without account lookup', async () => {
+  let lookedUp = false;
+  const prisma = {
+    $transaction: (run) => run({ $executeRaw: async () => 1, passwordResetAttempt: { count: async () => 5 } }),
+    user: { findFirst: async () => { lookedUp = true; return null; } },
+  };
+  const service = new PasswordResetService(prisma, {}, {}, events());
+  await assert.rejects(service.request('any@example.com', metadata), (error) => error.getStatus?.() === 429);
+  assert.equal(lookedUp, false);
+});
+
+test('out-of-scope reset returns 404; authorized approval invalidates old credentials and mails once', async () => {
+  const writes = [];
+  const eventBus = events();
+  const item = { id: 'request-1', userId: 'owner-1', scopeChainId: 'chain-1', status: 'PENDING', expiresAt: new Date(Date.now() + 60_000), handledBy: null,
+    user: { email: 'owner@example.com', status: 'ACTIVE', staffInvitationState: null, role: { code: 'OWNER' } } };
+  const tx = {
+    $queryRaw: async () => [],
+    passwordResetRequest: { findUnique: async () => item, update: async ({ data }) => writes.push({ request: data }) },
+    passwordSetupToken: { updateMany: async ({ data }) => writes.push({ cancelled: data }), create: async ({ data }) => writes.push({ token: data }) },
+    user: { update: async ({ data }) => writes.push({ user: data }) },
+    authSession: { updateMany: async ({ data }) => writes.push({ session: data }) },
+    emailOutbox: { create: async ({ data }) => { writes.push({ email: data }); return { id: 'mail-1' }; } },
+  };
+  const prisma = { passwordResetRequest: { updateMany: async () => ({ count: 0 }) }, $transaction: (run) => run(tx) };
+  const sent = [];
+  const service = new PasswordResetService(prisma, { hash: async () => 'invalid-hash' }, { deliver: async (id) => sent.push(id) }, eventBus);
+  const cashier = { id: 'cashier-2', role: 'CASHIER', chainIds: [], branchId: 'branch-2' };
+  await assert.rejects(service.resolve(cashier, item.id), (error) => error.getStatus?.() === 404);
+  assert.equal(writes.length, 0);
+  const staff = { id: 'staff-1', role: 'PLATFORM_STAFF', chainIds: [] };
+  await service.resolve(staff, item.id);
+  assert.equal(writes.find((write) => write.request).request.status, 'RESET');
+  assert.equal(writes.find((write) => write.user).user.status, 'INACTIVE');
+  assert.equal(writes.find((write) => write.token).token.purpose, 'SUPERIOR_RESET');
+  assert.equal(writes.find((write) => write.email).email.recipient, 'owner@example.com');
+  assert.equal(writes.find((write) => write.session).session.revokedAt instanceof Date, true);
+  assert.deepEqual(sent, ['mail-1']);
+  assert.deepEqual(eventBus.published, [{ type: 'password-reset.resolved', chainId: null, requestId: item.id }]);
+});
+
+test('Cashier self-reset keeps old password until confirmation, then revokes sessions and records method', async () => {
+  const writes = [];
+  const current = { id: 'cashier-1', email: 'cashier@example.com', passwordHash: 'old-hash', status: 'ACTIVE', deletedAt: null,
+    staffInvitationState: 'ACCEPTED', role: { code: 'CASHIER' }, employee: { id: 'employee-1', branchId: 'branch-1', branch: { chain: { subscription: null } } } };
+  const tx = {
+    $queryRaw: async () => [],
+    user: { findUnique: async () => current, update: async ({ data }) => writes.push({ user: data }) },
+    passwordSetupToken: { updateMany: async ({ data }) => { writes.push({ token: data }); return { count: 1 }; } },
+    authSession: { updateMany: async ({ data }) => writes.push({ session: data }) },
+    passwordSetupAttempt: { deleteMany: async () => undefined },
+    branchAuditLog: { create: async () => undefined },
+  };
+  const prisma = {
+    passwordSetupAttempt: { findUnique: async () => null },
+    passwordSetupToken: { findFirst: async () => ({ id: 'link-1', userId: current.id, purpose: 'SELF_RESET', user: { ...current, employee: { branch: { chainId: 'chain-1' } } } }) },
+    $transaction: (run) => run(tx),
+  };
+  const auth = new AuthService({}, prisma, {}, { getOrThrow: () => 'test' }, { hash: async () => 'new-hash', verify: async () => false });
+  assert.equal(writes.length, 0);
+  await auth.setupPassword({ token: 'x'.repeat(43), password: 'NewPassword123' });
+  assert.equal(writes.find((write) => write.user).user.lastPasswordChangeMethod, 'SELF_RESET');
+  assert.equal(writes.find((write) => write.user).user.passwordHash, 'new-hash');
+  assert.equal(writes.find((write) => write.session).session.revokedAt instanceof Date, true);
+});

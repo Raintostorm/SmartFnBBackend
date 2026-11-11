@@ -37,6 +37,8 @@ const staffSelect = {
       phone: true,
       status: true,
       lastLoginAt: true,
+      lastPasswordChangedAt: true,
+      lastPasswordChangeMethod: true,
       staffInvitationState: true,
       role: { select: { code: true } },
       passwordSetupTokens: {

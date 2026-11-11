@@ -7,13 +7,19 @@ import { AuthService } from './auth.service.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
 import { RolesGuard } from './guards/roles.guard.js';
 import { PasswordService } from './password.service.js';
+import { PasswordResetController } from './password-reset.controller.js';
+import { PasswordResetService } from './password-reset.service.js';
+import { EmailModule } from '../email/email.module.js';
+import { PasswordResetEvents } from './password-reset.events.js';
 
 @Module({
-  imports: [JwtModule.register({}), UsersModule],
-  controllers: [AuthController],
+  imports: [JwtModule.register({}), UsersModule, EmailModule],
+  controllers: [AuthController, PasswordResetController],
   providers: [
     AuthService,
     PasswordService,
+    PasswordResetService,
+    PasswordResetEvents,
     JwtAuthGuard,
     RolesGuard,
     {
@@ -25,6 +31,6 @@ import { PasswordService } from './password.service.js';
       useExisting: RolesGuard,
     },
   ],
-  exports: [AuthService, PasswordService],
+  exports: [AuthService, PasswordService, PasswordResetEvents],
 })
 export class AuthModule {}

@@ -28,6 +28,9 @@ export const staffAccountSelect = {
       email: true,
       status: true,
       staffInvitationState: true,
+      emailVerifiedAt: true,
+      lastPasswordChangedAt: true,
+      lastPasswordChangeMethod: true,
       role: { select: { code: true } },
     },
   },
@@ -167,6 +170,7 @@ export class StaffAccountsService {
     branchName: string,
     token: string,
     expiresAt: Date,
+    purpose = 'INVITATION',
   ) {
     await tx.passwordSetupToken.updateMany({
       where: { userId: staff.user.id, usedAt: null },
@@ -177,6 +181,7 @@ export class StaffAccountsService {
         userId: staff.user.id,
         tokenHash: createHash('sha256').update(token).digest('hex'),
         expiresAt,
+        purpose,
       },
     });
     return tx.emailOutbox.create({
@@ -273,6 +278,7 @@ export class StaffAccountsService {
   ) {
     const token = randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + ttl);
+    const invalidHash = await this.passwords.hash(randomBytes(48).toString('base64url'));
     const result = await this.transaction(async (tx) => {
       const { staff, branch } = await this.target(tx, actor, employeeId);
       if (!staff.user.email.includes('@'))
@@ -290,7 +296,11 @@ export class StaffAccountsService {
       });
       if (latest && Date.now() - latest.createdAt.getTime() < 60_000)
         throw new HttpException('Wait 60 seconds before requesting another email', 429);
-      const email = await this.tokenEmail(tx, actor, staff, branch.name, token, expiresAt);
+      const resetting = !resendOnly && staff.user.status === 'ACTIVE' && staff.user.staffInvitationState !== 'PENDING';
+      const purpose = staff.user.emailVerifiedAt ? 'SUPERIOR_RESET' : 'INVITATION';
+      const email = await this.tokenEmail(tx, actor, staff, branch.name, token, expiresAt, purpose);
+      if (resetting) await tx.user.update({ where: { id: staff.user.id }, data: { passwordHash: invalidHash, status: UserStatus.INACTIVE, staffInvitationState: 'PENDING' } });
+      if (resetting) await tx.passwordResetRequest.updateMany({ where: { userId: staff.user.id, status: 'PENDING' }, data: { status: 'RESET', handledById: actor.id, handledAt: new Date() } });
       await tx.authSession.updateMany({
         where: { userId: staff.user.id, revokedAt: null },
         data: { revokedAt: new Date() },

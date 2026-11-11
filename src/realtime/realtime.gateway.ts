@@ -17,6 +17,7 @@ import { PrismaService } from '../database/prisma.service.js';
 import { AuthService } from '../modules/auth/auth.service.js';
 import type { AuthenticatedUser } from '../modules/auth/auth.interfaces.js';
 import { AppRole } from '../modules/auth/app-role.enum.js';
+import { PasswordResetEvents } from '../modules/auth/password-reset.events.js';
 
 export interface OperationsEvent {
   type: string;
@@ -44,7 +45,14 @@ export class RealtimeGateway implements OnGatewayConnection {
     private readonly authService: AuthService,
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
-  ) {}
+    private readonly passwordResetEvents?: PasswordResetEvents,
+  ) {
+    this.passwordResetEvents?.changes.subscribe((event) => {
+      const room = event.chainId ? this.chainRoom(event.chainId) : 'platform';
+      this.server?.to(room).emit(event.type, { requestId: event.requestId });
+      this.server?.to(room).emit('operations.updated', { type: event.type, chainId: event.chainId ?? undefined, occurredAt: new Date().toISOString(), data: { requestId: event.requestId } });
+    });
+  }
 
   async handleConnection(client: AuthenticatedSocket) {
     if (!this.config.get<boolean>('REALTIME_ENABLED', true)) {
@@ -59,6 +67,7 @@ export class RealtimeGateway implements OnGatewayConnection {
         if (user.branchId) await client.join(this.branchRoom(user.branchId));
         if (user.chainId) await client.join(this.chainRoom(user.chainId));
         for (const chainId of user.chainIds) await client.join(this.chainRoom(chainId));
+        if (user.role === AppRole.ADMIN || user.role === AppRole.PLATFORM_STAFF) await client.join('platform');
         client.emit('operations.connected', {
           occurredAt: new Date().toISOString(),
           kind: 'USER',

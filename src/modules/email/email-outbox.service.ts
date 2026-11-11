@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { EmailOutboxStatus } from '../../generated/prisma/client.js';
+import { EmailOutboxStatus, type Prisma } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
 
 type SetupPayload = {
@@ -22,6 +22,7 @@ type SetupPayload = {
   paragraphs?: string[];
   lines?: Array<{ description: string; quantity: number; amount: number }>;
   total?: number;
+  selfReset?: boolean;
 };
 
 @Injectable()
@@ -79,6 +80,7 @@ export class EmailOutboxService {
         where: { id },
         data: {
           status: EmailOutboxStatus.SENT,
+          payload: (({ setupToken: _removed, ...rest }) => rest)(payload) as Prisma.InputJsonValue,
           attempts: { increment: 1 },
           lastError: null,
           sentAt: new Date(),
@@ -102,7 +104,13 @@ export class EmailOutboxService {
     const name = this.escape(payload.employeeName ?? 'nhân viên');
     const branch = payload.branchName ? ` tại ${this.escape(payload.branchName)}` : '';
     const expiresAt = payload.expiresAt ? new Date(payload.expiresAt).toLocaleString('vi-VN') : '';
-    return `<p>Xin chào ${name},</p><p>Tài khoản Smart F&B${branch} đã được tạo.</p><p><a href="${this.escape(setupUrl)}">Đặt mật khẩu</a></p><p>Liên kết chỉ dùng một lần${expiresAt ? ` và hết hạn lúc ${this.escape(expiresAt)}` : ''}.</p>`;
+    const introduction = payload.selfReset
+      ? 'Bạn đã yêu cầu đặt lại mật khẩu Smart F&B.'
+      : 'Tài khoản Smart F&B' + branch + ' đã được cấp hoặc cần đặt lại mật khẩu.';
+    const safety = payload.selfReset
+      ? '<p>Nếu không phải bạn yêu cầu, hãy bỏ qua thư này; mật khẩu hiện tại vẫn dùng được.</p>'
+      : '<p>Nếu không phải bạn, hãy bỏ qua thư này.</p>';
+    return `<p>Xin chào ${name},</p><p>${introduction}</p><p><a href="${this.escape(setupUrl)}">Đặt mật khẩu</a></p><p>Liên kết chỉ dùng một lần${expiresAt ? ` và hết hạn lúc ${this.escape(expiresAt)}` : ''}.</p>${safety}`;
   }
 
   private activationHtml(payload: SetupPayload, activationUrl: string): string {

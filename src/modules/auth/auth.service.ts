@@ -84,10 +84,11 @@ export class AuthService {
       );
     }
     const setupToken = await this.prisma.passwordSetupToken.findFirst({
-      where: { tokenHash, usedAt: null, expiresAt: { gt: new Date() } },
+      where: { tokenHash, usedAt: null, cancelledAt: null, expiresAt: { gt: new Date() } },
       select: {
         id: true,
         userId: true,
+        purpose: true,
         user: {
           select: {
             status: true,
@@ -150,7 +151,9 @@ export class AuthService {
       ) {
         throw new UnauthorizedException('Account or invitation is no longer available');
       }
-      if (current.role.code !== AppRole.OWNER && current.role.code !== AppRole.PLATFORM_STAFF) {
+      if ((current.email && dto.password.toLowerCase() === current.email.toLowerCase()) || (current.passwordHash && await this.passwordService.verify(current.passwordHash, dto.password)))
+        throw new ForbiddenException('New password must differ from email and previous password');
+      if (current.role.code !== AppRole.OWNER && current.role.code !== AppRole.PLATFORM_STAFF && (setupToken.purpose ?? 'INVITATION') === 'INVITATION') {
         const employee = current.employee;
         const branch = employee?.branch;
         const chain = branch?.chain;
@@ -174,7 +177,7 @@ export class AuthService {
       }
       const acceptedAt = new Date();
       const consumed = await transaction.passwordSetupToken.updateMany({
-        where: { id: setupToken.id, usedAt: null, expiresAt: { gt: acceptedAt } },
+        where: { id: setupToken.id, usedAt: null, cancelledAt: null, expiresAt: { gt: acceptedAt } },
         data: { usedAt: acceptedAt },
       });
       if (consumed.count !== 1) {
@@ -190,12 +193,15 @@ export class AuthService {
           emailVerifiedAt: now,
           mustChangePassword: false,
           temporaryPasswordExpiresAt: null,
+          lastPasswordChangedAt: now,
+          lastPasswordChangeMethod: setupToken.purpose === 'SELF_RESET' ? 'SELF_RESET' : setupToken.purpose === 'SUPERIOR_RESET' ? 'SUPERIOR_RESET' : 'FIRST_SETUP',
         },
       });
       await transaction.authSession.updateMany({
         where: { userId: setupToken.userId, revokedAt: null },
         data: { revokedAt: now },
       });
+      await transaction.passwordSetupToken.updateMany({ where: { userId: setupToken.userId, id: { not: setupToken.id }, usedAt: null, cancelledAt: null }, data: { cancelledAt: now } });
       await transaction.passwordSetupAttempt.deleteMany({ where: { subjectHash: tokenHash } });
       if (current.employee)
         await transaction.branchAuditLog.create({
@@ -214,6 +220,17 @@ export class AuthService {
         });
     });
     return { message: 'Password configured successfully' };
+  }
+
+  async verifyPasswordToken(token: string) {
+    if (token.length < 32 || token.length > 200) throw new UnauthorizedException('Password setup token is invalid or expired');
+    const found = await this.prisma.passwordSetupToken.findFirst({
+      where: { tokenHash: this.hashToken(token), usedAt: null, cancelledAt: null, expiresAt: { gt: new Date() } },
+      select: { expiresAt: true, purpose: true, user: { select: { deletedAt: true, status: true, staffInvitationState: true } } },
+    });
+    if (!found || found.user.deletedAt || found.user.status === UserStatus.SUSPENDED || found.user.staffInvitationState === 'CANCELLED')
+      throw new UnauthorizedException('Password setup token is invalid or expired');
+    return { expiresAt: found.expiresAt, purpose: found.purpose };
   }
 
   async login(dto: LoginDto, metadata: RequestMetadata): Promise<AuthResponse> {
@@ -237,7 +254,7 @@ export class AuthService {
     if (user.mustChangePassword && user.temporaryPasswordExpiresAt && user.temporaryPasswordExpiresAt <= new Date()) throw new UnauthorizedException('Temporary password expired');
     const passwordHash = await this.passwordService.hash(dto.newPassword);
     await this.prisma.$transaction(async (tx) => {
-      await tx.user.update({ where: { id: userId }, data: { passwordHash, mustChangePassword: false, temporaryPasswordExpiresAt: null } });
+      await tx.user.update({ where: { id: userId }, data: { passwordHash, mustChangePassword: false, temporaryPasswordExpiresAt: null, lastPasswordChangedAt: new Date(), lastPasswordChangeMethod: 'SELF_CHANGE' } });
       await tx.authSession.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date() } });
     });
     return { message: 'Password changed; log in again' };

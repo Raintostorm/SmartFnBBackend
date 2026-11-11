@@ -312,6 +312,8 @@ model User {
   status                     UserStatus @default(ACTIVE)
   emailVerifiedAt            DateTime?  @map("email_verified_at") @db.Timestamptz(6)
   lastLoginAt                DateTime?  @map("last_login_at") @db.Timestamptz(6)
+  lastPasswordChangedAt      DateTime?  @map("last_password_changed_at") @db.Timestamptz(6)
+  lastPasswordChangeMethod   String?    @map("last_password_change_method") @db.VarChar(30)
   staffInvitationState       String?    @map("staff_invitation_state") @db.VarChar(20)
   mustChangePassword         Boolean    @default(false) @map("must_change_password")
   temporaryPasswordExpiresAt DateTime?  @map("temporary_password_expires_at") @db.Timestamptz(6)
@@ -331,6 +333,8 @@ model User {
   approvedApplications      RegistrationApplication[]   @relation("RegistrationOwnerUser")
   subscriptionEvents        BusinessSubscriptionEvent[] @relation("SubscriptionChangedBy")
   passwordSetupTokens       PasswordSetupToken[]
+  passwordResetRequests     PasswordResetRequest[] @relation("PasswordResetSubject")
+  passwordResetsHandled     PasswordResetRequest[] @relation("PasswordResetHandler")
   platformSupportActions    PlatformSupportAction[]     @relation("PlatformSupportActor")
 
   @@index([roleId])
@@ -947,6 +951,9 @@ model PasswordSetupToken {
   tokenHash String    @unique @map("token_hash") @db.VarChar(64)
   expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
   usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  purpose   String    @default("INVITATION") @db.VarChar(30)
+  cancelledAt DateTime? @map("cancelled_at") @db.Timestamptz(6)
+  requestIpAddress String? @map("request_ip_address") @db.VarChar(64)
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -954,6 +961,36 @@ model PasswordSetupToken {
   @@index([userId, usedAt])
   @@index([expiresAt])
   @@map("password_setup_tokens")
+}
+
+model PasswordResetRequest {
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  scopeChainId String?  @map("scope_chain_id") @db.Uuid
+  status      String    @default("PENDING") @db.VarChar(20)
+  ipAddress   String?   @map("ip_address") @db.VarChar(64)
+  userAgent   String?   @map("user_agent") @db.VarChar(500)
+  handledById String?   @map("handled_by_id") @db.Uuid
+  handledAt   DateTime? @map("handled_at") @db.Timestamptz(6)
+  rejectionNote String? @map("rejection_note") @db.VarChar(1000)
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user      User  @relation("PasswordResetSubject", fields: [userId], references: [id], onDelete: Cascade)
+  handledBy User? @relation("PasswordResetHandler", fields: [handledById], references: [id], onDelete: SetNull)
+
+  @@index([scopeChainId, status, createdAt])
+  @@index([userId, createdAt])
+  @@map("password_reset_requests")
+}
+
+model PasswordResetAttempt {
+  id        String   @id @default(uuid()) @db.Uuid
+  ipAddress String   @map("ip_address") @db.VarChar(64)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([ipAddress, createdAt])
+  @@map("password_reset_attempts")
 }
 
 model PasswordSetupAttempt {

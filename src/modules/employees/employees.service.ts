@@ -32,6 +32,8 @@ const employeeSelect = {
       phone: true,
       status: true,
       lastLoginAt: true,
+      lastPasswordChangedAt: true,
+      lastPasswordChangeMethod: true,
       staffInvitationState: true,
       passwordSetupTokens: {
         where: { usedAt: null },

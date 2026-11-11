@@ -13,6 +13,8 @@ import { assetStorageUsesS3, readAsset } from './modules/assets/asset-storage.js
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // Render terminates TLS at one reverse proxy; rate limits need the client IP.
+  app.set('trust proxy', 1);
   const configService = app.get(ConfigService);
   const port = configService.get<number>('PORT', 3000);
   const realtimePath = configService.get<string>('REALTIME_PATH', '/socket.io');

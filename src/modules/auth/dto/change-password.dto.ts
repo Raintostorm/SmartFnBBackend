@@ -7,8 +7,7 @@ export class ChangePasswordDto {
   @IsString()
   @MinLength(8)
   @MaxLength(128)
-  @Matches(/[a-z]/)
-  @Matches(/[A-Z]/)
+  @Matches(/[A-Za-z]/)
   @Matches(/[0-9]/)
   newPassword!: string;
 }
