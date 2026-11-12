@@ -169,6 +169,37 @@ describe('V9 POS stations and display pairing', () => {
     assert.equal(deviceCreated, false);
   });
 
+  it('persists a five-minute station lock after five invalid pairing codes', async () => {
+    const station = {
+      id: 'station-a',
+      branchId: 'branch-a',
+      status: 'ACTIVE',
+      pairingFailedAttempts: 0,
+      pairingLockedUntil: null,
+    };
+    const tx = {
+      $queryRaw: async () => [],
+      posStation: {
+        findFirst: async () => station,
+        update: async ({ data }) => Object.assign(station, data),
+      },
+      pairingCode: { findUnique: async () => null },
+      branchAuditLog: { create: async () => ({}) },
+    };
+    const service = stationsService({
+      posStation: tx.posStation,
+      $transaction: async (callback) => callback(tx),
+    });
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await assert.rejects(service.pairCustomerDisplay(cashier, 'station-a', '000000'));
+    }
+    await assert.rejects(
+      service.pairCustomerDisplay(cashier, 'station-a', '000000'),
+      (error) => error?.getStatus?.() === 429 && error.getResponse().code === 'PAIRING_LOCKED',
+    );
+    assert.ok(station.pairingLockedUntil > new Date());
+  });
+
   it('revokes only an active device from the authenticated branch', async () => {
     let query;
     let disconnected;

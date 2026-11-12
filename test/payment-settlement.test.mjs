@@ -43,6 +43,10 @@ function fixture(overrides = {}) {
       update: async ({ data }) => ({ ...payment, ...data, order: payment.order }),
     },
     order: {
+      updateMany: async ({ data }) => {
+        calls.orderUpdates.push(data);
+        return { count: 1 };
+      },
       update: async ({ data }) => {
         calls.orderUpdates.push(data);
         return {

@@ -1,4 +1,4 @@
-import { ConflictException, Injectable } from '@nestjs/common';
+import { ConflictException, Injectable, Optional } from '@nestjs/common';
 import {
   OrderItemStatus,
   OrderPaymentStatus,
@@ -8,6 +8,7 @@ import {
   PaymentStatus,
   PrintDocumentType,
   Prisma,
+  CashLedgerSourceType,
 } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
@@ -15,6 +16,7 @@ import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { writeBranchAudit } from '../branch-manager/manager-scope.js';
 import { OrderTrackingService } from '../order-tracking/order-tracking.service.js';
 import { ReceiptDocumentsService } from '../receipt-documents/receipt-documents.service.js';
+import { CashLedgerService } from './cash-ledger.service.js';
 
 export type CounterSettlementSource = 'PAYOS_WEBHOOK' | 'PAYOS_RECHECK' | 'MANAGER_MANUAL';
 
@@ -35,6 +37,7 @@ export class CounterPaymentSettlementService {
     private readonly tracking: OrderTrackingService,
     private readonly realtime: RealtimePublisher,
     private readonly receiptDocuments: ReceiptDocumentsService,
+    @Optional() private readonly ledger?: CashLedgerService,
   ) {}
 
   async markExpired(paymentId: string) {
@@ -52,6 +55,18 @@ export class CounterPaymentSettlementService {
           where: { id: payment.id },
           data: { status: PaymentStatus.EXPIRED, failureReason: 'PAYOS_EXPIRED' },
           include: { order: { select: { id: true, branchId: true } } },
+        });
+        await tx.order.updateMany({
+          where: {
+            id: payment.order.id,
+            status: { in: [OrderStatus.PENDING, OrderStatus.CONFIRMED] },
+            paymentStatus: OrderPaymentStatus.UNPAID,
+          },
+          data: {
+            status: OrderStatus.CANCELLED,
+            cancelledAt: new Date(),
+            cancellationReason: 'PAYOS_QR_EXPIRED',
+          },
         });
         return { changed: true, payment: updated };
       },
@@ -92,7 +107,8 @@ export class CounterPaymentSettlementService {
         }
         if (
           payment.order.status !== OrderStatus.CONFIRMED &&
-          payment.order.status !== OrderStatus.REQUIRES_ATTENTION
+          payment.order.status !== OrderStatus.REQUIRES_ATTENTION &&
+          payment.order.status !== OrderStatus.CANCELLED
         ) {
           throw new ConflictException('Order is no longer awaiting payment review');
         }
@@ -202,7 +218,9 @@ export class CounterPaymentSettlementService {
         const payment = await tx.payment.findUnique({
           where: { id: input.paymentId },
           include: {
-            order: { include: { items: true, branch: { select: { timezone: true } } } },
+            order: {
+              include: { items: true, branch: { select: { timezone: true, chainId: true } } },
+            },
           },
         });
         if (!payment?.order || payment.order.type !== OrderType.COUNTER_PICKUP) {
@@ -269,6 +287,22 @@ export class CounterPaymentSettlementService {
             failureReason: null,
           },
         });
+        const ledgerSource = {
+          PAYOS_WEBHOOK: CashLedgerSourceType.PAYOS_WEBHOOK,
+          PAYOS_RECHECK: CashLedgerSourceType.PAYOS_RECHECK,
+          MANAGER_MANUAL: CashLedgerSourceType.MANUAL_CONFIRMATION,
+        }[input.source];
+        if (this.ledger)
+          await this.ledger.recordSale(tx, {
+            branchId: order.branchId,
+            chainId: order.branch.chainId,
+            orderId: order.id,
+            paymentId: payment.id,
+            amount: payment.amount,
+            method: payment.method,
+            source: ledgerSource,
+            occurredAt: now,
+          });
         for (const item of order.items) {
           await tx.orderItem.update({
             where: { id: item.id },

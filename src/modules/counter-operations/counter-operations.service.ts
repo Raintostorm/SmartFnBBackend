@@ -17,6 +17,7 @@ import {
   PaymentMethod,
   PaymentProvider,
   PaymentStatus,
+  CashLedgerSourceType,
   PrintDocumentType,
   PrintJobStatus,
   Prisma,
@@ -33,6 +34,7 @@ import type {
   CreateCounterOrderDto,
   PrintJobResultDto,
 } from './dto/counter-operations.dto.js';
+import { CashLedgerService } from '../payments/cash-ledger.service.js';
 
 const counterOrderInclude = {
   items: {
@@ -49,6 +51,7 @@ export class CounterOperationsService {
     private readonly branchAccess: BranchAccessService,
     private readonly tracking: OrderTrackingService,
     @Optional() private readonly combos?: CombosService,
+    @Optional() private readonly ledger?: CashLedgerService,
   ) {}
 
   private employee(user: AuthenticatedUser) {
@@ -520,7 +523,7 @@ export class CounterOperationsService {
 
         const branch = await tx.branch.findUniqueOrThrow({
           where: { id: actor.branchId },
-          select: { timezone: true },
+          select: { timezone: true, chainId: true },
         });
         const businessDate = this.businessDate(branch.timezone);
         const sequence = await tx.branchDailySequence.upsert({
@@ -545,6 +548,17 @@ export class CounterOperationsService {
             confirmedAt: now,
           },
         });
+        if (this.ledger)
+          await this.ledger.recordSale(tx, {
+            branchId: actor.branchId,
+            chainId: branch.chainId,
+            orderId,
+            paymentId: payment.id,
+            amount: payment.amount,
+            method: PaymentMethod.CASH,
+            source: CashLedgerSourceType.CASH_PAYMENT,
+            occurredAt: now,
+          });
         for (const item of order.items) {
           if (!item.menuItemId) continue;
           await tx.orderItem.update({

@@ -68,3 +68,8 @@ test('notify requires ready state and matching current pager, and is idempotent'
   assert.equal(order.pagerNotifiedAt, first);
   await assert.rejects(fixture({ pagerNumber: 23 }).service.change(barista, 'order', 23, true));
 });
+test('cashier keeps permission to notify an assigned ready pager', async () => {
+  const { service, order } = fixture({ status: 'READY', pagerNumber: 17 });
+  await service.change(actor, 'order', 17, true);
+  assert.ok(order.pagerNotifiedAt instanceof Date);
+});
