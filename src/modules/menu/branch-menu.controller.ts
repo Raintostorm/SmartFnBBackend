@@ -27,7 +27,7 @@ import { MenuService } from './menu.service.js';
 export class BranchMenuController {
   constructor(private readonly menuService: MenuService) {}
 
-  @Roles(AppRole.OWNER, AppRole.MANAGER, AppRole.WAITER, AppRole.KITCHEN, AppRole.CASHIER)
+  @Roles(AppRole.OWNER, AppRole.MANAGER, AppRole.CASHIER, AppRole.BARISTA)
   @Get()
   @ApiOperation({
     summary: 'The menu as this branch sells it',

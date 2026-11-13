@@ -1,6 +1,12 @@
 import { Controller, Get, Param, ParseUUIDPipe, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
-import { IsDateString, IsOptional } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsDateString, IsEnum, IsInt, IsOptional, IsUUID, Max, Min } from 'class-validator';
+import {
+  CashLedgerDirection,
+  CashLedgerSourceType,
+  PaymentMethod,
+} from '../../generated/prisma/client.js';
 import { AppRole } from '../auth/app-role.enum.js';
 import { SWAGGER_ACCESS_TOKEN } from '../auth/auth.constants.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
@@ -11,6 +17,32 @@ import { CashLedgerService } from './cash-ledger.service.js';
 class LedgerRangeDto {
   @ApiPropertyOptional({ format: 'date-time' }) @IsOptional() @IsDateString() from?: string;
   @ApiPropertyOptional({ format: 'date-time' }) @IsOptional() @IsDateString() to?: string;
+  @ApiPropertyOptional({ enum: CashLedgerDirection })
+  @IsOptional()
+  @IsEnum(CashLedgerDirection)
+  direction?: CashLedgerDirection;
+  @ApiPropertyOptional({ enum: CashLedgerSourceType })
+  @IsOptional()
+  @IsEnum(CashLedgerSourceType)
+  sourceType?: CashLedgerSourceType;
+  @ApiPropertyOptional({ enum: PaymentMethod })
+  @IsOptional()
+  @IsEnum(PaymentMethod)
+  paymentMethod?: PaymentMethod;
+  @ApiPropertyOptional({ format: 'uuid' }) @IsOptional() @IsUUID() cashierId?: string;
+  @ApiPropertyOptional({ default: 1, minimum: 1 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page = 1;
+  @ApiPropertyOptional({ default: 50, minimum: 1, maximum: 100 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  pageSize = 50;
 }
 
 @ApiTags('Cash ledger')
@@ -27,12 +59,7 @@ export class CashLedgerController {
     @Param('branchId', ParseUUIDPipe) branchId: string,
     @Query() query: LedgerRangeDto,
   ) {
-    return this.ledger.listBranch(
-      user,
-      branchId,
-      query.from ? new Date(query.from) : undefined,
-      query.to ? new Date(query.to) : undefined,
-    );
+    return this.ledger.listBranch(user, branchId, query);
   }
 
   @Get('restaurant-chains/:chainId/cash-ledger')
@@ -43,11 +70,6 @@ export class CashLedgerController {
     @Param('chainId', ParseUUIDPipe) chainId: string,
     @Query() query: LedgerRangeDto,
   ) {
-    return this.ledger.listChain(
-      user,
-      chainId,
-      query.from ? new Date(query.from) : undefined,
-      query.to ? new Date(query.to) : undefined,
-    );
+    return this.ledger.listChain(user, chainId, query);
   }
 }
