@@ -381,11 +381,11 @@ export class MenuImportsService implements OnModuleInit {
         {
           role: 'system',
           content:
-            'Structure Vietnamese OCR text into a menu draft. Never invent names or prices. Use only supplied branch and existing item IDs. Convert k and dotted VND prices to integer VND. Put uncertain lines in unresolved and warning. For duplicate items choose UPDATE_PRICE when price differs, otherwise SKIP.',
+            'Structure Vietnamese OCR text into a compact menu draft. Never invent names or prices. Use only supplied branch and existing item IDs. Convert k and dotted VND prices to integer VND. Put uncertain lines in unresolved and warning. For duplicate items choose UPDATE_PRICE when price differs, otherwise SKIP. Keep description, sizes, extras, and warning empty unless explicitly present in the OCR text. Do not repeat items.',
         },
         { role: 'user', content: JSON.stringify(context) },
       ],
-      8192,
+      16384,
       {
         type: 'json_schema',
         json_schema: { name: 'menu_import_draft', strict: true, schema: draftSchema },
@@ -411,7 +411,7 @@ export class MenuImportsService implements OnModuleInit {
           ],
         },
       ],
-      8192,
+      16384,
     );
   }
 
@@ -451,10 +451,12 @@ export class MenuImportsService implements OnModuleInit {
     });
     const body = (await response.json()) as {
       error?: { message?: string };
-      choices?: Array<{ message?: { content?: string } }>;
+      choices?: Array<{ finish_reason?: string; message?: { content?: string } }>;
     };
     if (!response.ok)
       throw new Error(body.error?.message || `Qwen gateway rejected menu import (${response.status})`);
+    if (body.choices?.[0]?.finish_reason === 'length')
+      throw new Error('Qwen output exceeded the configured token limit');
     const text = body.choices?.[0]?.message?.content;
     if (!text) throw new Error('Qwen gateway returned no content');
     return text;
