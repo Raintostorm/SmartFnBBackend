@@ -376,22 +376,88 @@ export class MenuImportsService implements OnModuleInit {
   }
 
   private async runQwen(context: unknown): Promise<unknown> {
-    const text = await this.requestQwen(
-      [
+    const source = context as Record<string, unknown>;
+    const texts = Array.isArray(source?.texts) ? source.texts.map(String) : [];
+    const chunks = this.chunkOcrText(texts);
+    const drafts: MenuImportDraft[] = [];
+
+    for (const chunk of chunks) {
+      const text = await this.requestQwen(
+        [
+          {
+            role: 'system',
+            content:
+              'Structure this part of Vietnamese OCR text into a compact menu draft. Never invent names or prices. Use only supplied branch and existing item IDs. Convert k and dotted VND prices to integer VND. Put uncertain lines in unresolved and warning. For duplicate items choose UPDATE_PRICE when price differs, otherwise SKIP. Keep description, sizes, extras, and warning empty unless explicitly present in this OCR part. Do not repeat items.',
+          },
+          { role: 'user', content: JSON.stringify({ ...source, texts: [chunk] }) },
+        ],
+        4096,
         {
-          role: 'system',
-          content:
-            'Structure Vietnamese OCR text into a compact menu draft. Never invent names or prices. Use only supplied branch and existing item IDs. Convert k and dotted VND prices to integer VND. Put uncertain lines in unresolved and warning. For duplicate items choose UPDATE_PRICE when price differs, otherwise SKIP. Keep description, sizes, extras, and warning empty unless explicitly present in the OCR text. Do not repeat items.',
+          type: 'json_schema',
+          json_schema: { name: 'menu_import_draft', strict: true, schema: draftSchema },
         },
-        { role: 'user', content: JSON.stringify(context) },
-      ],
-      16384,
-      {
-        type: 'json_schema',
-        json_schema: { name: 'menu_import_draft', strict: true, schema: draftSchema },
-      },
-    );
-    return JSON.parse(text);
+      );
+      drafts.push(JSON.parse(text) as MenuImportDraft);
+    }
+    return this.mergeQwenDrafts(drafts);
+  }
+
+  private chunkOcrText(texts: string[]): string[] {
+    const maxChars = 1500;
+    const chunks: string[] = [];
+    let current = '';
+    const flush = () => {
+      if (current.trim()) chunks.push(current.trim());
+      current = '';
+    };
+    for (const text of texts) {
+      for (const rawLine of text.split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        for (let offset = 0; offset < line.length; offset += maxChars) {
+          const part = line.slice(offset, offset + maxChars);
+          if (current && current.length + part.length + 1 > maxChars) flush();
+          current += `${current ? '\n' : ''}${part}`;
+        }
+      }
+    }
+    flush();
+    return chunks.length ? chunks : [''];
+  }
+
+  private mergeQwenDrafts(drafts: MenuImportDraft[]): MenuImportDraft {
+    const categories = new Map<string, MenuImportDraft['categories'][number]>();
+    const seenItems = new Set<string>();
+    const unresolved = new Set<string>();
+    for (const draft of drafts) {
+      for (const category of Array.isArray(draft?.categories) ? draft.categories : []) {
+        const categoryKey = String(category?.name ?? '').trim().toLocaleLowerCase('vi');
+        if (!categoryKey) continue;
+        let target = categories.get(categoryKey);
+        if (!target) {
+          target = { name: String(category.name).trim(), items: [] };
+          categories.set(categoryKey, target);
+        }
+        for (const item of Array.isArray(category.items) ? category.items : []) {
+          const itemKey = [
+            categoryKey,
+            String(item?.name ?? '').trim().toLocaleLowerCase('vi'),
+            Number(item?.price),
+            String(item?.action ?? ''),
+            String(item?.existingItemId ?? ''),
+          ].join('|');
+          if (!seenItems.has(itemKey)) {
+            seenItems.add(itemKey);
+            target.items.push(item);
+          }
+        }
+      }
+      for (const value of Array.isArray(draft?.unresolved) ? draft.unresolved : []) {
+        const text = String(value).trim();
+        if (text) unresolved.add(text);
+      }
+    }
+    return { categories: [...categories.values()], unresolved: [...unresolved] };
   }
 
   private async runQwenOcr(image: { data: Buffer; contentType: string }): Promise<string> {
@@ -411,7 +477,7 @@ export class MenuImportsService implements OnModuleInit {
           ],
         },
       ],
-      16384,
+      8192,
     );
   }
 

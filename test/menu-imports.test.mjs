@@ -116,7 +116,7 @@ describe('Menu imports', () => {
       assert.equal(request.options.headers.Authorization, 'Bearer qwen-test-key');
       assert.equal(body.model, 'qwen3.5:4b');
       assert.equal(body.stream, false);
-      assert.equal(body.max_tokens, 16384);
+      assert.equal(body.max_tokens, 4096);
       assert.equal(body.response_format.type, 'json_schema');
       assert.deepEqual(body.response_format.json_schema.schema.required, [
         'categories',
@@ -161,7 +161,7 @@ describe('Menu imports', () => {
       assert.equal(request.url, 'http://127.0.0.1:11435/v1/chat/completions');
       assert.equal(imagePart.type, 'image_url');
       assert.match(imagePart.image_url.url, /^data:image\/png;base64,/);
-      assert.equal(body.max_tokens, 16384);
+      assert.equal(body.max_tokens, 8192);
       assert.equal('response_format' in body, false);
     } finally {
       globalThis.fetch = originalFetch;
@@ -170,6 +170,17 @@ describe('Menu imports', () => {
         else process.env[key] = value;
       }
     }
+  });
+
+  it('chunks long OCR text and merges duplicate draft rows', () => {
+    const service = new MenuImportsService({}, {});
+    const chunks = service.chunkOcrText(['A'.repeat(3200)]);
+    const merged = service.mergeQwenDrafts([draft, draft]);
+
+    assert.equal(chunks.length, 3);
+    assert.ok(chunks.every((chunk) => chunk.length <= 1500));
+    assert.equal(merged.categories.length, 1);
+    assert.equal(merged.categories[0].items.length, 1);
   });
 
   it('rejects an upload before saving files when the Qwen gateway is not configured', async () => {
