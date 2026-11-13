@@ -280,28 +280,21 @@ describe('Owner staff administration', () => {
     assert.equal(AuthService.prototype.registerStaff, undefined);
   });
 
-  it('replaces a direct-login password and revokes sessions', async () => {
-    const calls = [];
+  it('no longer lets a Brand Manager set a Store Manager password directly (BR-54, BR-56)', () => {
+    const service = new EmployeesService({}, {}, {}, {});
+    assert.equal(typeof service.setDirectPassword, 'undefined');
+  });
+
+  it('moves a legacy username-only Store Manager to email onboarding through the shared policy', async () => {
+    let call;
     const service = new EmployeesService(
-      {
-        employee: {
-          findFirst: async () => ({
-            id: 'employee-one',
-            user: { id: 'staff-user', email: 'cashier_1', role: { code: AppRole.CASHIER } },
-          }),
-        },
-        $transaction: async (work) =>
-          work({
-            user: { update: async (args) => calls.push(args) },
-            authSession: { updateMany: async (args) => calls.push(args) },
-          }),
-      },
+      { employee: { findFirst: async () => ({ id: 'employee-one', user: { id: 'staff-user', email: 'manager_1', role: { code: AppRole.MANAGER } } }) } },
       { getAccessibleBranchIds: async () => ['branch-one'] },
-      { hash: async () => 'hashed-password' },
+      {},
+      { attachLegacyEmail: async (...args) => { call = args; return { emailStatus: 'SENT' }; } },
     );
-    await service.setDirectPassword(owner, 'employee-one', { password: '87654321' });
-    assert.equal(calls[0].data.passwordHash, 'hashed-password');
-    assert.equal(calls[1].where.userId, 'staff-user');
+    await service.attachLegacyManagerEmail(owner, 'employee-one', 'an@example.com', 'Chuyển sang đăng nhập email', '10.0.0.1');
+    assert.deepEqual(call.slice(1), ['employee-one', 'an@example.com', 'Chuyển sang đăng nhập email', '10.0.0.1']);
   });
 
   it('routes the legacy manager invitation through shared email onboarding', async () => {
@@ -384,6 +377,7 @@ describe('Owner branding logo upload', () => {
         },
       },
       restaurantChain: { update: async () => undefined },
+      chainAuditLog: { create: async ({ data }) => { (captured.audits ??= []).push(data); } },
     };
     return new BrandingService(
       {
@@ -410,6 +404,8 @@ describe('Owner branding logo upload', () => {
 
       assert.match(result.logoUrl, /^\/uploads\/branding\/chain-one-.+\.png$/);
       assert.equal(captured.logoUrl, result.logoUrl);
+      assert.equal(captured.audits?.[0]?.action, 'BRANDING_LOGO_UPLOADED');
+      assert.deepEqual(captured.audits[0].after, { logoUrl: result.logoUrl });
       const fileName = result.logoUrl.split('/').at(-1);
       assert.deepEqual(await readFile(join(uploadDirectory, 'branding', fileName)), png);
     } finally {

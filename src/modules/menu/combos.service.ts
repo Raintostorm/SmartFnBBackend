@@ -10,6 +10,7 @@ import { Prisma } from '../../generated/prisma/client.js';
 import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
+import { comboSnapshot, writeChainAudit } from '../audit/chain-audit.js';
 import type { SaveComboDto, UpdateComboDto } from './combos.dto.js';
 import type {
   AddCounterOrderItemDto,
@@ -164,18 +165,33 @@ export class CombosService {
             data: branches.map((b) => ({ branchId: b.id, comboId: result.id })),
           });
       }
-      return tx.combo.findUniqueOrThrow({ where: { id: result.id }, include });
+      const fresh = await tx.combo.findUniqueOrThrow({ where: { id: result.id }, include });
+      // BR-06: create / edit / disable a combo and every combo price change, same transaction.
+      const action = !id ? 'COMBO_CREATED' : old!.isActive && !fresh.isActive ? 'COMBO_DISABLED' : !old!.isActive && fresh.isActive ? 'COMBO_ENABLED' : 'COMBO_UPDATED';
+      await writeChainAudit(tx, user, chainId, {
+        action,
+        entityType: 'Combo',
+        entityId: fresh.id,
+        before: comboSnapshot(old),
+        after: comboSnapshot(fresh),
+        reason: old && String(old.price) !== String(fresh.price) ? 'COMBO_CHAIN_PRICE_CHANGED' : undefined,
+      });
+      return fresh;
     });
     await this.emit(chainId, saved.id);
     return saved;
   }
   async remove(chainId: string, id: string, user: AuthenticatedUser) {
     await this.access.assertCanManageChain(user, chainId);
-    const result = await this.prisma.combo.updateMany({
-      where: { id, chainId, deletedAt: null },
-      data: { deletedAt: new Date(), isActive: false },
+    await this.prisma.$transaction(async (tx) => {
+      const before = await tx.combo.findFirst({ where: { id, chainId, deletedAt: null }, include });
+      const result = await tx.combo.updateMany({
+        where: { id, chainId, deletedAt: null },
+        data: { deletedAt: new Date(), isActive: false },
+      });
+      if (!result.count || !before) throw new NotFoundException('Combo not found');
+      await writeChainAudit(tx, user, chainId, { action: 'COMBO_DELETED', entityType: 'Combo', entityId: id, before: comboSnapshot(before), after: { deleted: true, isActive: false } });
     });
-    if (!result.count) throw new NotFoundException('Combo not found');
     await this.emit(chainId, id);
     return { id, deleted: true };
   }
@@ -191,6 +207,8 @@ export class CombosService {
         branchIds.length
       )
         throw new BadRequestException('Branch is outside this chain');
+      const previous = await tx.branchCombo.findMany({ where: { comboId: id, isEnabled: true }, select: { branchId: true } });
+      await writeChainAudit(tx, user, chainId, { action: 'COMBO_BRANCHES_CHANGED', entityType: 'Combo', entityId: id, before: { branchIds: previous.map((b) => b.branchId).sort() }, after: { branchIds: [...branchIds].sort() } });
       await tx.branchCombo.updateMany({
         where: { comboId: id, branchId: { notIn: branchIds } },
         data: { isEnabled: false },

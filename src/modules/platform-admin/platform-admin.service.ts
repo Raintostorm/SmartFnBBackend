@@ -135,6 +135,62 @@ export class PlatformAdminService {
     return this.paginate(items, total, query.page, query.limit);
   }
 
+  /**
+   * PS-01 / 30.3 "Đã duyệt — chờ kích hoạt". Only registration and platform billing data
+   * (BR-07): never the business's orders, menu, staff or PayOS sales keys.
+   * "QR created" means a platform PayOS link exists for the current link; it is not "paid".
+   */
+  async listAwaitingActivation(query: PaginationQueryDto) {
+    const search = query.search?.trim();
+    const where: Prisma.RegistrationApplicationWhereInput = {
+      status: 'APPROVED',
+      ...(search ? { OR: [
+        { applicationCode: { contains: search, mode: Prisma.QueryMode.insensitive } },
+        { businessName: { contains: search, mode: Prisma.QueryMode.insensitive } },
+        { representativeEmail: { contains: search, mode: Prisma.QueryMode.insensitive } },
+      ] } : {}),
+    };
+    const [rows, total] = await Promise.all([
+      this.prisma.registrationApplication.findMany({
+        where,
+        select: {
+          id: true, applicationCode: true, businessName: true, representativeName: true, representativeEmail: true, representativePhone: true,
+          requestedPlanId: true, reviewedAt: true, activationSentAt: true, activationExpiresAt: true, activationLastOpenedAt: true,
+          approvedPlan: { select: { id: true, code: true, name: true, monthlyPrice: true } },
+          activationCheckouts: { orderBy: { createdAt: 'desc' }, take: 10, select: { id: true, planId: true, amount: true, status: true, checkoutUrl: true, paidAt: true, createdAt: true } },
+        },
+        orderBy: [{ activationExpiresAt: 'asc' }, { createdAt: 'asc' }],
+        skip: (query.page - 1) * query.limit,
+        take: query.limit,
+      }),
+      this.prisma.registrationApplication.count({ where }),
+    ]);
+    const now = Date.now();
+    const items = rows.map(({ activationCheckouts, ...row }) => {
+      const sentAt = row.activationSentAt;
+      // The link is valid for seven days. Use its issue time for QR filtering even if email delivery
+      // is still pending; a previous link's checkout must not appear under the new link.
+      const issuedAt = row.activationExpiresAt ? new Date(row.activationExpiresAt.getTime() - 7 * 24 * 60 * 60_000) : row.reviewedAt;
+      const current = activationCheckouts.filter((c) => c.planId === row.approvedPlan?.id && (!issuedAt || c.createdAt >= issuedAt));
+      const qr = current.find((c) => !!c.checkoutUrl) ?? null;
+      const latest = current[0] ?? null;
+      return {
+        ...row,
+        activationSentAt: sentAt,
+        linkExpired: !row.activationExpiresAt || row.activationExpiresAt.getTime() <= now,
+        firstPeriodQr: {
+          created: !!qr,
+          createdAt: qr?.createdAt ?? null,
+          latestStatus: latest?.status ?? null,
+          paid: current.some((c) => c.status === 'PAID'),
+          needsReview: current.some((c) => c.status === 'NEEDS_REVIEW'),
+          amount: latest ? String(latest.amount) : null,
+        },
+      };
+    });
+    return this.paginate(items, total, query.page, query.limit);
+  }
+
   async getRegistrationApplication(id: string) {
     const application = await this.prisma.registrationApplication.findUnique({
       where: { id },
@@ -206,14 +262,16 @@ export class PlatformAdminService {
     const email = await this.prisma.$transaction(async (tx) => {
       const updated = await tx.registrationApplication.updateMany({
         where: { id, status: 'PENDING' },
-        data: { status: 'APPROVED', approvedPlanId: plan.id, reviewedById: adminUserId, reviewedAt: now, rejectionReason: null, activationTokenHash: this.hashToken(token), activationExpiresAt: expiresAt },
+        data: { status: 'APPROVED', approvedPlanId: plan.id, reviewedById: adminUserId, reviewedAt: now, rejectionReason: null, activationTokenHash: this.hashToken(token), activationExpiresAt: expiresAt, activationSentAt: null, activationLastOpenedAt: null },
       });
       if (updated.count !== 1) throw new ConflictException('Application was already reviewed');
+      // BR-06: review decisions are audited with actor, time and the approved plan.
+      await tx.platformSupportAction.create({ data: { actorUserId: adminUserId, applicationId: id, action: 'APPROVE_APPLICATION', note: dto.note?.trim() || 'Duyệt hồ sơ đăng ký', details: { fromStatus: 'PENDING', toStatus: 'APPROVED', planId: plan.id, activationExpiresAt: expiresAt.toISOString() } } });
       return tx.emailOutbox.create({ data: {
         recipient: application.representativeEmail,
         subject: 'Kích hoạt doanh nghiệp Smart F&B',
         template: 'REGISTRATION_ACTIVATION',
-        payload: { businessName: application.businessName, employeeName: application.representativeName, setupToken: token, setupPath: '/activate', expiresAt: expiresAt.toISOString(), planName: plan.name },
+        payload: { businessName: application.businessName, employeeName: application.representativeName, setupTokenEncrypted: this.emails.sealSetupToken(token), setupPath: '/activate', expiresAt: expiresAt.toISOString(), planName: plan.name },
       } });
     });
     await this.emails.deliver(email.id);
@@ -223,6 +281,8 @@ export class PlatformAdminService {
 
   async getActivation(token: string) {
     const application = await this.findActivation(token);
+    // PS-01 / 30.3: Platform Staff sees when the current link was last opened. Best effort only.
+    await this.prisma.registrationApplication.updateMany({ where: { id: application.id, activationTokenHash: this.hashToken(token) }, data: { activationLastOpenedAt: new Date() } }).catch(() => undefined);
     return { businessName: application.businessName, representativeEmail: application.representativeEmail, approvedPlan: application.approvedPlan, expiresAt: application.activationExpiresAt, trialAvailable: application.approvedPlan?.code === 'TRIAL' || (!application.requestedPlanId && application.approvedPlan?.code === 'BASIC'), activationMode: application.approvedPlan?.code === 'TRIAL' ? 'TRIAL' : application.requestedPlanId ? 'PAID' : 'LEGACY' };
   }
 
@@ -362,10 +422,10 @@ export class PlatformAdminService {
       const application = await tx.registrationApplication.findUnique({ where: { id } });
       if (!application || application.status !== 'APPROVED') throw new ConflictException('Only approved applications awaiting activation can change plan');
       if (application.requestedPlanId) throw new ConflictException('The applicant-selected plan cannot be changed after approval');
-      await tx.registrationApplication.update({ where: { id }, data: { approvedPlanId: planId, activationTokenHash: this.hashToken(token), activationExpiresAt: expiresAt } });
+      await tx.registrationApplication.update({ where: { id }, data: { approvedPlanId: planId, activationTokenHash: this.hashToken(token), activationExpiresAt: expiresAt, activationSentAt: null, activationLastOpenedAt: null } });
       await tx.registrationCheckout.updateMany({ where: { applicationId: id, status: 'PENDING' }, data: { status: 'FAILED' } });
       await tx.platformSupportAction.create({ data: { actorUserId, applicationId: id, action: 'CHANGE_APPROVED_PLAN', note: note.trim(), details: { fromPlanId: application.approvedPlanId, toPlanId: planId } } });
-      const email = await tx.emailOutbox.create({ data: { recipient: application.representativeEmail, subject: 'Cập nhật gói kích hoạt Smart F&B', template: 'REGISTRATION_ACTIVATION', payload: { businessName: application.businessName, employeeName: application.representativeName, setupToken: token, setupPath: '/activate', expiresAt: expiresAt.toISOString(), planName: plan.name } } });
+      const email = await tx.emailOutbox.create({ data: { recipient: application.representativeEmail, subject: 'Cập nhật gói kích hoạt Smart F&B', template: 'REGISTRATION_ACTIVATION', payload: { businessName: application.businessName, employeeName: application.representativeName, setupTokenEncrypted: this.emails.sealSetupToken(token), setupPath: '/activate', expiresAt: expiresAt.toISOString(), planName: plan.name } } });
       return email.id;
     });
     await this.emails.deliver(emailId);
@@ -379,10 +439,10 @@ export class PlatformAdminService {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${id}))`;
       const application = await tx.registrationApplication.findUnique({ where: { id }, include: { approvedPlan: true } });
       if (!application || application.status !== 'APPROVED') throw new ConflictException('Only approved applications awaiting activation can receive a new link');
-      await tx.registrationApplication.update({ where: { id }, data: { activationTokenHash: this.hashToken(token), activationExpiresAt: expiresAt } });
+      await tx.registrationApplication.update({ where: { id }, data: { activationTokenHash: this.hashToken(token), activationExpiresAt: expiresAt, activationSentAt: null, activationLastOpenedAt: null } });
       await tx.registrationCheckout.updateMany({ where: { applicationId: id, status: 'PENDING' }, data: { status: 'FAILED' } });
       await tx.platformSupportAction.create({ data: { actorUserId, applicationId: id, action: 'RESEND_ACTIVATION', note: note.trim() } });
-      return tx.emailOutbox.create({ data: { recipient: application.representativeEmail, subject: 'Liên kết kích hoạt Smart F&B mới', template: 'REGISTRATION_ACTIVATION', payload: { businessName: application.businessName, employeeName: application.representativeName, setupToken: token, setupPath: '/activate', expiresAt: expiresAt.toISOString(), planName: application.approvedPlan?.name } } });
+      return tx.emailOutbox.create({ data: { recipient: application.representativeEmail, subject: 'Liên kết kích hoạt Smart F&B mới', template: 'REGISTRATION_ACTIVATION', payload: { businessName: application.businessName, employeeName: application.representativeName, setupTokenEncrypted: this.emails.sealSetupToken(token), setupPath: '/activate', expiresAt: expiresAt.toISOString(), planName: application.approvedPlan?.name } } });
     });
     await this.emails.deliver(email.id);
     return this.getRegistrationApplication(id);
@@ -451,6 +511,7 @@ export class PlatformAdminService {
         }
         throw new ConflictException('Only a pending application can be rejected');
       }
+      await transaction.platformSupportAction.create({ data: { actorUserId: adminUserId, applicationId: id, action: 'REJECT_APPLICATION', note: rejectionReason, details: { fromStatus: 'PENDING', toStatus: 'REJECTED' } } });
 
       const application = await transaction.registrationApplication.findUniqueOrThrow({
         where: { id },
@@ -740,59 +801,6 @@ export class PlatformAdminService {
       });
     });
     return this.getBusiness(businessId);
-  }
-
-  async resetOwnerPassword(ownerId: string, adminUserId: string) {
-    const owner = await this.prisma.owner.findFirst({
-      where: {
-        id: ownerId,
-        deletedAt: null,
-        user: { deletedAt: null, role: { code: AppRole.OWNER } },
-      },
-      select: {
-        id: true,
-        firstName: true,
-        lastName: true,
-        user: { select: { id: true, email: true } },
-      },
-    });
-    if (!owner) {
-      throw new NotFoundException('Brand Manager account not found');
-    }
-    const token = randomBytes(32).toString('base64url');
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    const invalidHash = await this.passwordService.hash(randomBytes(48).toString('base64url'));
-    const emailId = await this.prisma.$transaction(async (transaction) => {
-      await transaction.passwordSetupToken.updateMany({
-        where: { userId: owner.user.id, usedAt: null },
-        data: { usedAt: new Date() },
-      });
-      await transaction.passwordSetupToken.create({
-        data: { userId: owner.user.id, tokenHash: this.hashToken(token), expiresAt, purpose: 'SUPERIOR_RESET' },
-      });
-      await transaction.user.update({ where: { id: owner.user.id }, data: { passwordHash: invalidHash, status: UserStatus.INACTIVE } });
-      await transaction.passwordResetRequest.updateMany({ where: { userId: owner.user.id, status: 'PENDING' }, data: { status: 'RESET', handledById: adminUserId, handledAt: new Date() } });
-      await transaction.authSession.updateMany({
-        where: { userId: owner.user.id, revokedAt: null },
-        data: { revokedAt: new Date() },
-      });
-      const mail = await transaction.emailOutbox.create({
-        data: {
-          recipient: owner.user.email,
-          subject: 'Đặt lại mật khẩu Brand Manager Smart F&B',
-          template: 'OWNER_PASSWORD_RESET',
-          payload: {
-            ownerName: `${owner.firstName} ${owner.lastName}`,
-            setupToken: token,
-            setupPath: '/setup-password',
-            expiresAt: expiresAt.toISOString(),
-            requestedByAdminId: adminUserId,
-          },
-        },
-      });
-      return mail.id;
-    });
-    return { message: 'Password setup email queued', ownerId: owner.id, expiresAt, emailStatus: await this.emails.deliver(emailId) };
   }
 
   private businessBaseSelect() {

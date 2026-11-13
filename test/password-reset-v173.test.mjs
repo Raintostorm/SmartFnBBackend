@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { PasswordResetService } from '../dist/modules/auth/password-reset.service.js';
 import { AuthService } from '../dist/modules/auth/auth.service.js';
+import { EmailOutboxService } from '../dist/modules/email/email-outbox.service.js';
 
 const now = new Date();
 const metadata = { ipAddress: '127.0.0.1', userAgent: 'test' };
@@ -11,7 +12,7 @@ test('unknown and Platform Admin emails receive the same public response without
   const created = [];
   let user = null;
   const prisma = {
-    $transaction: (run) => run({ $executeRaw: async () => 1, passwordResetAttempt: { count: async () => 0, create: async () => ({}) } }),
+    $transaction: (run) => run({ $queryRaw: async () => 1, passwordResetAttempt: { count: async () => 0, create: async () => ({}) } }),
     user: { findFirst: async () => user },
     passwordResetRequest: { create: async (input) => created.push(input) },
   };
@@ -28,13 +29,14 @@ test('Store Manager creates one request in the Brand Manager chain room', async 
   const created = [];
   const prisma = {
     $transaction: (run) => run({
-      $executeRaw: async () => 1,
+      $queryRaw: async () => 1,
       passwordResetAttempt: { count: async () => 0, create: async () => ({}) },
       passwordResetRequest: {
         updateMany: async () => ({ count: 0 }),
         findFirst: async () => null,
         create: async ({ data }) => { created.push(data); return { id: 'request-1' }; },
       },
+      passwordResetAudit: { create: async () => ({}) },
     }),
     user: { findFirst: async () => ({ id: 'manager-1', email: 'manager@example.com', status: 'ACTIVE', staffInvitationState: 'ACCEPTED', role: { code: 'MANAGER' }, employee: { branch: { chainId: 'chain-1' } } }) },
   };
@@ -48,18 +50,19 @@ test('Cashier receives a 30-minute self-reset link without invalidating current 
   const writes = [];
   const prisma = {
     $transaction: (run) => run({
-      $executeRaw: async () => 1,
+      $queryRaw: async () => 1,
       $queryRaw: async () => [],
       passwordResetAttempt: { count: async () => 0, create: async () => ({}) },
       user: { findUnique: async () => ({ status: 'ACTIVE', staffInvitationState: 'ACCEPTED' }) },
       passwordSetupToken: { findFirst: async () => null, count: async () => 0, updateMany: async ({ data }) => writes.push({ cancelled: data }), create: async ({ data }) => writes.push({ token: data }) },
       emailOutbox: { create: async ({ data }) => { writes.push({ mail: data }); return { id: 'email-1' }; } },
+      passwordResetAudit: { create: async () => ({}) },
     }),
     user: { findFirst: async () => ({ id: 'cashier-1', email: 'cashier@example.com', status: 'ACTIVE', staffInvitationState: 'ACCEPTED', role: { code: 'CASHIER' } }) },
     passwordSetupToken: { findFirst: async () => null, count: async () => 0 },
   };
   const delivered = [];
-  const service = new PasswordResetService(prisma, {}, { deliver: async (id) => delivered.push(id) }, events());
+  const service = new PasswordResetService(prisma, {}, { sealSetupToken: (token) => `sealed:${token}`, deliver: async (id) => delivered.push(id) }, events());
   await service.request('cashier@example.com', metadata);
   assert.equal(writes.find((write) => write.token).token.purpose, 'SELF_RESET');
   assert.ok(writes.find((write) => write.token).token.expiresAt > now);
@@ -71,7 +74,7 @@ test('Cashier receives a 30-minute self-reset link without invalidating current 
 test('sixth request from one IP is rate limited without account lookup', async () => {
   let lookedUp = false;
   const prisma = {
-    $transaction: (run) => run({ $executeRaw: async () => 1, passwordResetAttempt: { count: async () => 5 } }),
+    $transaction: (run) => run({ $queryRaw: async () => 1, passwordResetAttempt: { count: async () => 5 } }),
     user: { findFirst: async () => { lookedUp = true; return null; } },
   };
   const service = new PasswordResetService(prisma, {}, {}, events());
@@ -91,10 +94,11 @@ test('out-of-scope reset returns 404; authorized approval invalidates old creden
     user: { update: async ({ data }) => writes.push({ user: data }) },
     authSession: { updateMany: async ({ data }) => writes.push({ session: data }) },
     emailOutbox: { create: async ({ data }) => { writes.push({ email: data }); return { id: 'mail-1' }; } },
+    passwordResetAudit: { create: async () => ({}) },
   };
-  const prisma = { passwordResetRequest: { updateMany: async () => ({ count: 0 }) }, $transaction: (run) => run(tx) };
+  const prisma = { passwordResetRequest: { updateMany: async () => ({ count: 0 }), findMany: async () => [] }, $transaction: (run) => run(tx) };
   const sent = [];
-  const service = new PasswordResetService(prisma, { hash: async () => 'invalid-hash' }, { deliver: async (id) => sent.push(id) }, eventBus);
+  const service = new PasswordResetService(prisma, { hash: async () => 'invalid-hash' }, { sealSetupToken: (token) => `sealed:${token}`, deliver: async (id) => sent.push(id) }, eventBus);
   const cashier = { id: 'cashier-2', role: 'CASHIER', chainIds: [], branchId: 'branch-2' };
   await assert.rejects(service.resolve(cashier, item.id), (error) => error.getStatus?.() === 404);
   assert.equal(writes.length, 0);
@@ -120,6 +124,7 @@ test('Cashier self-reset keeps old password until confirmation, then revokes ses
     authSession: { updateMany: async ({ data }) => writes.push({ session: data }) },
     passwordSetupAttempt: { deleteMany: async () => undefined },
     branchAuditLog: { create: async () => undefined },
+    passwordResetAudit: { create: async () => undefined },
   };
   const prisma = {
     passwordSetupAttempt: { findUnique: async () => null },
@@ -132,4 +137,43 @@ test('Cashier self-reset keeps old password until confirmation, then revokes ses
   assert.equal(writes.find((write) => write.user).user.lastPasswordChangeMethod, 'SELF_RESET');
   assert.equal(writes.find((write) => write.user).user.passwordHash, 'new-hash');
   assert.equal(writes.find((write) => write.session).session.revokedAt instanceof Date, true);
+});
+
+test('another handler sees the first handler name on a concurrent reset', async () => {
+  const item = { status: 'RESET', scopeChainId: 'chain-1', user: { role: { code: 'MANAGER' } }, handledBy: { email: 'owner@example.com', role: { code: 'OWNER' }, owner: { firstName: 'Minh', lastName: 'Nguyen' }, employee: null } };
+  const service = new PasswordResetService({
+    passwordResetRequest: { findMany: async () => [] },
+    $transaction: async (work) => work({ $queryRaw: async () => [], passwordResetRequest: { findUnique: async () => item } }),
+  }, { hash: async () => 'unused' }, {}, events());
+  await assert.rejects(service.resolve({ id: 'owner-2', role: 'OWNER', chainIds: ['chain-1'] }, 'request-id'), (error) => error.getStatus?.() === 409 && /Minh Nguyen/.test(error.message) && !/owner@example.com/.test(error.message));
+});
+
+test('queued password links contain authenticated ciphertext instead of the raw token', () => {
+  const service = new EmailOutboxService({}, { getOrThrow: () => 'refresh-secret-for-test'.repeat(2) });
+  const token = 'once-only-secret-token';
+  const sealed = service.sealSetupToken(token);
+  assert.equal(sealed.includes(token), false);
+  assert.equal(service.readSetupToken({ setupTokenEncrypted: sealed }), token);
+});
+
+test('email delivery persists the account status and removes the queued token', async () => {
+  const originalFetch = globalThis.fetch;
+  const accountStatuses = [];
+  let outboxUpdate;
+  let payload;
+  const config = { getOrThrow: () => 'refresh-secret-for-test'.repeat(2), get: (key) => ({ EMAIL_API_KEY: 'test-api-key', EMAIL_FROM: 'test@example.com', PUBLIC_WEB_URL: 'https://smartfnb.tech' })[key] };
+  const service = new EmailOutboxService({
+    emailOutbox: { findUnique: async () => ({ id: 'mail-1', status: 'PENDING', recipient: 'cashier@example.com', subject: 'Reset', template: 'STAFF_ACCOUNT_CREATED', payload }), update: async ({ data }) => { outboxUpdate = data; } },
+    user: { updateMany: async ({ data }) => accountStatuses.push(data.emailSendStatus) },
+  }, config);
+  payload = { setupTokenEncrypted: service.sealSetupToken('secret-token'), setupPath: '/setup-password' };
+  globalThis.fetch = async () => ({ ok: true });
+  try {
+    assert.equal(await service.deliver('mail-1'), 'SENT');
+    assert.deepEqual(accountStatuses, ['PENDING', 'SENT']);
+    assert.equal(outboxUpdate.payload.setupTokenEncrypted, undefined);
+    assert.ok(outboxUpdate.sentAt instanceof Date);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

@@ -21,7 +21,7 @@ export class PlatformStaffAccountsService {
       where: { role: { code: AppRole.PLATFORM_STAFF }, deletedAt: null },
       select: {
         id: true, email: true, status: true, staffInvitationState: true,
-        emailVerifiedAt: true, createdAt: true, lastLoginAt: true,
+        emailVerifiedAt: true, emailSendStatus: true, emailSentAt: true, createdAt: true, lastLoginAt: true,
         passwordSetupTokens: {
           where: { usedAt: null }, orderBy: { createdAt: 'desc' }, take: 1,
           select: { expiresAt: true },
@@ -60,7 +60,7 @@ export class PlatformStaffAccountsService {
           recipient: email,
           subject: 'Thiết lập tài khoản Platform Staff Smart F&B',
           template: 'PLATFORM_STAFF_INVITATION',
-          payload: { employeeName: 'Platform Staff', setupToken: token, setupPath: '/setup-password', expiresAt: expiresAt.toISOString() },
+          payload: { employeeName: 'Platform Staff', setupTokenEncrypted: this.emails.sealSetupToken(token), setupPath: '/setup-password', expiresAt: expiresAt.toISOString() },
         },
       });
       await tx.platformSupportAction.create({
@@ -91,7 +91,7 @@ export class PlatformStaffAccountsService {
     return { id, email: user.email, status };
   }
 
-  async resetPassword(id: string, note: string, actorUserId: string) {
+  async resetPassword(id: string, note: string, actorUserId: string, ipAddress?: string) {
     const user = await this.requireStaff(id);
     if (user.status === UserStatus.SUSPENDED)
       throw new ConflictException('Unlock the account before sending a password setup link');
@@ -115,12 +115,13 @@ export class PlatformStaffAccountsService {
           recipient: user.email,
           subject: isInvitation ? 'Liên kết thiết lập tài khoản Platform Staff' : 'Đặt lại mật khẩu Platform Staff',
           template: isInvitation ? 'PLATFORM_STAFF_INVITATION' : 'PLATFORM_STAFF_PASSWORD_RESET',
-          payload: { employeeName: 'Platform Staff', setupToken: token, setupPath: '/setup-password', expiresAt: expiresAt.toISOString() },
+          payload: { employeeName: 'Platform Staff', setupTokenEncrypted: this.emails.sealSetupToken(token), setupPath: '/setup-password', expiresAt: expiresAt.toISOString() },
         },
       });
       await tx.platformSupportAction.create({
         data: { actorUserId, action: isInvitation ? 'RESEND_PLATFORM_STAFF_INVITATION' : 'RESET_PLATFORM_STAFF_PASSWORD', note: note.trim(), details: { userId: id, email: user.email } },
       });
+      await tx.passwordResetAudit.create({ data: { event: isInvitation ? 'INVITATION_RESENT' : 'SUPERIOR_RESET_REQUESTED', actorUserId, subjectUserId: id, ipAddress: ipAddress?.slice(0, 64) } });
       return message.id;
     });
     return { id, email: user.email, invitationExpiresAt: expiresAt, emailStatus: await this.emails.deliver(result) };

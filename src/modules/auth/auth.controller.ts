@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Patch, Post, Req } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
@@ -22,11 +22,13 @@ import { LoginDto } from './dto/login.dto.js';
 import { RefreshTokenDto } from './dto/refresh-token.dto.js';
 import { SetupPasswordDto } from './dto/setup-password.dto.js';
 import { ChangePasswordDto } from './dto/change-password.dto.js';
+import { UpdateProfileDto } from './dto/profile.dto.js';
+import { ProfileService } from './profile.service.js';
 
 @ApiTags('Authentication')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(private readonly authService: AuthService, private readonly profiles: ProfileService) {}
 
   @Public()
   @HttpCode(HttpStatus.OK)
@@ -37,8 +39,8 @@ export class AuthController {
   })
   @ApiOkResponse({ type: MessageResponseDto })
   @ApiUnauthorizedResponse({ description: 'Setup token is invalid or expired' })
-  setupPassword(@Body() dto: SetupPasswordDto): Promise<{ message: string }> {
-    return this.authService.setupPassword(dto);
+  setupPassword(@Body() dto: SetupPasswordDto, @Req() request: Request): Promise<{ message: string }> {
+    return this.authService.setupPassword(dto, this.getRequestMetadata(request));
   }
 
   @Post('change-password')
@@ -99,6 +101,25 @@ export class AuthController {
   @ApiUnauthorizedResponse({ description: 'Access token is missing, invalid, or expired' })
   getMe(@CurrentUser() user: AuthenticatedUser): AuthenticatedUser {
     return user;
+  }
+
+  @Get('profile')
+  @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
+  @ApiOperation({ summary: 'CM-02: view my own profile (name, phone, date of birth; email is read-only)' })
+  @ApiUnauthorizedResponse({ description: 'Access token is missing, invalid, or expired' })
+  getProfile(@CurrentUser() user: AuthenticatedUser) {
+    return this.profiles.get(user);
+  }
+
+  @Patch('profile')
+  @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
+  @ApiOperation({
+    summary: 'CM-02: update my own profile',
+    description: 'Always targets the caller. Email cannot be changed here (no verified email-change flow). Platform Admin/Staff can only change phone.',
+  })
+  @ApiBadRequestResponse({ description: 'Invalid field, or name/date of birth on an account without a personal profile' })
+  updateProfile(@CurrentUser() user: AuthenticatedUser, @Body() dto: UpdateProfileDto) {
+    return this.profiles.update(user, dto);
   }
 
   private getRequestMetadata(request: Request): RequestMetadata {

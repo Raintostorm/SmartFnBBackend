@@ -1,5 +1,7 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Put, Query } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Put, Query, Req } from '@nestjs/common';
+import type { Request } from 'express';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { PasswordResetService } from '../auth/password-reset.service.js';
 import { AppRole } from '../auth/app-role.enum.js';
 import { SWAGGER_ACCESS_TOKEN } from '../auth/auth.constants.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
@@ -13,10 +15,15 @@ import { PlatformAdminService } from './platform-admin.service.js';
 @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
 @Controller('platform-staff')
 export class PlatformStaffController {
-  constructor(private readonly service: PlatformAdminService) {}
+  constructor(private readonly service: PlatformAdminService, private readonly resets: PasswordResetService) {}
 
   @Get('registration-applications')
   listApplications(@Query() query: ListRegistrationApplicationsQueryDto) { return this.service.listRegistrationApplications(query); }
+
+  /** PS-01 / 30.3 list: link sent/expiry/last opened and whether the first-period PayOS QR exists (not "paid"). */
+  @Get('registration-applications/awaiting-activation')
+  @ApiOperation({ summary: 'Approved applications awaiting activation, with activation-link and first-period QR tracking' })
+  awaitingActivation(@Query() query: PaginationQueryDto) { return this.service.listAwaitingActivation(query); }
 
   @Get('registration-applications/:id')
   getApplication(@Param('id', new ParseUUIDPipe()) id: string) { return this.service.getRegistrationApplication(id); }
@@ -32,6 +39,14 @@ export class PlatformStaffController {
 
   @Post('registration-applications/:id/resend-activation')
   resendActivation(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: PlatformSupportNoteDto, @CurrentUser() user: AuthenticatedUser) { return this.service.resendActivation(id, dto.note, user.id); }
+
+  /** PS-01 / BR-56: direct reset after out-of-band verification; same policy as approving a forgot-password request. */
+  @Post('owners/:ownerId/reset-password')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Reset a Brand Manager password: revoke password and sessions, email a one-time 24-hour link (note required)' })
+  resetOwnerPassword(@Param('ownerId', new ParseUUIDPipe()) ownerId: string, @Body() dto: PlatformSupportNoteDto, @CurrentUser() user: AuthenticatedUser, @Req() request: Request) {
+    return this.resets.resetBrandManager(user, ownerId, dto.note, { ipAddress: request.ip });
+  }
 
   @Get('service-plans')
   listPlans() { return this.service.listServicePlans(); }

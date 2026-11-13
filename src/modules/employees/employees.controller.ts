@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req } from '@nestjs/common';
+import type { Request } from 'express';
 import {
   ApiBearerAuth,
   ApiForbiddenResponse,
@@ -19,7 +20,7 @@ import {
   InviteStaffDto,
   StaffInvitationReasonDto,
   ListEmployeesQueryDto,
-  SetDirectStaffPasswordDto,
+  AttachLegacyEmailDto,
   TransferEmployeeBranchDto,
   UpdateEmployeeAccountStatusDto,
 } from './dto/employee.dto.js';
@@ -47,7 +48,7 @@ export class EmployeesController {
 
   @Post('invitations')
   @ApiOperation({
-    summary: 'Invite Manager, Cashier or Barista by email (24-hour activation link)',
+    summary: 'Invite Store Manager by email (24-hour activation link)',
   })
   createAccount(@CurrentUser() user: AuthenticatedUser, @Body() dto: InviteStaffDto) {
     const [firstName, ...rest] = dto.name.trim().split(/\s+/);
@@ -60,8 +61,9 @@ export class EmployeesController {
     @CurrentUser() user: AuthenticatedUser,
     @Param('employeeId', new ParseUUIDPipe()) id: string,
     @Body() dto: StaffInvitationReasonDto,
+    @Req() request: Request,
   ) {
-    return this.accounts.sendSetup(user, id, dto.reason, true);
+    return this.accounts.sendSetup(user, id, dto.reason, true, request.ip);
   }
 
   @Post(':employeeId/invitation/cancel')
@@ -78,7 +80,7 @@ export class EmployeesController {
   @ApiOperation({
     summary: 'List the staff of every branch the OWNER is assigned to',
     description:
-      'Roster covering all roles. The OWNER can create Manager, Cashier and Barista accounts ' +
+      'Roster covering all roles. The OWNER can create Store Manager accounts ' +
       'through POST /employees/invitations. All new accounts require email activation.',
   })
   @ApiOkResponse({ description: 'Paginated staff roster' })
@@ -100,7 +102,7 @@ export class EmployeesController {
 
   @Patch(':employeeId/status')
   @ApiOperation({
-    summary: 'Lock or unlock a Manager, Cashier or Barista account',
+    summary: 'Lock or unlock a Store Manager account',
     description: 'Any status other than ACTIVE also revokes the live sessions of that manager.',
   })
   @ApiParam({ name: 'employeeId', format: 'uuid' })
@@ -117,7 +119,7 @@ export class EmployeesController {
 
   @Post(':employeeId/reset-password')
   @ApiOperation({
-    summary: 'Send a password setup link to a Manager, Cashier or Barista',
+    summary: 'Send a password setup link to a Store Manager',
     description:
       'Revokes the live sessions and emails a one-time link valid for 24 hours. The token is ' +
       'never returned in the response.',
@@ -130,20 +132,27 @@ export class EmployeesController {
     @Param('employeeId', new ParseUUIDPipe()) employeeId: string,
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: StaffInvitationReasonDto,
+    @Req() request: Request,
   ) {
-    return this.employeesService.resetManagerPassword(user, employeeId, dto.reason);
+    return this.employeesService.resetManagerPassword(user, employeeId, dto.reason, request.ip);
   }
 
-  @Patch(':employeeId/password')
+  // PATCH /employees/:employeeId/password was removed (BR-54, BR-56): a superior never sets a password.
+  @Post(':employeeId/legacy-email')
   @ApiOperation({
-    summary: 'Set password for an Owner-created staff account and revoke its sessions',
+    summary: 'Attach an email to a legacy username-only Store Manager and send a one-time setup link',
+    description:
+      'Transition for accounts created before email onboarding. Revokes the old password and sessions; ' +
+      'the Store Manager sets their own password from the 24-hour link. No password is accepted or returned.',
   })
-  setPassword(
+  @ApiParam({ name: 'employeeId', format: 'uuid' })
+  attachLegacyEmail(
     @Param('employeeId', new ParseUUIDPipe()) employeeId: string,
-    @Body() dto: SetDirectStaffPasswordDto,
+    @Body() dto: AttachLegacyEmailDto,
     @CurrentUser() user: AuthenticatedUser,
+    @Req() request: Request,
   ) {
-    return this.employeesService.setDirectPassword(user, employeeId, dto);
+    return this.employeesService.attachLegacyManagerEmail(user, employeeId, dto.email, dto.reason, request.ip);
   }
 
   @Patch(':employeeId/branch')

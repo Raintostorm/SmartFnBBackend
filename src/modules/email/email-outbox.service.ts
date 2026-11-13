@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { EmailOutboxStatus, type Prisma } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
 
@@ -16,6 +17,7 @@ type SetupPayload = {
   representativeName?: string;
   rejectionReason?: string;
   setupToken?: string;
+  setupTokenEncrypted?: string;
   setupPath?: string;
   expiresAt?: string;
   heading?: string;
@@ -32,11 +34,33 @@ export class EmailOutboxService {
     private readonly config: ConfigService,
   ) {}
 
+  /** Keep only authenticated ciphertext in the durable queue; old queued rows remain readable. */
+  sealSetupToken(token: string): string {
+    const key = createHash('sha256').update(this.config.getOrThrow<string>('JWT_REFRESH_SECRET')).digest();
+    const nonce = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', key, nonce);
+    const encrypted = Buffer.concat([cipher.update(token, 'utf8'), cipher.final()]);
+    return Buffer.concat([nonce, cipher.getAuthTag(), encrypted]).toString('base64url');
+  }
+
+  readSetupToken(payload: { setupToken?: unknown; setupTokenEncrypted?: unknown }): string | null {
+    if (typeof payload.setupTokenEncrypted === 'string') {
+      const bytes = Buffer.from(payload.setupTokenEncrypted, 'base64url');
+      const key = createHash('sha256').update(this.config.getOrThrow<string>('JWT_REFRESH_SECRET')).digest();
+      const decipher = createDecipheriv('aes-256-gcm', key, bytes.subarray(0, 12));
+      decipher.setAuthTag(bytes.subarray(12, 28));
+      return Buffer.concat([decipher.update(bytes.subarray(28)), decipher.final()]).toString('utf8');
+    }
+    return typeof payload.setupToken === 'string' ? payload.setupToken : null;
+  }
+
   async deliver(id: string): Promise<EmailOutboxStatus> {
     const message = await this.prisma.emailOutbox.findUnique({ where: { id } });
     if (!message || message.status === EmailOutboxStatus.SENT) {
       return message?.status ?? EmailOutboxStatus.FAILED;
     }
+    const accountEmail = ['STAFF_ACCOUNT_CREATED', 'PASSWORD_RESET', 'SELF_PASSWORD_RESET', 'PLATFORM_STAFF_INVITATION', 'PLATFORM_STAFF_PASSWORD_RESET', 'OWNER_PASSWORD_RESET'].includes(message.template);
+    if (accountEmail) await this.recordAccountEmail(message.recipient, message.template, EmailOutboxStatus.PENDING);
     const apiKey = this.config.get<string>('EMAIL_API_KEY')?.trim();
     const from = this.config.get<string>('EMAIL_FROM')?.trim();
     if (!apiKey || !from) return EmailOutboxStatus.PENDING;
@@ -44,7 +68,7 @@ export class EmailOutboxService {
     const payload = message.payload as SetupPayload;
     const publicWebUrl = this.config.get<string>('PUBLIC_WEB_URL')!.replace(/\/+$/, '');
     const setupPath = `/${String(payload.setupPath ?? '/setup-password').replace(/^\/+/, '')}`;
-    const setupUrl = `${publicWebUrl}${setupPath}?token=${encodeURIComponent(payload.setupToken ?? '')}`;
+    const setupUrl = `${publicWebUrl}${setupPath}?token=${encodeURIComponent(this.readSetupToken(payload) ?? '')}`;
     const html =
       message.template === 'REGISTRATION_ACTIVATION'
         ? this.activationHtml(payload, setupUrl)
@@ -76,17 +100,6 @@ export class EmailOutboxService {
         const body = await response.text().catch(() => '');
         throw new Error(`Email provider rejected the request (${response.status}) ${body}`.trim());
       }
-      await this.prisma.emailOutbox.update({
-        where: { id },
-        data: {
-          status: EmailOutboxStatus.SENT,
-          payload: (({ setupToken: _removed, ...rest }) => rest)(payload) as Prisma.InputJsonValue,
-          attempts: { increment: 1 },
-          lastError: null,
-          sentAt: new Date(),
-        },
-      });
-      return EmailOutboxStatus.SENT;
     } catch (error) {
       await this.prisma.emailOutbox.update({
         where: { id },
@@ -96,7 +109,38 @@ export class EmailOutboxService {
           lastError: String(error instanceof Error ? error.message : error).slice(0, 1000),
         },
       });
+      if (accountEmail) await this.recordAccountEmail(message.recipient, message.template, EmailOutboxStatus.FAILED);
       return EmailOutboxStatus.FAILED;
+    }
+    const sentAt = new Date();
+    await this.prisma.emailOutbox.update({
+      where: { id },
+      data: {
+        status: EmailOutboxStatus.SENT,
+        payload: (({ setupToken: _removed, setupTokenEncrypted: _sealed, ...rest }) => rest)(payload) as Prisma.InputJsonValue,
+        attempts: { increment: 1 },
+        lastError: null,
+        sentAt,
+      },
+    });
+    if (message.template === 'REGISTRATION_ACTIVATION') {
+      const token = this.readSetupToken(payload);
+      if (token) {
+        await this.prisma.registrationApplication.updateMany({
+          where: { activationTokenHash: createHash('sha256').update(token).digest('hex'), status: 'APPROVED' },
+          data: { activationSentAt: sentAt },
+        });
+      }
+    }
+    if (accountEmail) await this.recordAccountEmail(message.recipient, message.template, EmailOutboxStatus.SENT);
+    return EmailOutboxStatus.SENT;
+  }
+
+  private async recordAccountEmail(recipient: string, template: string, status: EmailOutboxStatus) {
+    await this.prisma.user.updateMany({ where: { email: recipient, deletedAt: null }, data: { emailSendStatus: status, ...(status === EmailOutboxStatus.SENT ? { emailSentAt: new Date() } : {}) } });
+    if (status !== EmailOutboxStatus.PENDING && ['PASSWORD_RESET', 'SELF_PASSWORD_RESET', 'PLATFORM_STAFF_PASSWORD_RESET', 'OWNER_PASSWORD_RESET'].includes(template)) {
+      const user = await this.prisma.user.findFirst({ where: { email: recipient, deletedAt: null }, select: { id: true } });
+      if (user) await this.prisma.passwordResetAudit.create({ data: { event: status === EmailOutboxStatus.SENT ? 'EMAIL_SENT' : 'EMAIL_FAILED', subjectUserId: user.id } });
     }
   }
 

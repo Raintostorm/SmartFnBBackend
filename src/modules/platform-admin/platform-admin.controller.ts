@@ -10,7 +10,9 @@ import {
   Post,
   Put,
   Query,
+  Req,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import {
   ApiBearerAuth,
   ApiConflictResponse,
@@ -39,6 +41,7 @@ import {
   UpdateServicePlanDto,
 } from './dto/platform-admin.dto.js';
 import { PlatformAdminService } from './platform-admin.service.js';
+import { PasswordResetService } from '../auth/password-reset.service.js';
 
 @Roles(AppRole.ADMIN)
 @ApiTags('Platform administration')
@@ -47,7 +50,10 @@ import { PlatformAdminService } from './platform-admin.service.js';
 @ApiForbiddenResponse({ description: 'Only a platform ADMIN can use this endpoint' })
 @Controller('admin')
 export class PlatformAdminController {
-  constructor(private readonly platformAdminService: PlatformAdminService) {}
+  constructor(
+    private readonly platformAdminService: PlatformAdminService,
+    private readonly resets: PasswordResetService,
+  ) {}
 
   @Get('registration-applications')
   @ApiOperation({ summary: 'List and search business registration applications' })
@@ -186,13 +192,16 @@ export class PlatformAdminController {
     return this.platformAdminService.reactivateBusiness(id, dto, admin.id);
   }
 
+  /** Kept for compatibility; same service and policy as POST /platform-staff/owners/:ownerId/reset-password (Admin inherits Staff). */
   @Post('owners/:ownerId/reset-password')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Queue a one-time password setup email for a Brand Manager' })
+  @ApiOperation({ summary: 'Alias of the Platform Staff Brand Manager password reset (note required)' })
   resetOwnerPassword(
     @Param('ownerId', new ParseUUIDPipe()) ownerId: string,
+    @Body() dto: PlatformSupportNoteDto,
     @CurrentUser() admin: AuthenticatedUser,
+    @Req() request: Request,
   ) {
-    return this.platformAdminService.resetOwnerPassword(ownerId, admin.id);
+    return this.resets.resetBrandManager(admin, ownerId, dto.note, { ipAddress: request.ip });
   }
 }

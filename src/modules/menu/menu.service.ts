@@ -9,6 +9,7 @@ import { basename } from 'node:path';
 import { BranchStatus, Prisma } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
+import { auditSnapshot, writeChainAudit } from '../audit/chain-audit.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
 import { deleteAsset, putAsset } from '../assets/asset-storage.js';
 import type {
@@ -70,6 +71,8 @@ const optionSelect = {
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.MenuOptionSelect;
+
+const OPTION_AUDIT_KEYS = ['groupId', 'code', 'name', 'priceDelta', 'isActive', 'isDefault'] as const;
 
 const optionGroupSelect = {
   id: true,
@@ -270,9 +273,10 @@ export class MenuService {
       throw new BadRequestException('Create the option before setting it as the group default');
     }
     return this.withUniqueConflict('An option with this code already exists in the group', () =>
-      this.prisma.menuOption.create({
-        data: { ...dto, groupId },
-        select: optionSelect,
+      this.prisma.$transaction(async (tx) => {
+        const created = await tx.menuOption.create({ data: { ...dto, groupId }, select: optionSelect });
+        await writeChainAudit(tx, user, chainId, { action: 'MENU_OPTION_CREATED', entityType: 'MenuOption', entityId: created.id, after: auditSnapshot(created, OPTION_AUDIT_KEYS) });
+        return created;
       }),
     );
   }
@@ -307,19 +311,30 @@ export class MenuService {
             throw new BadRequestException('Default options exceed maxSelections');
           }
         }
-        return tx.menuOption.update({
+        const updated = await tx.menuOption.update({
           where: { id: optionId },
           data: { ...dto, ...(dto.isActive === false ? { isDefault: false } : {}) },
           select: optionSelect,
         });
+        // BR-06: option price (and visibility) changes are audited with before/after.
+        if (String(current.priceDelta) !== String(updated.priceDelta) || current.isActive !== updated.isActive)
+          await writeChainAudit(tx, user, chainId, {
+            action: String(current.priceDelta) !== String(updated.priceDelta) ? 'MENU_OPTION_PRICE_CHANGED' : 'MENU_OPTION_UPDATED',
+            entityType: 'MenuOption', entityId: optionId,
+            before: auditSnapshot(current, OPTION_AUDIT_KEYS), after: auditSnapshot(updated, OPTION_AUDIT_KEYS),
+          });
+        return updated;
       }),
     );
   }
 
   async deleteOption(chainId: string, groupId: string, optionId: string, user: AuthenticatedUser) {
     await this.branchAccess.assertCanManageChain(user, chainId);
-    await this.getOptionOrFail(chainId, groupId, optionId);
-    await this.prisma.menuOption.delete({ where: { id: optionId } });
+    const current = await this.getOptionOrFail(chainId, groupId, optionId);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.menuOption.delete({ where: { id: optionId } });
+      await writeChainAudit(tx, user, chainId, { action: 'MENU_OPTION_DELETED', entityType: 'MenuOption', entityId: optionId, before: auditSnapshot(current, OPTION_AUDIT_KEYS) });
+    });
     return { message: 'Menu option deleted successfully' };
   }
 
@@ -403,10 +418,13 @@ export class MenuService {
       await this.getCategoryOrFail(chainId, dto.categoryId);
     }
 
-    const saved = await this.prisma.menuItem.update({
-      where: { id: itemId },
-      data: dto,
-      select: itemSelect,
+    const saved = await this.prisma.$transaction(async (tx) => {
+      const before = await tx.menuItem.findUniqueOrThrow({ where: { id: itemId }, select: itemSelect });
+      const after = await tx.menuItem.update({ where: { id: itemId }, data: dto, select: itemSelect });
+      // BR-06: chain price change of an item; branch overrides are audited separately.
+      if (String(before.price) !== String(after.price))
+        await writeChainAudit(tx, user, chainId, { action: 'MENU_CHAIN_PRICE_CHANGED', entityType: 'MenuItem', entityId: itemId, before: { price: String(before.price) }, after: { price: String(after.price) } });
+      return after;
     });
     if (dto.price !== undefined) {
       const branches = await this.prisma.branchMenuItem.findMany({

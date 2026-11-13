@@ -8,7 +8,9 @@ import {
   Post,
   Query,
   HttpCode,
+  Req,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AppRole } from '../auth/app-role.enum.js';
 import { SWAGGER_ACCESS_TOKEN } from '../auth/auth.constants.js';
@@ -106,8 +108,9 @@ export class BranchManagerController {
     @CurrentUser() user: AuthenticatedUser,
     @Param('employeeId', new ParseUUIDPipe()) id: string,
     @Body() dto: ManagerResetPasswordDto,
+    @Req() request: Request,
   ) {
-    return this.staff.resetPassword(user, id, dto);
+    return this.staff.resetPassword(user, id, dto, request.ip);
   }
 
   @Post('staff/:employeeId/invitation/cancel')
@@ -130,8 +133,9 @@ export class BranchManagerController {
     @CurrentUser() user: AuthenticatedUser,
     @Param('employeeId', new ParseUUIDPipe()) id: string,
     @Body() dto: ManagerResetPasswordDto,
+    @Req() request: Request,
   ) {
-    return this.staff.resendInvitation(user, id, dto.reason);
+    return this.staff.resendInvitation(user, id, dto.reason, request.ip);
   }
 
   @Get('menu-options')

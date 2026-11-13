@@ -18,6 +18,7 @@ it('invites Platform Staff by one-time email link without exposing a password or
     $transaction: async (work) => { const result = await work(tx); calls.push('commit'); return result; },
   };
   const service = new PlatformStaffAccountsService(prisma, { hash: async () => 'unusable-password-hash' }, {
+    sealSetupToken: (token) => `sealed:${token}`,
     deliver: async (id) => { assert.equal(id, 'mail-1'); assert.equal(calls.at(-1), 'commit'); return 'SENT'; },
   });
   const result = await service.create('STAFF@EXAMPLE.COM', 'New support agent', 'admin-1');
@@ -28,11 +29,12 @@ it('invites Platform Staff by one-time email link without exposing a password or
   assert.equal(user.status, 'INACTIVE');
   assert.equal(user.staffInvitationState, 'PENDING');
   assert.equal(user.passwordHash, 'unusable-password-hash');
-  assert.equal(token.tokenHash, createHash('sha256').update(email.payload.setupToken).digest('hex'));
+  assert.equal(token.tokenHash, createHash('sha256').update(email.payload.setupTokenEncrypted.slice(7)).digest('hex'));
   assert.equal(email.payload.setupPath, '/setup-password');
   assert.ok(token.expiresAt.getTime() - Date.now() > 23 * 60 * 60_000);
   assert.equal(result.emailStatus, 'SENT');
-  assert.equal(JSON.stringify(result).includes(email.payload.setupToken), false);
+  assert.equal(email.payload.setupToken, undefined);
+  assert.equal(JSON.stringify(result).includes(email.payload.setupTokenEncrypted), false);
   assert.equal(calls.find((call) => call.audit).audit.action, 'CREATE_PLATFORM_STAFF');
 });
 
@@ -77,9 +79,10 @@ it('rotates a pending invitation link, and refuses to send one while locked', as
       authSession: { updateMany: async () => calls.push('sessions revoked') },
       emailOutbox: { create: async ({ data }) => { calls.push({ email: data }); return { id: 'mail-2' }; } },
       platformSupportAction: { create: async ({ data }) => calls.push({ audit: data }) },
+      passwordResetAudit: { create: async ({ data }) => calls.push({ resetAudit: data }) },
     }),
   };
-  const service = new PlatformStaffAccountsService(prisma, {}, { deliver: async () => 'SENT' });
+  const service = new PlatformStaffAccountsService(prisma, {}, { sealSetupToken: (token) => `sealed:${token}`, deliver: async () => 'SENT' });
   await service.resetPassword('staff-user', 'Resend invitation', 'admin-1');
   assert.equal(calls[0], 'old link invalidated');
   assert.equal(calls.find((call) => call.email).email.template, 'PLATFORM_STAFF_INVITATION');

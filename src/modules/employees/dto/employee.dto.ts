@@ -115,10 +115,11 @@ export class StaffInvitationReasonDto {
   reason!: string;
 }
 
-export class SetDirectStaffPasswordDto {
-  @ApiProperty({ example: '12345678', minLength: 8, maxLength: 128, writeOnly: true })
-  @IsString()
-  @MinLength(8)
-  @MaxLength(128)
-  password!: string;
+/** BR-54 transition for legacy username-only Store Manager accounts: attach a real inbox, never a password. */
+export class AttachLegacyEmailDto extends StaffInvitationReasonDto {
+  @ApiProperty({ format: 'email', maxLength: 255 })
+  @Transform(trim)
+  @IsEmail()
+  @MaxLength(255)
+  email!: string;
 }

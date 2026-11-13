@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Req } from '@nestjs/common';
+import type { Request } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AppRole } from '../auth/app-role.enum.js';
 import { SWAGGER_ACCESS_TOKEN } from '../auth/auth.constants.js';
@@ -28,5 +29,5 @@ export class PlatformStaffAccountsController {
   unlock(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: PlatformStaffAccountNoteDto, @CurrentUser() actor: AuthenticatedUser) { return this.service.setLocked(id, false, dto.note, actor.id); }
 
   @Post(':id/reset-password')
-  resetPassword(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: PlatformStaffAccountNoteDto, @CurrentUser() actor: AuthenticatedUser) { return this.service.resetPassword(id, dto.note, actor.id); }
+  resetPassword(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: PlatformStaffAccountNoteDto, @CurrentUser() actor: AuthenticatedUser, @Req() request: Request) { return this.service.resetPassword(id, dto.note, actor.id, request.ip); }
 }

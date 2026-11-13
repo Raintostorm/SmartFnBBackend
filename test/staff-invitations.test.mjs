@@ -76,6 +76,7 @@ function fixture() {
       },
     },
     branchAuditLog: { create: async ({ data }) => calls.push({ audit: data }) },
+    passwordResetAudit: { create: async ({ data }) => calls.push({ resetAudit: data }) },
   };
   const service = new StaffAccountsService(
     {
@@ -88,6 +89,7 @@ function fixture() {
     },
     { hash: async () => 'random-password-hash' },
     {
+      sealSetupToken: (token) => `sealed:${token}`,
       deliver: async () => {
         assert.equal(calls.at(-1), 'commit');
         calls.push('deliver');
@@ -109,7 +111,7 @@ describe('Staff email invitations', () => {
     assert.equal(AuthController.prototype.registerManager, undefined);
     assert.equal(AuthController.prototype.registerStaff, undefined);
   });
-  for (const role of ['MANAGER', 'CASHIER', 'BARISTA'])
+  for (const role of ['MANAGER'])
     it(`Owner invites ${role} with no exposed password or token`, async () => {
       const f = fixture();
       const result = await f.service.invite(owner, { ...input, role });
@@ -121,11 +123,16 @@ describe('Staff email invitations', () => {
       const token = f.calls.find((c) => c.token).token;
       assert.equal(
         token.tokenHash,
-        createHash('sha256').update(email.payload.setupToken).digest('hex'),
+        createHash('sha256').update(email.payload.setupTokenEncrypted.slice(7)).digest('hex'),
       );
       assert.ok(token.expiresAt > new Date(Date.now() + 23 * 3600000));
-      assert.equal(JSON.stringify(result).includes(email.payload.setupToken), false);
+      assert.equal(email.payload.setupToken, undefined);
+      assert.equal(JSON.stringify(result).includes(email.payload.setupTokenEncrypted), false);
       assert.equal(f.calls.find((c) => c.audit).audit.actorEmployeeId, null);
+    });
+  for (const role of ['CASHIER', 'BARISTA'])
+    it(`denies Owner inviting ${role}`, async () => {
+      await assert.rejects(fixture().service.invite(owner, { ...input, role }), status(403));
     });
   for (const role of ['CASHIER', 'BARISTA'])
     it(`Manager invites ${role} in own branch`, async () => {
@@ -148,11 +155,11 @@ describe('Staff email invitations', () => {
     );
     const f = fixture();
     f.tx.ownerChainAssignment.count = async () => 0;
-    await assert.rejects(f.service.invite(owner, input), status(403));
+    await assert.rejects(f.service.invite(owner, { ...input, role: 'MANAGER' }), status(403));
   });
   it('checks the shared account quota inside the invite transaction and rejects inactive subscriptions', async () => {
     const ok = fixture();
-    await ok.service.invite(owner, input);
+    await ok.service.invite(owner, { ...input, role: 'MANAGER' });
     const quotaIndex = ok.calls.findIndex((c) => c.quota);
     const createdIndex = ok.calls.findIndex((c) => c.created);
     assert.deepEqual(ok.calls[quotaIndex].quota, { chainId: 'chain', resource: 'accounts' });
@@ -160,18 +167,19 @@ describe('Staff email invitations', () => {
     assert.equal(ok.calls.find((c) => c.reserved).reserved, 'employee');
     const f = fixture();
     f.quota.full = true;
-    await assert.rejects(f.service.invite(owner, input), status(409));
+    await assert.rejects(f.service.invite(owner, { ...input, role: 'MANAGER' }), status(409));
     assert.equal(
       f.calls.some((c) => c.created),
       false,
     );
     const g = fixture();
     g.tx.businessSubscription.findFirst = async () => null;
-    await assert.rejects(g.service.invite(owner, input), status(403));
+    await assert.rejects(g.service.invite(owner, { ...input, role: 'MANAGER' }), status(403));
   });
   it('unlocks a locked account only within the current quota and clears the over-quota marker', async () => {
     const f = fixture();
     f.staff.user.status = 'SUSPENDED';
+    f.staff.user.role.code = 'MANAGER';
     f.staff.user.staffInvitationState = 'ACCEPTED';
     f.quota.full = true;
     await assert.rejects(f.service.status(owner, 'employee', 'ACTIVE', 'Mở lại'), status(409));
@@ -182,16 +190,19 @@ describe('Staff email invitations', () => {
     assert.equal(f.calls.find((c) => c.reserved).reserved, 'employee');
     const lock = fixture();
     lock.staff.user.status = 'ACTIVE';
+    lock.staff.user.role.code = 'MANAGER';
     lock.staff.user.staffInvitationState = 'ACCEPTED';
     await lock.service.status(owner, 'employee', 'SUSPENDED', 'Khoá thủ công');
     assert.equal(lock.calls.some((c) => c.quota), false, 'locking never needs quota');
   });
   it('rotates setup token on resend and enforces cooldown', async () => {
     const f = fixture();
+    f.staff.user.role.code = 'MANAGER';
     await f.service.sendSetup(owner, 'employee', 'Resend email', true);
     assert.ok(f.calls.includes('invalidate'));
     assert.ok(f.calls.includes('revoke'));
     const g = fixture();
+    g.staff.user.role.code = 'MANAGER';
     g.tx.passwordSetupToken.findFirst = async () => ({ createdAt: new Date() });
     await assert.rejects(g.service.sendSetup(owner, 'employee', 'Resend email', true), status(429));
     assert.equal(g.calls.includes('invalidate'), false);
@@ -206,6 +217,7 @@ describe('Staff email invitations', () => {
   });
   it('cannot activate pending invitations or resend cancelled ones', async () => {
     const f = fixture();
+    f.staff.user.role.code = 'MANAGER';
     await assert.rejects(f.service.status(owner, 'employee', 'ACTIVE', 'Enable'), status(409));
     f.staff.user.staffInvitationState = 'CANCELLED';
     await assert.rejects(f.service.sendSetup(owner, 'employee', 'Resend', true), status(409));

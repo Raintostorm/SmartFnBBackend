@@ -314,6 +314,8 @@ model User {
   lastLoginAt                DateTime?  @map("last_login_at") @db.Timestamptz(6)
   lastPasswordChangedAt      DateTime?  @map("last_password_changed_at") @db.Timestamptz(6)
   lastPasswordChangeMethod   String?    @map("last_password_change_method") @db.VarChar(30)
+  emailSendStatus            EmailOutboxStatus? @map("email_send_status")
+  emailSentAt                DateTime?  @map("email_sent_at") @db.Timestamptz(6)
   staffInvitationState       String?    @map("staff_invitation_state") @db.VarChar(20)
   mustChangePassword         Boolean    @default(false) @map("must_change_password")
   temporaryPasswordExpiresAt DateTime?  @map("temporary_password_expires_at") @db.Timestamptz(6)
@@ -335,6 +337,8 @@ model User {
   passwordSetupTokens       PasswordSetupToken[]
   passwordResetRequests     PasswordResetRequest[] @relation("PasswordResetSubject")
   passwordResetsHandled     PasswordResetRequest[] @relation("PasswordResetHandler")
+  passwordResetAuditAsActor PasswordResetAudit[] @relation("PasswordResetAuditActor")
+  passwordResetAuditAsSubject PasswordResetAudit[] @relation("PasswordResetAuditSubject")
   platformSupportActions    PlatformSupportAction[]     @relation("PlatformSupportActor")
 
   @@index([roleId])
@@ -666,6 +670,10 @@ model RegistrationApplication {
   activationTokenHash String?                       @unique @map("activation_token_hash") @db.VarChar(64)
   activationExpiresAt DateTime?                     @map("activation_expires_at") @db.Timestamptz(6)
   activatedAt         DateTime?                     @map("activated_at") @db.Timestamptz(6)
+  /// When the current activation link was issued (approve, change plan, resend) — PS-01 follow-up list.
+  activationSentAt    DateTime?                     @map("activation_sent_at") @db.Timestamptz(6)
+  /// Last time the current activation link was opened on the public activation page.
+  activationLastOpenedAt DateTime?                  @map("activation_last_opened_at") @db.Timestamptz(6)
   status              RegistrationApplicationStatus @default(PENDING)
   rejectionReason     String?                       @map("rejection_reason") @db.VarChar(1000)
   reviewedById        String?                       @map("reviewed_by_id") @db.Uuid
@@ -991,6 +999,23 @@ model PasswordResetAttempt {
 
   @@index([ipAddress, createdAt])
   @@map("password_reset_attempts")
+}
+
+model PasswordResetAudit {
+  id            String   @id @default(uuid()) @db.Uuid
+  event         String   @db.VarChar(50)
+  actorUserId   String?  @map("actor_user_id") @db.Uuid
+  subjectUserId String?  @map("subject_user_id") @db.Uuid
+  ipAddress     String?  @map("ip_address") @db.VarChar(64)
+  requestId     String?  @map("request_id") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  actor User? @relation("PasswordResetAuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  subject User? @relation("PasswordResetAuditSubject", fields: [subjectUserId], references: [id], onDelete: SetNull)
+
+  @@index([subjectUserId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@map("password_reset_audit")
 }
 
 model PasswordSetupAttempt {
@@ -1626,6 +1651,26 @@ model RefundApprovalRequest {
   @@index([branchId, status, requestedAt])
   @@index([orderId, status])
   @@map("refund_approval_requests")
+}
+
+// Chain-wide configuration changes (BR-06): combos, chain prices, options, toppings, branding, posters.
+// Append-only like BranchAuditLog; only allowlisted snapshots, never secrets.
+model ChainAuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  chainId     String   @map("chain_id") @db.Uuid
+  actorUserId String   @map("actor_user_id") @db.Uuid
+  actorRole   String   @map("actor_role") @db.VarChar(50)
+  action      String   @db.VarChar(80)
+  entityType  String   @map("entity_type") @db.VarChar(50)
+  entityId    String?  @map("entity_id") @db.Uuid
+  reason      String?  @db.VarChar(500)
+  before      Json?
+  after       Json?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([chainId, createdAt])
+  @@index([entityType, entityId])
+  @@map("chain_audit_logs")
 }
 
 // Immutable actor identifiers survive account archival. No API updates or deletes these rows.

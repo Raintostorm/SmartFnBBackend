@@ -113,6 +113,12 @@ export class ApproveRegistrationApplicationDto {
   @Min(1)
   @Max(60)
   subscriptionMonths = 1;
+
+  @ApiPropertyOptional({ maxLength: 1000, description: 'Internal review note kept in the audit log (BR-06)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  note?: string;
 }
 
 export class RejectRegistrationApplicationDto {

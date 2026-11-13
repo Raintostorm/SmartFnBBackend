@@ -9,6 +9,7 @@ import { PrismaService } from '../../database/prisma.service.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
 import { deleteAsset, putAsset } from '../assets/asset-storage.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
+import { auditSnapshot, writeChainAudit } from '../audit/chain-audit.js';
 import type { UpdateDisplayPosterDto } from './dto/display-poster.dto.js';
 import { PlanQuotaService } from '../subscription/plan-quota.service.js';
 
@@ -20,6 +21,8 @@ export interface PosterFile {
   mimetype: string;
   size: number;
 }
+
+const POSTER_AUDIT_KEYS = ['title', 'imageUrl', 'enabled', 'sortOrder', 'durationSeconds'] as const;
 
 @Injectable()
 export class DisplayPostersService {
@@ -54,7 +57,7 @@ export class DisplayPostersService {
           throw new ConflictException(
             'A chain may have at most 10 posters; remove one before uploading',
           );
-        return tx.displayPoster.create({
+        const poster = await tx.displayPoster.create({
           data: {
             chainId,
             title: 'Poster',
@@ -62,6 +65,8 @@ export class DisplayPostersService {
             sortOrder: count,
           },
         });
+        await writeChainAudit(tx, user, chainId, { action: 'POSTER_CREATED', entityType: 'DisplayPoster', entityId: poster.id, after: auditSnapshot(poster, POSTER_AUDIT_KEYS) });
+        return poster;
       });
     } catch (error) {
       await deleteAsset(key).catch(() => undefined);
@@ -75,22 +80,31 @@ export class DisplayPostersService {
     if (!Object.values(dto).some((value) => value !== undefined))
       throw new BadRequestException('At least one poster field is required');
     // Scoped unique update: never mutate an ID from another chain or a removed poster.
-    const result = await this.prisma.displayPoster.updateMany({
-      where: { id, chainId, deletedAt: null },
-      data: dto,
+    return this.prisma.$transaction(async (tx) => {
+      const before = await tx.displayPoster.findFirst({ where: { id, chainId, deletedAt: null } });
+      const result = await tx.displayPoster.updateMany({
+        where: { id, chainId, deletedAt: null },
+        data: dto,
+      });
+      if (!result.count || !before) throw new NotFoundException('Poster not found in this chain');
+      const after = await tx.displayPoster.findFirst({ where: { id, chainId, deletedAt: null } });
+      await writeChainAudit(tx, user, chainId, { action: 'POSTER_UPDATED', entityType: 'DisplayPoster', entityId: id, before: auditSnapshot(before, POSTER_AUDIT_KEYS), after: auditSnapshot(after, POSTER_AUDIT_KEYS) });
+      return after;
     });
-    if (!result.count) throw new NotFoundException('Poster not found in this chain');
-    return this.prisma.displayPoster.findFirst({ where: { id, chainId, deletedAt: null } });
   }
 
   async remove(chainId: string, id: string, user: AuthenticatedUser) {
     await this.access.assertCanManageChain(user, chainId);
     await this.plans.assertFeatureEnabled(chainId, 'BRANDING');
-    const result = await this.prisma.displayPoster.updateMany({
-      where: { id, chainId, deletedAt: null },
-      data: { deletedAt: new Date(), enabled: false },
+    await this.prisma.$transaction(async (tx) => {
+      const before = await tx.displayPoster.findFirst({ where: { id, chainId, deletedAt: null } });
+      const result = await tx.displayPoster.updateMany({
+        where: { id, chainId, deletedAt: null },
+        data: { deletedAt: new Date(), enabled: false },
+      });
+      if (!result.count || !before) throw new NotFoundException('Poster not found in this chain');
+      await writeChainAudit(tx, user, chainId, { action: 'POSTER_DELETED', entityType: 'DisplayPoster', entityId: id, before: auditSnapshot(before, POSTER_AUDIT_KEYS) });
     });
-    if (!result.count) throw new NotFoundException('Poster not found in this chain');
     // Retain the asset: displays may still be showing the previous context until next sync.
     return { deleted: true };
   }

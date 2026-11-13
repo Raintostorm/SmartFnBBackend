@@ -9,6 +9,7 @@ import { basename } from 'node:path';
 import { PrismaService } from '../../database/prisma.service.js';
 import { AppRole } from '../auth/app-role.enum.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
+import { auditSnapshot, writeChainAudit } from '../audit/chain-audit.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
 import { deleteAsset, putAsset } from '../assets/asset-storage.js';
 import type { UpdateBrandingDto } from './dto/branding.dto.js';
@@ -50,6 +51,8 @@ const IMAGE_FORMATS = [
       buffer.subarray(8, 12).toString('ascii') === 'WEBP',
   },
 ] as const;
+
+const BRANDING_AUDIT_KEYS = ['displayName', 'logoUrl', 'primaryColor', 'secondaryColor', 'accentColor'] as const;
 
 @Injectable()
 export class BrandingService {
@@ -94,6 +97,7 @@ export class BrandingService {
       if (dto.logoUrl !== undefined) {
         await tx.restaurantChain.update({ where: { id: chainId }, data: { logoUrl: dto.logoUrl } });
       }
+      await writeChainAudit(tx, user, chainId, { action: 'BRANDING_UPDATED', entityType: 'BusinessBranding', entityId: branding.id, before: auditSnapshot(chain.branding, BRANDING_AUDIT_KEYS), after: auditSnapshot(branding, BRANDING_AUDIT_KEYS) });
       return branding;
     });
     if (dto.logoUrl !== undefined && dto.logoUrl !== previousLogoUrl) {
@@ -126,6 +130,7 @@ export class BrandingService {
           update: { logoUrl },
         });
         await tx.restaurantChain.update({ where: { id: chainId }, data: { logoUrl } });
+        await writeChainAudit(tx, user, chainId, { action: 'BRANDING_LOGO_UPLOADED', entityType: 'BusinessBranding', entityId: saved.id, before: { logoUrl: chain.branding?.logoUrl ?? chain.logoUrl ?? null }, after: { logoUrl } });
         return saved;
       });
     } catch (error) {
@@ -144,11 +149,13 @@ export class BrandingService {
     const previousLogoUrl = chain.branding?.logoUrl ?? chain.logoUrl;
     const branding = await this.prisma.$transaction(async (tx) => {
       await tx.restaurantChain.update({ where: { id: chainId }, data: { logoUrl: null } });
-      return tx.businessBranding.upsert({
+      const saved = await tx.businessBranding.upsert({
         where: { chainId },
         create: { chainId, displayName: chain.name, ...DEFAULT_BRANDING },
         update: { displayName: chain.name, logoUrl: null, ...DEFAULT_BRANDING },
       });
+      await writeChainAudit(tx, user, chainId, { action: 'BRANDING_RESET', entityType: 'BusinessBranding', entityId: saved.id, before: auditSnapshot(chain.branding, BRANDING_AUDIT_KEYS), after: auditSnapshot(saved, BRANDING_AUDIT_KEYS) });
+      return saved;
     });
     await this.removeManagedLogo(previousLogoUrl);
     return branding;

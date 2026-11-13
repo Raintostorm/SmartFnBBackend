@@ -39,6 +39,8 @@ const staffSelect = {
       lastLoginAt: true,
       lastPasswordChangedAt: true,
       lastPasswordChangeMethod: true,
+      emailSendStatus: true,
+      emailSentAt: true,
       staffInvitationState: true,
       role: { select: { code: true } },
       passwordSetupTokens: {
@@ -195,12 +197,12 @@ export class ManagerStaffService {
     return this.accounts.cancel(user, id, reason);
   }
 
-  async resetPassword(user: AuthenticatedUser, id: string, dto: ManagerResetPasswordDto) {
-    return this.accounts.sendSetup(user, id, dto.reason);
+  async resetPassword(user: AuthenticatedUser, id: string, dto: ManagerResetPasswordDto, ipAddress?: string) {
+    return this.accounts.sendSetup(user, id, dto.reason, false, ipAddress);
   }
 
-  async resendInvitation(user: AuthenticatedUser, id: string, reason: string) {
-    return this.accounts.sendSetup(user, id, reason, true);
+  async resendInvitation(user: AuthenticatedUser, id: string, reason: string, ipAddress?: string) {
+    return this.accounts.sendSetup(user, id, reason, true, ipAddress);
   }
 
   private snapshot(

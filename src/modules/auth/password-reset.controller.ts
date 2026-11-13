@@ -24,7 +24,7 @@ export class PasswordResetController {
 
   @Public()
   @Post('auth/password-reset/confirm')
-  confirm(@Body() dto: ConfirmPasswordResetDto) { return this.auth.setupPassword({ token: dto.token, password: dto.newPassword }); }
+  confirm(@Body() dto: ConfirmPasswordResetDto, @Req() req: Request) { return this.auth.setupPassword({ token: dto.token, password: dto.newPassword }, { ipAddress: req.ip, userAgent: req.get('user-agent') }); }
 
   @Get('password-reset-requests')
   list(@CurrentUser() actor: AuthenticatedUser) { return this.resets.list(actor); }
@@ -33,11 +33,11 @@ export class PasswordResetController {
   count(@CurrentUser() actor: AuthenticatedUser) { return this.resets.count(actor); }
 
   @Post('password-reset-requests/:id/approve')
-  approve(@CurrentUser() actor: AuthenticatedUser, @Param('id', new ParseUUIDPipe()) id: string) { return this.resets.resolve(actor, id); }
+  approve(@CurrentUser() actor: AuthenticatedUser, @Param('id', new ParseUUIDPipe()) id: string, @Req() req: Request) { return this.resets.resolve(actor, id, undefined, { ipAddress: req.ip }); }
 
   @Post('password-reset-requests/:id/reject')
-  reject(@CurrentUser() actor: AuthenticatedUser, @Param('id', new ParseUUIDPipe()) id: string, @Body() dto: RejectPasswordResetDto) { return this.resets.resolve(actor, id, dto.note); }
+  reject(@CurrentUser() actor: AuthenticatedUser, @Param('id', new ParseUUIDPipe()) id: string, @Body() dto: RejectPasswordResetDto, @Req() req: Request) { return this.resets.resolve(actor, id, dto.note, { ipAddress: req.ip }); }
 
   @Post('password-reset-requests/:id/resend')
-  resend(@CurrentUser() actor: AuthenticatedUser, @Param('id', new ParseUUIDPipe()) id: string) { return this.resets.resend(actor, id); }
+  resend(@CurrentUser() actor: AuthenticatedUser, @Param('id', new ParseUUIDPipe()) id: string, @Req() req: Request) { return this.resets.resend(actor, id, { ipAddress: req.ip }); }
 }

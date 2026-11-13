@@ -9,7 +9,6 @@ import { BranchAccessService } from '../branches/branch-access.service.js';
 import type {
   InviteManagerDto,
   ListEmployeesQueryDto,
-  SetDirectStaffPasswordDto,
   TransferEmployeeBranchDto,
   UpdateEmployeeAccountStatusDto,
 } from './dto/employee.dto.js';
@@ -34,6 +33,8 @@ const employeeSelect = {
       lastLoginAt: true,
       lastPasswordChangedAt: true,
       lastPasswordChangeMethod: true,
+      emailSendStatus: true,
+      emailSentAt: true,
       staffInvitationState: true,
       passwordSetupTokens: {
         where: { usedAt: null },
@@ -47,8 +48,8 @@ const employeeSelect = {
 } satisfies Prisma.EmployeeSelect;
 
 /**
- * Staff administration from the Owner side. New Manager, Cashier and Barista
- * accounts use shared email invitation onboarding.
+ * Staff administration from the Brand Manager side. Only Store Manager
+ * accounts can be created or changed; all staff remain readable.
  */
 @Injectable()
 export class EmployeesService {
@@ -59,31 +60,10 @@ export class EmployeesService {
     private readonly accounts: StaffAccountsService,
   ) {}
 
-  async setDirectPassword(
-    user: AuthenticatedUser,
-    employeeId: string,
-    dto: SetDirectStaffPasswordDto,
-  ) {
-    const employee = await this.getEmployee(user, employeeId);
-    if (
-      ![AppRole.MANAGER, AppRole.CASHIER, AppRole.BARISTA].includes(
-        employee.user.role.code as AppRole,
-      )
-    ) {
-      throw new ForbiddenException('Only Manager, Cashier and Barista passwords can be set here');
-    }
-    if (employee.user.email.includes('@')) {
-      throw new ForbiddenException('Email-invited accounts use email password setup');
-    }
-    const passwordHash = await this.passwords.hash(dto.password);
-    await this.prisma.$transaction(async (tx) => {
-      await tx.user.update({ where: { id: employee.user.id }, data: { passwordHash } });
-      await tx.authSession.updateMany({
-        where: { userId: employee.user.id, revokedAt: null },
-        data: { revokedAt: new Date() },
-      });
-    });
-    return { message: 'Password updated; active sessions revoked' };
+  /** BR-54 transition: give a legacy username-only Store Manager a real inbox and email them a setup link. */
+  async attachLegacyManagerEmail(user: AuthenticatedUser, employeeId: string, email: string, reason: string, ipAddress?: string) {
+    await this.getManagerOrFail(user, employeeId);
+    return this.accounts.attachLegacyEmail(user, employeeId, email, reason, ipAddress);
   }
 
   async inviteManager(user: AuthenticatedUser, dto: InviteManagerDto) {
@@ -168,9 +148,10 @@ export class EmployeesService {
     user: AuthenticatedUser,
     employeeId: string,
     reason = 'Owner requested password setup',
+    ipAddress?: string,
   ) {
     await this.getManagerOrFail(user, employeeId);
-    return this.accounts.sendSetup(user, employeeId, reason);
+    return this.accounts.sendSetup(user, employeeId, reason, false, ipAddress);
   }
 
   /** Moves a manager to another branch of the same chain and ends their sessions. */
@@ -231,12 +212,10 @@ export class EmployeesService {
   private async getManagerOrFail(user: AuthenticatedUser, employeeId: string) {
     const employee = await this.getEmployee(user, employeeId);
     if (
-      ![AppRole.MANAGER, AppRole.CASHIER, AppRole.BARISTA].includes(
-        employee.user.role.code as AppRole,
-      )
+      employee.user.role.code !== AppRole.MANAGER
     ) {
       throw new ForbiddenException(
-        'OWNER can only administer MANAGER, CASHIER and BARISTA accounts',
+        'OWNER can only administer MANAGER accounts',
       );
     }
     return employee;

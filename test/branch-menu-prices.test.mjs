@@ -160,12 +160,16 @@ test('failed audit never publishes a price event', async () => {
 });
 test('chain price change publishes to branches and never writes their overrides', async () => {
   const events = [];
+  const audits = [];
+  const menuItem = {
+    findFirst: async () => ({ id: 'item' }),
+    findUniqueOrThrow: async () => ({ id: 'item', price: 30000 }),
+    update: async () => ({ id: 'item', price: 35000 }),
+  };
   const service = new MenuService(
     {
-      menuItem: {
-        findFirst: async () => ({ id: 'item' }),
-        update: async () => ({ id: 'item', price: 35000 }),
-      },
+      menuItem,
+      $transaction: async (fn) => fn({ menuItem, chainAuditLog: { create: async ({ data }) => audits.push(data) } }),
       branchMenuItem: { findMany: async () => [{ branchId: 'a' }, { branchId: 'b' }] },
     },
     { assertCanManageChain: async () => {} },
@@ -176,4 +180,8 @@ test('chain price change publishes to branches and never writes their overrides'
     events.map((e) => e[0]),
     ['a', 'b'],
   );
+  // BR-06: exactly one chain-level audit row with before/after; branch overrides untouched.
+  assert.equal(audits.length, 1);
+  assert.equal(audits[0].action, 'MENU_CHAIN_PRICE_CHANGED');
+  assert.deepEqual([audits[0].before, audits[0].after], [{ price: '30000' }, { price: '35000' }]);
 });

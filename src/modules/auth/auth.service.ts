@@ -67,7 +67,7 @@ export class AuthService {
     this.audience = configService.getOrThrow<string>('JWT_AUDIENCE');
   }
 
-  async setupPassword(dto: SetupPasswordDto): Promise<{ message: string }> {
+  async setupPassword(dto: SetupPasswordDto, metadata?: RequestMetadata): Promise<{ message: string }> {
     const tokenHash = this.hashToken(dto.token);
     const now = new Date();
     const attempt = await this.prisma.passwordSetupAttempt.findUnique({
@@ -203,6 +203,8 @@ export class AuthService {
       });
       await transaction.passwordSetupToken.updateMany({ where: { userId: setupToken.userId, id: { not: setupToken.id }, usedAt: null, cancelledAt: null }, data: { cancelledAt: now } });
       await transaction.passwordSetupAttempt.deleteMany({ where: { subjectHash: tokenHash } });
+      if (setupToken.purpose === 'SELF_RESET' || setupToken.purpose === 'SUPERIOR_RESET')
+        await transaction.passwordResetAudit.create({ data: { event: setupToken.purpose === 'SELF_RESET' ? 'SELF_RESET_COMPLETED' : 'SUPERIOR_RESET_COMPLETED', actorUserId: current.id, subjectUserId: current.id, ipAddress: metadata?.ipAddress?.slice(0, 64) } });
       if (current.employee)
         await transaction.branchAuditLog.create({
           data: {

@@ -29,6 +29,8 @@ export const staffAccountSelect = {
       status: true,
       staffInvitationState: true,
       emailVerifiedAt: true,
+      emailSendStatus: true,
+      emailSentAt: true,
       lastPasswordChangedAt: true,
       lastPasswordChangeMethod: true,
       role: { select: { code: true } },
@@ -63,6 +65,7 @@ export class StaffAccountsService {
     if (
       !roles.includes(role) ||
       ![AppRole.OWNER, AppRole.MANAGER].includes(actor.role) ||
+      (actor.role === AppRole.OWNER && role !== AppRole.MANAGER) ||
       (actor.role === AppRole.MANAGER && role === AppRole.MANAGER)
     ) {
       throw new ForbiddenException('Not allowed to manage this staff role');
@@ -193,7 +196,7 @@ export class StaffAccountsService {
           employeeName: `${staff.firstName} ${staff.lastName}`.trim(),
           branchName,
           role: staff.user.role.code,
-          setupToken: token,
+          setupTokenEncrypted: this.emails.sealSetupToken(token),
           setupPath: '/setup-password',
           expiresAt: expiresAt.toISOString(),
           requestedByUserId: actor.id,
@@ -275,6 +278,7 @@ export class StaffAccountsService {
     employeeId: string,
     reason: string,
     resendOnly = false,
+    ipAddress?: string,
   ) {
     const token = randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + ttl);
@@ -312,9 +316,40 @@ export class StaffAccountsService {
         resendOnly ? 'STAFF_INVITATION_RESENT' : 'STAFF_PASSWORD_SETUP_SENT',
         reason,
       );
+      await tx.passwordResetAudit.create({ data: { event: resendOnly ? 'INVITATION_RESENT' : purpose === 'SUPERIOR_RESET' ? 'SUPERIOR_RESET_REQUESTED' : 'INVITATION_RESENT', actorUserId: actor.id, subjectUserId: staff.user.id, ipAddress: ipAddress?.slice(0, 64) } });
       return { emailId: email.id };
     });
     return { employeeId, expiresAt, emailStatus: await this.emails.deliver(result.emailId) };
+  }
+
+  /**
+   * Safe transition for a legacy username-only account (no inbox): the superior attaches the
+   * person's real email; the old password and sessions are revoked and a one-time INVITATION
+   * link goes to that new email. The superior never sees or sets a password (BR-54, BR-56).
+   */
+  async attachLegacyEmail(actor: AuthenticatedUser, employeeId: string, email: string, reason: string, ipAddress?: string) {
+    const normalized = email.trim().toLowerCase();
+    const token = randomBytes(32).toString('base64url');
+    const expiresAt = new Date(Date.now() + ttl);
+    const invalidHash = await this.passwords.hash(randomBytes(48).toString('base64url'));
+    const result = await this.transaction(async (tx) => {
+      const { staff, branch } = await this.target(tx, actor, employeeId);
+      if (staff.user.email.includes('@'))
+        throw new ConflictException('This account already signs in with an email; use reset password');
+      if (staff.user.status === 'SUSPENDED' || staff.user.staffInvitationState === 'CANCELLED')
+        throw new ConflictException('Account is locked or invitation cancelled');
+      if (await tx.user.count({ where: { email: normalized, id: { not: staff.user.id } } }))
+        throw new ConflictException('Email, phone or employee code already exists');
+      const previousLogin = staff.user.email;
+      await tx.user.update({ where: { id: staff.user.id }, data: { email: normalized, emailVerifiedAt: null, passwordHash: invalidHash, status: UserStatus.INACTIVE, staffInvitationState: 'PENDING' } });
+      await tx.authSession.updateMany({ where: { userId: staff.user.id, revokedAt: null }, data: { revokedAt: new Date() } });
+      const updated = { ...staff, user: { ...staff.user, email: normalized } };
+      const mail = await this.tokenEmail(tx, actor, updated, branch.name, token, expiresAt, 'INVITATION');
+      await this.audit(tx, actor, staff, 'STAFF_LEGACY_EMAIL_ATTACHED', reason, { previousLogin, email: normalized });
+      await tx.passwordResetAudit.create({ data: { event: 'INVITATION_RESENT', actorUserId: actor.id, subjectUserId: staff.user.id, ipAddress: ipAddress?.slice(0, 64) } });
+      return { emailId: mail.id };
+    });
+    return { employeeId, email: normalized, expiresAt, emailStatus: await this.emails.deliver(result.emailId) };
   }
 
   async cancel(actor: AuthenticatedUser, employeeId: string, reason: string) {

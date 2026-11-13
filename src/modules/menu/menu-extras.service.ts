@@ -10,7 +10,10 @@ import { Prisma } from '../../generated/prisma/client.js';
 import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
+import { auditSnapshot, writeChainAudit } from '../audit/chain-audit.js';
 import type { SaveExtraDto, SetItemExtrasDto } from './menu-extras.dto.js';
+const EXTRA_AUDIT_KEYS = ['name', 'price', 'isActive'] as const;
+
 @Injectable()
 export class MenuExtrasService {
   constructor(
@@ -44,16 +47,20 @@ export class MenuExtrasService {
   async save(chainId: string, id: string | null, dto: SaveExtraDto, user: AuthenticatedUser) {
     await this.access.assertCanManageChain(user, chainId);
     if (!dto.name.trim()) throw new BadRequestException('Extra name is required');
-    if (id && !(await this.prisma.menuExtra.findFirst({ where: { id, chainId } })))
-      throw new NotFoundException('Extra not found in this chain');
+    const before = id ? await this.prisma.menuExtra.findFirst({ where: { id, chainId } }) : null;
+    if (id && !before) throw new NotFoundException('Extra not found in this chain');
     let result;
     try {
-      result = id
-        ? await this.prisma.menuExtra.update({
-            where: { id },
-            data: { ...dto, name: dto.name.trim() },
-          })
-        : await this.prisma.menuExtra.create({ data: { chainId, ...dto, name: dto.name.trim() } });
+      result = await this.prisma.$transaction(async (tx) => {
+        const saved = id
+          ? await tx.menuExtra.update({ where: { id }, data: { ...dto, name: dto.name.trim() } })
+          : await tx.menuExtra.create({ data: { chainId, ...dto, name: dto.name.trim() } });
+        // BR-06: topping create / price change / disable, same transaction.
+        const action = !before ? 'MENU_EXTRA_CREATED' : before.isActive && !saved.isActive ? 'MENU_EXTRA_DISABLED'
+          : String(before.price) !== String(saved.price) ? 'MENU_EXTRA_PRICE_CHANGED' : 'MENU_EXTRA_UPDATED';
+        await writeChainAudit(tx, user, chainId, { action, entityType: 'MenuExtra', entityId: saved.id, before: auditSnapshot(before, EXTRA_AUDIT_KEYS), after: auditSnapshot(saved, EXTRA_AUDIT_KEYS) });
+        return saved;
+      });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
         throw new ConflictException('An extra with this name already exists');
@@ -101,6 +108,7 @@ export class MenuExtrasService {
         (await tx.menuExtra.count({ where: { id: { in: ids }, chainId } })) !== ids.length
       )
         throw new BadRequestException('Extras must be unique and in the same chain');
+      const previous = await tx.menuItemExtra.findMany({ where: { menuItemId }, select: { extraId: true, price: true }, orderBy: { extraId: 'asc' } });
       await tx.menuItem.update({ where: { id: menuItemId }, data: { maxExtras: dto.maxExtras } });
       await tx.menuItemExtra.deleteMany({ where: { menuItemId } });
       if (ids.length)
@@ -120,7 +128,10 @@ export class MenuExtrasService {
             })),
           ),
         });
-      return tx.menuItemExtra.findMany({ where: { menuItemId }, include: { extra: true } });
+      const saved = await tx.menuItemExtra.findMany({ where: { menuItemId }, include: { extra: true } });
+      const shape = (rows: { extraId: string; price: unknown }[]) => rows.map((r) => ({ extraId: r.extraId, price: String(r.price) })).sort((a, b) => a.extraId.localeCompare(b.extraId));
+      await writeChainAudit(tx, user, chainId, { action: 'MENU_ITEM_EXTRAS_CHANGED', entityType: 'MenuItem', entityId: menuItemId, before: { extras: shape(previous) }, after: { maxExtras: dto.maxExtras, extras: shape(saved) } });
+      return saved;
     });
     const branches = await this.prisma.branchMenuItem.findMany({
       where: { menuItemId },

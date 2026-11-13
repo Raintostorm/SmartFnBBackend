@@ -36,8 +36,10 @@ describe('Owner approval email', () => {
           return { id: emailId };
         },
       },
-      registrationApplication: { updateMany: async ({ data }) => { assert.equal(data.status, 'APPROVED'); assert.equal(data.approvedPlanId, 'basic'); return { count: 1 }; } },
+      registrationApplication: { updateMany: async ({ data }) => { assert.equal(data.status, 'APPROVED'); assert.equal(data.approvedPlanId, 'basic'); assert.equal(data.activationSentAt, null); return { count: 1 }; } },
+      platformSupportAction: { create: async ({ data }) => { supportActions.push(data); return data; } },
     };
+    const supportActions = [];
     const prisma = {
       registrationApplication: {
         findUnique: async ({ include }) =>
@@ -74,6 +76,7 @@ describe('Owner approval email', () => {
       },
     };
     const emails = {
+      sealSetupToken: (token) => `sealed:${token}`,
       deliver: async (id) => {
         assert.equal(committed, true);
         assert.equal(id, emailId);
@@ -89,8 +92,14 @@ describe('Owner approval email', () => {
     assert.equal(result.status, 'APPROVED');
     assert.equal(payload.employeeName, 'Test Owner');
     assert.equal(payload.setupPath, '/activate');
-    assert.ok(payload.setupToken);
+    assert.ok(payload.setupTokenEncrypted);
+    assert.equal(payload.setupToken, undefined);
     assert.equal(payload.planName, 'Basic');
+    // BR-06: the review decision is audited in the same transaction.
+    assert.equal(supportActions.length, 1);
+    assert.equal(supportActions[0].action, 'APPROVE_APPLICATION');
+    assert.equal(supportActions[0].actorUserId, 'admin-1');
+    assert.equal(supportActions[0].applicationId, 'application-1');
   });
 
   it('sends a one-time setup link through Resend and marks outbox SENT', async () => {
@@ -138,6 +147,33 @@ describe('Owner approval email', () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it('records activation link sent time only after Resend accepts the current link', async () => {
+    const originalFetch = globalThis.fetch;
+    const applicationUpdates = [];
+    let emailStatus;
+    const token = 'activation-token';
+    const prisma = {
+      emailOutbox: {
+        findUnique: async () => ({ id: 'activation-email', status: 'PENDING', template: 'REGISTRATION_ACTIVATION', recipient: 'owner@example.com', subject: 'Activate', payload: { businessName: 'Cafe', setupPath: '/activate', setupToken: token } }),
+        update: async ({ data }) => { emailStatus = data.status; },
+      },
+      registrationApplication: { updateMany: async (args) => { applicationUpdates.push(args); return { count: 1 }; } },
+    };
+    const config = { get: (name) => ({ EMAIL_API_KEY: 're_test', EMAIL_FROM: 'test@example.com', PUBLIC_WEB_URL: 'https://smartfnb.tech' })[name] };
+    try {
+      globalThis.fetch = async () => ({ ok: false, status: 503, text: async () => 'unavailable' });
+      assert.equal(await new EmailOutboxService(prisma, config).deliver('activation-email'), 'FAILED');
+      assert.equal(applicationUpdates.length, 0);
+      globalThis.fetch = async () => ({ ok: true });
+      assert.equal(await new EmailOutboxService(prisma, config).deliver('activation-email'), 'SENT');
+      assert.equal(emailStatus, 'SENT');
+      assert.equal(applicationUpdates.length, 1);
+      assert.equal(applicationUpdates[0].where.status, 'APPROVED');
+      assert.ok(applicationUpdates[0].where.activationTokenHash);
+      assert.ok(applicationUpdates[0].data.activationSentAt instanceof Date);
+    } finally { globalThis.fetch = originalFetch; }
   });
 
   it('uses a separate email body for trial reminders, without a setup-token URL', async () => {
