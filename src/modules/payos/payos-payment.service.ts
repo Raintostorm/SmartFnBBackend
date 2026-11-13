@@ -57,6 +57,29 @@ export class PayosPaymentService {
     private readonly refunds: PaidOrderRefundService,
   ) {}
 
+  async expireDuePayment(paymentId: string) {
+    const payment = await this.prisma.payment.findUnique({
+      where: { id: paymentId },
+      include: {
+        order: { include: { branch: { include: { chain: { include: { payosChannel: true } } } } } },
+      },
+    });
+    if (!payment?.order || payment.status !== PaymentStatus.PENDING) return payment;
+    const channel = payment.order.branch.chain.payosChannel;
+    if (!channel) throw new ConflictException('PayOS channel is not configured');
+    const credentials = {
+      clientId: this.cipher.decrypt(channel.clientIdCipher),
+      apiKey: this.cipher.decrypt(channel.apiKeyCipher),
+      checksumKey: this.cipher.decrypt(channel.checksumKeyCipher),
+    };
+    await this.api.cancelPayment(
+      credentials,
+      payment.transactionRef ?? payment.providerOrderCode!,
+      'Payment QR expired',
+    );
+    return this.settlement.markExpired(payment.id);
+  }
+
   async create(user: AuthenticatedUser, orderId: string, dto: CreatePayosPaymentDto) {
     if (!user.employeeId || !user.branchId)
       throw new ForbiddenException('An assigned employee profile is required');

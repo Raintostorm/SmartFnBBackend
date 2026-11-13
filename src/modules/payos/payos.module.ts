@@ -9,6 +9,7 @@ import { PayosWebhookController } from './payos-webhook.controller.js';
 import { PayosVerificationStore } from './payos-verification.store.js';
 import { PaymentsModule } from '../payments/payments.module.js';
 import { PayosReconciliationWorker } from './payos-reconciliation.worker.js';
+import { PaymentExpiryWorker } from '../payments/payment-expiry.worker.js';
 
 @Module({
   imports: [BranchesModule, PaymentsModule],
@@ -19,6 +20,7 @@ import { PayosReconciliationWorker } from './payos-reconciliation.worker.js';
     PayosApiService,
     PayosPaymentService,
     PayosReconciliationWorker,
+    PaymentExpiryWorker,
     PayosVerificationStore,
   ],
   exports: [PayosChannelService, PayosCipherService, PayosPaymentService],

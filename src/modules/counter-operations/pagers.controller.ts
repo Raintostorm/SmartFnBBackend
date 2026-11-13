@@ -38,7 +38,7 @@ export class PagersController {
     return this.service.change(user, id, dto.pagerNumber);
   }
   @Post(':orderId/pager/notify')
-  @Roles(AppRole.BARISTA, AppRole.MANAGER)
+  @Roles(AppRole.CASHIER, AppRole.BARISTA, AppRole.MANAGER)
   @ApiOperation({
     summary: 'Record that staff manually called the physical pager; no hardware signal is sent',
   })

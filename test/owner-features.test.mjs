@@ -326,7 +326,7 @@ describe('Owner staff administration', () => {
 
   it('refuses to lock a WAITER account', async () => {
     await assert.rejects(
-      employeesServiceFor(AppRole.WAITER).updateManagerAccountStatus(owner, 'employee-one', {
+      employeesServiceFor('WAITER').updateManagerAccountStatus(owner, 'employee-one', {
         status: UserStatus.SUSPENDED,
       }),
       (error) => error?.getStatus?.() === 403,
@@ -335,7 +335,7 @@ describe('Owner staff administration', () => {
 
   it('refuses to reset a KITCHEN password', async () => {
     await assert.rejects(
-      employeesServiceFor(AppRole.KITCHEN).resetManagerPassword(owner, 'employee-one'),
+      employeesServiceFor('KITCHEN').resetManagerPassword(owner, 'employee-one'),
       (error) => error?.getStatus?.() === 403,
     );
   });

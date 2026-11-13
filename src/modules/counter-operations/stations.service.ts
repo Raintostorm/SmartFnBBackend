@@ -20,6 +20,7 @@ import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
 import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
 import type { CreateStationDto, UpdateStationDto } from './dto/station.dto.js';
+import { writeBranchAudit } from '../branch-manager/manager-scope.js';
 
 const DISPLAY_TOKEN_LIFETIME_MS = 30 * 24 * 60 * 60_000;
 
@@ -351,36 +352,68 @@ export class StationsService {
   ) {
     const actor = this.employee(user);
     await this.branchAccess.assertSubscriptionAllowsWrite(actor.branchId);
-    return this.prisma.$transaction(async (tx) => {
-      const station = await tx.posStation.findFirst({
-        where: { id: stationId, branchId: actor.branchId, status: PosStationStatus.ACTIVE },
-      });
-      if (!station) throw new NotFoundException('Active station was not found in your branch');
-      const pairing = await tx.pairingCode.findUnique({ where: { codeHash: this.hash(code) } });
-      this.assertPairingCode(pairing, DisplayDeviceType.CUSTOMER_DISPLAY);
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const station = await tx.posStation.findFirst({
+          where: { id: stationId, branchId: actor.branchId, status: PosStationStatus.ACTIVE },
+        });
+        if (!station) throw new NotFoundException('Active station was not found in your branch');
+        if (station.pairingLockedUntil && station.pairingLockedUntil > new Date()) {
+          throw new HttpException(
+            {
+              code: 'PAIRING_LOCKED',
+              message: 'Pairing is locked for this station',
+              lockedUntil: station.pairingLockedUntil,
+            },
+            429,
+          );
+        }
+        const pairing = await tx.pairingCode.findUnique({ where: { codeHash: this.hash(code) } });
+        this.assertPairingCode(pairing, DisplayDeviceType.CUSTOMER_DISPLAY);
 
-      await tx.displayDevice.updateMany({
-        where: { stationId, type: DisplayDeviceType.CUSTOMER_DISPLAY, revokedAt: null },
-        data: { revokedAt: new Date() },
+        await tx.displayDevice.updateMany({
+          where: { stationId, type: DisplayDeviceType.CUSTOMER_DISPLAY, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+        const device = await tx.displayDevice.create({
+          data: {
+            type: DisplayDeviceType.CUSTOMER_DISPLAY,
+            branchId: actor.branchId,
+            stationId,
+            tokenHash: pairing.deviceTokenHash,
+            name: name?.trim(),
+            pairedById: actor.employeeId,
+            tokenExpiresAt: new Date(Date.now() + DISPLAY_TOKEN_LIFETIME_MS),
+          },
+        });
+        const consumed = await tx.pairingCode.updateMany({
+          where: { id: pairing.id, consumedAt: null, expiresAt: { gt: new Date() } },
+          data: { consumedAt: new Date() },
+        });
+        if (!consumed.count) throw new BadRequestException('Pairing code was already consumed');
+        await tx.posStation.update({
+          where: { id: stationId },
+          data: { pairingFailedAttempts: 0, pairingLockedUntil: null },
+        });
+        return { deviceId: device.id, stationId, branchId: actor.branchId };
       });
-      const device = await tx.displayDevice.create({
-        data: {
-          type: DisplayDeviceType.CUSTOMER_DISPLAY,
-          branchId: actor.branchId,
-          stationId,
-          tokenHash: pairing.deviceTokenHash,
-          name: name?.trim(),
-          pairedById: actor.employeeId,
-          tokenExpiresAt: new Date(Date.now() + DISPLAY_TOKEN_LIFETIME_MS),
-        },
-      });
-      const consumed = await tx.pairingCode.updateMany({
-        where: { id: pairing.id, consumedAt: null, expiresAt: { gt: new Date() } },
-        data: { consumedAt: new Date() },
-      });
-      if (!consumed.count) throw new BadRequestException('Pairing code was already consumed');
-      return { deviceId: device.id, stationId, branchId: actor.branchId };
-    });
+    } catch (error) {
+      const response = error instanceof BadRequestException ? error.getResponse() : null;
+      if (
+        typeof response === 'object' &&
+        response &&
+        'code' in response &&
+        response.code === 'PAIRING_CODE_INVALID'
+      ) {
+        const lockedUntil = await this.recordPairingFailure(user, stationId, actor.branchId);
+        if (lockedUntil)
+          throw new HttpException(
+            { code: 'PAIRING_LOCKED', message: 'Pairing is locked for this station', lockedUntil },
+            429,
+          );
+      }
+      throw error;
+    }
   }
 
   async pairCallingDisplay(user: AuthenticatedUser, code: string, name?: string) {
@@ -486,6 +519,38 @@ export class StationsService {
       for (const [entry, value] of this.pairingAttempts)
         if (value.resetAt <= now) this.pairingAttempts.delete(entry);
     }
+  }
+
+  private async recordPairingFailure(user: AuthenticatedUser, stationId: string, branchId: string) {
+    if (!this.prisma.posStation?.findFirst) return null;
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM pos_stations WHERE id = ${stationId}::uuid FOR UPDATE`;
+      const station = await tx.posStation.findFirst({
+        where: { id: stationId, branchId, status: PosStationStatus.ACTIVE },
+      });
+      if (!station) return null;
+      const attempts =
+        (station.pairingLockedUntil && station.pairingLockedUntil <= new Date()
+          ? 0
+          : station.pairingFailedAttempts) + 1;
+      const lockedUntil = attempts >= 5 ? new Date(Date.now() + 5 * 60_000) : null;
+      await tx.posStation.update({
+        where: { id: station.id },
+        data: {
+          pairingFailedAttempts: lockedUntil ? 0 : attempts,
+          pairingLockedUntil: lockedUntil,
+        },
+      });
+      if (lockedUntil)
+        await writeBranchAudit(tx, user, {
+          action: 'DISPLAY_PAIRING_LOCKED',
+          entityType: 'POS_STATION',
+          entityId: station.id,
+          reason: 'Five consecutive invalid pairing codes',
+          after: { lockedUntil },
+        });
+      return lockedUntil;
+    });
   }
 
   private async authenticateDisplayDevice(

@@ -315,10 +315,58 @@ export class RealtimeGateway implements OnGatewayConnection {
     };
     const text = (raw: unknown, max: number) =>
       typeof raw === 'string' && raw.trim() ? raw.trim().slice(0, max) : undefined;
+    const record = (raw: unknown) =>
+      raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+    const count = (raw: unknown, max: number) =>
+      Math.max(1, Math.min(max, Math.floor(Number(raw) || 1)));
+    // Chi tiết có cấu trúc cho màn hình khách: size, tuỳ chọn, topping, món trong combo.
+    const detailOptions = (raw: unknown) =>
+      Array.isArray(raw)
+        ? raw.slice(0, 20).flatMap((option) => {
+            const label = text(record(option).label, 100);
+            return label ? [{ label, isDefault: record(option).isDefault === true }] : [];
+          })
+        : [];
+    const detailToppings = (raw: unknown) =>
+      Array.isArray(raw)
+        ? raw.slice(0, 20).flatMap((topping) => {
+            const name = text(record(topping).name, 100);
+            return name ? [{ name, quantity: count(record(topping).quantity, 99) }] : [];
+          })
+        : [];
+    const detailOf = (raw: unknown) => {
+      if (!raw || typeof raw !== 'object') return undefined;
+      const detail = record(raw);
+      const size = text(detail.size, 50);
+      const components = Array.isArray(detail.components)
+        ? detail.components.slice(0, 20).flatMap((component) => {
+            const part = record(component);
+            const name = text(part.name, 150);
+            if (!name) return [];
+            const partSize = text(part.size, 50);
+            return [
+              {
+                name,
+                quantity: count(part.quantity, 99),
+                ...(partSize ? { size: partSize } : {}),
+                options: detailOptions(part.options),
+                toppings: detailToppings(part.toppings),
+              },
+            ];
+          })
+        : [];
+      return {
+        ...(size ? { size } : {}),
+        options: detailOptions(detail.options),
+        toppings: detailToppings(detail.toppings),
+        ...(components.length ? { components } : {}),
+      };
+    };
     const items = Array.isArray(input.items)
       ? input.items.slice(0, 100).map((raw, index) => {
-          const item = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-          const quantity = Math.max(1, Math.min(999, Math.floor(Number(item.quantity) || 1)));
+          const item = record(raw);
+          const quantity = count(item.quantity, 999);
+          const detail = detailOf(item.detail);
           const options = Array.isArray(item.options)
             ? item.options
                 .slice(0, 20)
@@ -332,6 +380,7 @@ export class RealtimeGateway implements OnGatewayConnection {
             unitPrice: money(item.unitPrice),
             lineTotal: money(item.lineTotal),
             options,
+            ...(detail ? { detail } : {}),
             ...(text(item.note, 500) ? { note: text(item.note, 500) } : {}),
           };
         })

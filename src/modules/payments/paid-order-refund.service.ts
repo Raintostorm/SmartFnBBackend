@@ -25,11 +25,12 @@ import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
 import { AppRole } from '../auth/app-role.enum.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { writeBranchAudit } from '../branch-manager/manager-scope.js';
-import type { CancelPaidOrderDto, CompleteRefundDto } from '../branch-manager/manager.dto.js';
+import type { CancelPaidOrderDto } from '../branch-manager/manager.dto.js';
 import type { RefundListQueryDto } from './dto/payment.dto.js';
 import type { CashierRefundDto } from './cashier-refunds.controller.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
 import { RefundDocumentsService } from '../receipt-documents/refund-documents.service.js';
+import { CashLedgerService } from './cash-ledger.service.js';
 
 const cancellableOrderStatuses = [
   OrderStatus.SUBMITTED,
@@ -56,6 +57,7 @@ export class PaidOrderRefundService {
     private readonly realtime: RealtimePublisher,
     private readonly branchAccess: BranchAccessService,
     @Optional() private readonly refundDocuments?: RefundDocumentsService,
+    @Optional() private readonly ledger?: CashLedgerService,
   ) {}
 
   async listRefunds(user: AuthenticatedUser, query: RefundListQueryDto) {
@@ -105,7 +107,34 @@ export class PaidOrderRefundService {
       }),
       this.prisma.refund.count({ where }),
     ]);
-    return { items, total, page: query.page, limit: query.limit };
+    const actorIds = [
+      ...new Set(
+        items
+          .flatMap((refund) => [refund.requestedByEmployeeId, refund.completedByEmployeeId])
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    const actors = actorIds.length
+      ? await this.prisma.employee.findMany({
+          where: { id: { in: actorIds } },
+          select: { id: true, employeeCode: true, firstName: true, lastName: true },
+        })
+      : [];
+    const actorById = new Map(actors.map((actor) => [actor.id, actor]));
+    return {
+      items: items.map((refund) => ({
+        ...refund,
+        requestedBy: refund.requestedByEmployeeId
+          ? (actorById.get(refund.requestedByEmployeeId) ?? null)
+          : null,
+        completedBy: refund.completedByEmployeeId
+          ? (actorById.get(refund.completedByEmployeeId) ?? null)
+          : null,
+      })),
+      total,
+      page: query.page,
+      limit: query.limit,
+    };
   }
 
   async recordLatePayosPayment(
@@ -224,71 +253,124 @@ export class PaidOrderRefundService {
       throw new ForbiddenException('Assigned Cashier required');
     const reason = dto.reasonCode + (dto.note?.trim() ? ': ' + dto.note.trim() : '');
     if (
-      !['CHANGE_OF_MIND', 'WRONG_ITEM', 'OUT_OF_STOCK', 'LONG_WAIT', 'OTHER'].includes(dto.reasonCode) ||
+      !['CHANGE_OF_MIND', 'WRONG_ITEM', 'OUT_OF_STOCK', 'LONG_WAIT', 'OTHER'].includes(
+        dto.reasonCode,
+      ) ||
       (dto.reasonCode === 'OTHER' && (dto.note?.trim().length ?? 0) < 5)
-    ) throw new BadRequestException('Valid refund reason required');
+    )
+      throw new BadRequestException('Valid refund reason required');
     const requestedIds = [...new Set(dto.items?.map((item) => item.orderItemId) ?? [])];
-    const request = await this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM orders WHERE id = ${orderId}::uuid FOR UPDATE`;
-      const order = await tx.order.findFirst({
-        where: { id: orderId, branchId: user.branchId!, type: OrderType.COUNTER_PICKUP },
-        include: {
-          branch: { select: { timezone: true } },
-          items: { include: { refundItems: { select: { id: true } } } },
-          payments: { where: { status: { in: [PaymentStatus.SUCCESS, PaymentStatus.AMOUNT_MISMATCH, PaymentStatus.REQUIRES_ATTENTION] } }, orderBy: [{ status: 'desc' }, { createdAt: 'desc' }] },
-          refunds: { select: { amount: true, paymentId: true } },
-        },
-      });
-      if (!order) throw new NotFoundException('Counter order not found in your branch');
-      const payment = order.payments[0];
-      if (!payment) throw new ConflictException('Order has no received payment');
-      const paidAt = payment.paidAt ?? order.paidAt;
-      if (!paidAt) throw new ConflictException('Payment has no received date');
-      if (this.businessDate(order.branch.timezone, paidAt).getTime() === this.businessDate(order.branch.timezone, new Date()).getTime())
-        throw new ConflictException('Today’s paid order can be refunded directly by Cashier');
-      const existing = await tx.refundApprovalRequest.findFirst({
-        where: { orderId, status: { in: [RefundApprovalStatus.PENDING, RefundApprovalStatus.APPROVED] } },
-        select: { id: true },
-      });
-      if (existing) throw new ConflictException('An open refund request already exists for this order');
-      const lateReturn = payment.status === PaymentStatus.REQUIRES_ATTENTION && order.status === OrderStatus.CANCELLED &&
-        ['PAYMENT_RECEIVED_AFTER_CANCELLATION', 'PAYMENT_RECEIVED_AFTER_SWITCH_TO_CASH'].includes(payment.failureReason ?? '');
-      if (payment.status !== PaymentStatus.SUCCESS && requestedIds.length)
-        throw new ConflictException('An underpaid or late payment must be refunded in full');
-      const activeRoots = order.items.filter((item) => !item.parentId && item.status !== OrderItemStatus.CANCELLED && item.refundItems.length === 0);
-      const selected = requestedIds.length ? activeRoots.filter((item) => requestedIds.includes(item.id)) : activeRoots;
-      if ((!lateReturn && !selected.length) || (requestedIds.length && selected.length !== requestedIds.length))
-        throw new ConflictException('One or more order lines are unavailable for refund');
-      const received = payment.receivedAmount ?? payment.amount;
-      const refunded = order.refunds.filter((item) => item.paymentId === payment.id).reduce((sum, item) => sum.add(item.amount), new Prisma.Decimal(0));
-      const balance = received.sub(refunded);
-      const selectedTotal = selected.reduce((sum, item) => sum.add(item.totalPrice), new Prisma.Decimal(0));
-      const amount = requestedIds.length ? Prisma.Decimal.min(selectedTotal, balance) : balance;
-      if (amount.lte(0)) throw new ConflictException('No refundable balance remains');
-      const created = await tx.refundApprovalRequest.create({
-        data: {
-          orderId,
-          branchId: user.branchId!,
-          orderItemIds: requestedIds,
-          amount,
+    const request = await this.prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT id FROM orders WHERE id = ${orderId}::uuid FOR UPDATE`;
+        const order = await tx.order.findFirst({
+          where: { id: orderId, branchId: user.branchId!, type: OrderType.COUNTER_PICKUP },
+          include: {
+            branch: { select: { timezone: true } },
+            items: { include: { refundItems: { select: { id: true } } } },
+            payments: {
+              where: {
+                status: {
+                  in: [
+                    PaymentStatus.SUCCESS,
+                    PaymentStatus.AMOUNT_MISMATCH,
+                    PaymentStatus.REQUIRES_ATTENTION,
+                  ],
+                },
+              },
+              orderBy: [{ status: 'desc' }, { createdAt: 'desc' }],
+            },
+            refunds: { select: { amount: true, paymentId: true } },
+          },
+        });
+        if (!order) throw new NotFoundException('Counter order not found in your branch');
+        const payment = order.payments[0];
+        if (!payment) throw new ConflictException('Order has no received payment');
+        const paidAt = payment.paidAt ?? order.paidAt;
+        if (!paidAt) throw new ConflictException('Payment has no received date');
+        if (
+          this.businessDate(order.branch.timezone, paidAt).getTime() ===
+          this.businessDate(order.branch.timezone, new Date()).getTime()
+        )
+          throw new ConflictException('Today’s paid order can be refunded directly by Cashier');
+        const existing = await tx.refundApprovalRequest.findFirst({
+          where: {
+            orderId,
+            status: { in: [RefundApprovalStatus.PENDING, RefundApprovalStatus.APPROVED] },
+          },
+          select: { id: true },
+        });
+        if (existing)
+          throw new ConflictException('An open refund request already exists for this order');
+        const lateReturn =
+          payment.status === PaymentStatus.REQUIRES_ATTENTION &&
+          order.status === OrderStatus.CANCELLED &&
+          ['PAYMENT_RECEIVED_AFTER_CANCELLATION', 'PAYMENT_RECEIVED_AFTER_SWITCH_TO_CASH'].includes(
+            payment.failureReason ?? '',
+          );
+        if (payment.status !== PaymentStatus.SUCCESS && requestedIds.length)
+          throw new ConflictException('An underpaid or late payment must be refunded in full');
+        const activeRoots = order.items.filter(
+          (item) =>
+            !item.parentId &&
+            item.status !== OrderItemStatus.CANCELLED &&
+            item.refundItems.length === 0,
+        );
+        const selected = requestedIds.length
+          ? activeRoots.filter((item) => requestedIds.includes(item.id))
+          : activeRoots;
+        if (
+          (!lateReturn && !selected.length) ||
+          (requestedIds.length && selected.length !== requestedIds.length)
+        )
+          throw new ConflictException('One or more order lines are unavailable for refund');
+        const received = payment.receivedAmount ?? payment.amount;
+        const refunded = order.refunds
+          .filter((item) => item.paymentId === payment.id)
+          .reduce((sum, item) => sum.add(item.amount), new Prisma.Decimal(0));
+        const balance = received.sub(refunded);
+        const selectedTotal = selected.reduce(
+          (sum, item) => sum.add(item.totalPrice),
+          new Prisma.Decimal(0),
+        );
+        const amount = requestedIds.length ? Prisma.Decimal.min(selectedTotal, balance) : balance;
+        if (amount.lte(0)) throw new ConflictException('No refundable balance remains');
+        const created = await tx.refundApprovalRequest.create({
+          data: {
+            orderId,
+            branchId: user.branchId!,
+            orderItemIds: requestedIds,
+            amount,
+            reason,
+            reasonCode: dto.reasonCode,
+            requestedByUserId: user.id,
+            requestedByEmployeeId: user.employeeId!,
+          },
+        });
+        await writeBranchAudit(tx, user, {
+          action: 'REFUND_APPROVAL_REQUESTED',
+          entityType: 'REFUND_APPROVAL_REQUEST',
+          entityId: created.id,
           reason,
-          reasonCode: dto.reasonCode,
-          requestedByUserId: user.id,
-          requestedByEmployeeId: user.employeeId!,
-        },
-      });
-      await writeBranchAudit(tx, user, {
-        action: 'REFUND_APPROVAL_REQUESTED', entityType: 'REFUND_APPROVAL_REQUEST', entityId: created.id,
-        reason, after: { orderId, amount: amount.toString(), orderItemIds: requestedIds },
-      });
-      return created;
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
-    this.realtime.branch(user.branchId, 'refund.approval-requested', { requestId: request.id, orderId });
+          after: { orderId, amount: amount.toString(), orderItemIds: requestedIds },
+        });
+        return created;
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+    this.realtime.branch(user.branchId, 'refund.approval-requested', {
+      requestId: request.id,
+      orderId,
+    });
     return request;
   }
 
   async listRefundApprovalRequests(user: AuthenticatedUser) {
-    if (![AppRole.CASHIER, AppRole.MANAGER].includes(user.role) || !user.branchId || !user.employeeId)
+    if (
+      ![AppRole.CASHIER, AppRole.MANAGER].includes(user.role) ||
+      !user.branchId ||
+      !user.employeeId
+    )
       throw new ForbiddenException('Assigned branch staff required');
     return this.prisma.refundApprovalRequest.findMany({
       where: { branchId: user.branchId },
@@ -298,41 +380,80 @@ export class PaidOrderRefundService {
     });
   }
 
-  async reviewRefundApproval(user: AuthenticatedUser, requestId: string, approved: boolean, note?: string) {
+  async reviewRefundApproval(
+    user: AuthenticatedUser,
+    requestId: string,
+    approved: boolean,
+    note?: string,
+  ) {
     if (user.role !== AppRole.MANAGER || !user.branchId || !user.employeeId)
       throw new ForbiddenException('Assigned Store Manager required');
-    const updated = await this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM refund_approval_requests WHERE id = ${requestId}::uuid FOR UPDATE`;
-      const request = await tx.refundApprovalRequest.findFirst({ where: { id: requestId, branchId: user.branchId! } });
-      if (!request) throw new NotFoundException('Refund request not found in your branch');
-      if (request.status !== RefundApprovalStatus.PENDING && !(request.status === RefundApprovalStatus.APPROVED && !approved))
-        throw new ConflictException('Refund request can no longer be reviewed');
-      const nextStatus = approved ? RefundApprovalStatus.APPROVED : RefundApprovalStatus.REJECTED;
-      const next = await tx.refundApprovalRequest.update({
-        where: { id: requestId },
-        data: { status: nextStatus, reviewedByUserId: user.id, reviewedByEmployeeId: user.employeeId!, reviewedAt: new Date(), reviewNote: note?.trim() || null },
-      });
-      await writeBranchAudit(tx, user, {
-        action: approved ? 'REFUND_APPROVAL_APPROVED' : 'REFUND_APPROVAL_REJECTED',
-        entityType: 'REFUND_APPROVAL_REQUEST', entityId: requestId,
-        reason: note, before: { status: request.status }, after: { status: nextStatus },
-      });
-      return next;
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
-    this.realtime.branch(user.branchId, 'refund.approval-reviewed', { requestId, orderId: updated.orderId, status: updated.status });
+    const updated = await this.prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT id FROM refund_approval_requests WHERE id = ${requestId}::uuid FOR UPDATE`;
+        const request = await tx.refundApprovalRequest.findFirst({
+          where: { id: requestId, branchId: user.branchId! },
+        });
+        if (!request) throw new NotFoundException('Refund request not found in your branch');
+        if (
+          request.status !== RefundApprovalStatus.PENDING &&
+          !(request.status === RefundApprovalStatus.APPROVED && !approved)
+        )
+          throw new ConflictException('Refund request can no longer be reviewed');
+        const nextStatus = approved ? RefundApprovalStatus.APPROVED : RefundApprovalStatus.REJECTED;
+        const next = await tx.refundApprovalRequest.update({
+          where: { id: requestId },
+          data: {
+            status: nextStatus,
+            reviewedByUserId: user.id,
+            reviewedByEmployeeId: user.employeeId!,
+            reviewedAt: new Date(),
+            reviewNote: note?.trim() || null,
+          },
+        });
+        await writeBranchAudit(tx, user, {
+          action: approved ? 'REFUND_APPROVAL_APPROVED' : 'REFUND_APPROVAL_REJECTED',
+          entityType: 'REFUND_APPROVAL_REQUEST',
+          entityId: requestId,
+          reason: note,
+          before: { status: request.status },
+          after: { status: nextStatus },
+        });
+        return next;
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+    this.realtime.branch(user.branchId, 'refund.approval-reviewed', {
+      requestId,
+      orderId: updated.orderId,
+      status: updated.status,
+    });
     return updated;
   }
 
   async completeApprovedRefund(user: AuthenticatedUser, requestId: string) {
     if (user.role !== AppRole.CASHIER || !user.branchId || !user.employeeId)
       throw new ForbiddenException('Assigned Cashier required');
-    const request = await this.prisma.refundApprovalRequest.findFirst({ where: { id: requestId, branchId: user.branchId } });
+    const request = await this.prisma.refundApprovalRequest.findFirst({
+      where: { id: requestId, branchId: user.branchId },
+    });
     if (!request) throw new NotFoundException('Refund request not found in your branch');
-    if (request.status !== RefundApprovalStatus.APPROVED) throw new ConflictException('Refund request is not approved');
-    const ids = Array.isArray(request.orderItemIds) ? request.orderItemIds.filter((id): id is string => typeof id === 'string') : [];
-    return this.cancelPaidOrder(user, request.orderId, {
-      refundMethod: RefundMethod.CASH, reasonCode: request.reasonCode, reason: request.reason, orderItemIds: ids,
-    }, requestId);
+    if (request.status !== RefundApprovalStatus.APPROVED)
+      throw new ConflictException('Refund request is not approved');
+    const ids = Array.isArray(request.orderItemIds)
+      ? request.orderItemIds.filter((id): id is string => typeof id === 'string')
+      : [];
+    return this.cancelPaidOrder(
+      user,
+      request.orderId,
+      {
+        refundMethod: RefundMethod.CASH,
+        reasonCode: request.reasonCode,
+        reason: request.reason,
+        orderItemIds: ids,
+      },
+      requestId,
+    );
   }
 
   async refundReceipt(user: AuthenticatedUser, orderId: string, refundId: string) {
@@ -350,7 +471,12 @@ export class PaidOrderRefundService {
     return refund;
   }
 
-  async cancelPaidOrder(user: AuthenticatedUser, orderId: string, dto: CancelPaidOrderDto, approvalRequestId?: string) {
+  async cancelPaidOrder(
+    user: AuthenticatedUser,
+    orderId: string,
+    dto: CancelPaidOrderDto,
+    approvalRequestId?: string,
+  ) {
     if (
       ![AppRole.MANAGER, AppRole.CASHIER].includes(user.role) ||
       !user.branchId ||
@@ -373,15 +499,23 @@ export class PaidOrderRefundService {
     const requestedItemIds = [...new Set(dto.orderItemIds ?? [])];
     const result = await this.prisma.$transaction(
       async (tx) => {
-        const approval = approvalRequestId ? await (async () => {
-          await tx.$queryRaw`SELECT id FROM refund_approval_requests WHERE id = ${approvalRequestId}::uuid FOR UPDATE`;
-          const request = await tx.refundApprovalRequest.findFirst({ where: { id: approvalRequestId, branchId, orderId } });
-          if (!request || request.status !== RefundApprovalStatus.APPROVED) throw new ConflictException('Refund request is no longer approved');
-          const ids = Array.isArray(request.orderItemIds) ? request.orderItemIds : [];
-          if (JSON.stringify(ids) !== JSON.stringify(requestedItemIds) || request.reason !== dto.reason)
-            throw new ConflictException('Refund request details have changed');
-          return request;
-        })() : null;
+        const approval = approvalRequestId
+          ? await (async () => {
+              await tx.$queryRaw`SELECT id FROM refund_approval_requests WHERE id = ${approvalRequestId}::uuid FOR UPDATE`;
+              const request = await tx.refundApprovalRequest.findFirst({
+                where: { id: approvalRequestId, branchId, orderId },
+              });
+              if (!request || request.status !== RefundApprovalStatus.APPROVED)
+                throw new ConflictException('Refund request is no longer approved');
+              const ids = Array.isArray(request.orderItemIds) ? request.orderItemIds : [];
+              if (
+                JSON.stringify(ids) !== JSON.stringify(requestedItemIds) ||
+                request.reason !== dto.reason
+              )
+                throw new ConflictException('Refund request details have changed');
+              return request;
+            })()
+          : null;
         const candidate = await tx.payment.findFirst({
           where: {
             orderId,
@@ -420,14 +554,15 @@ export class PaidOrderRefundService {
         const order = await tx.order.findFirst({
           where: { id: orderId, branchId, type: OrderType.COUNTER_PICKUP },
           include: {
-            branch: { select: { timezone: true } },
+            branch: { select: { timezone: true, chainId: true } },
             items: { include: { units: true, refundItems: { select: { id: true } } } },
             refunds: { select: { amount: true, paymentId: true } },
           },
         });
         if (!order) throw new NotFoundException('Counter order was not found in your branch');
         if (
-          user.role === AppRole.CASHIER && !approval &&
+          user.role === AppRole.CASHIER &&
+          !approval &&
           (!order.paidAt ||
             this.businessDate('Asia/Ho_Chi_Minh', order.paidAt).getTime() !==
               this.businessDate('Asia/Ho_Chi_Minh', new Date()).getTime())
@@ -632,10 +767,28 @@ export class PaidOrderRefundService {
           },
           include: refundInclude,
         });
+        if (completedImmediately && this.ledger) {
+          await this.ledger.recordRefund(tx, {
+            branchId: order.branchId,
+            chainId: order.branch.chainId,
+            orderId: order.id,
+            paymentId: payment.id,
+            refundId: refund.id,
+            amount: refund.amount,
+            method: payment.method,
+            occurredAt: now,
+          });
+        }
         if (approval) {
           await tx.refundApprovalRequest.update({
             where: { id: approval.id },
-            data: { status: RefundApprovalStatus.COMPLETED, refundId: refund.id, completedByUserId: user.id, completedByEmployeeId: employeeId, completedAt: now },
+            data: {
+              status: RefundApprovalStatus.COMPLETED,
+              refundId: refund.id,
+              completedByUserId: user.id,
+              completedByEmployeeId: employeeId,
+              completedAt: now,
+            },
           });
         }
         if (lateReturn) {
@@ -690,65 +843,6 @@ export class PaidOrderRefundService {
       ? await this.refundDocuments.generateAfterCommit(result.refund.id)
       : { id: null, status: 'DISABLED' };
     return { ...result, refundDocument };
-  }
-
-  async completeRefund(user: AuthenticatedUser, refundId: string, dto: CompleteRefundDto) {
-    if (user.role !== AppRole.OWNER) {
-      throw new ForbiddenException('Only the Owner can settle a legacy bank-transfer refund');
-    }
-    const scopedRefund = await this.prisma.refund.findUnique({
-      where: { id: refundId },
-      select: { order: { select: { branchId: true } } },
-    });
-    if (!scopedRefund) throw new NotFoundException('Refund not found');
-    await this.assertRefundAccess(user, scopedRefund.order.branchId);
-    const result = await this.prisma.$transaction(
-      async (tx) => {
-        await tx.$queryRaw`SELECT id FROM refunds WHERE id = ${refundId}::uuid FOR UPDATE`;
-        const refund = await tx.refund.findUnique({
-          where: { id: refundId },
-          include: { order: { select: { branchId: true } }, ...refundInclude },
-        });
-        if (!refund) throw new NotFoundException('Refund not found');
-        if (refund.status !== RefundStatus.PENDING) {
-          throw new ConflictException('Only a pending refund can be completed');
-        }
-        if (refund.method !== RefundMethod.BANK_TRANSFER) {
-          throw new ConflictException('Cash refunds are completed when the order is cancelled');
-        }
-        const now = new Date();
-        const updated = await tx.refund.update({
-          where: { id: refund.id },
-          data: {
-            status: RefundStatus.COMPLETED,
-            completedByUserId: user.id,
-            completedByEmployeeId: user.employeeId,
-            completedByRole: user.role,
-            completedAt: now,
-            note: dto.note || null,
-          },
-          include: refundInclude,
-        });
-        if (user.role === AppRole.MANAGER) {
-          await writeBranchAudit(tx, user, {
-            action: 'REFUND_COMPLETED',
-            entityType: 'REFUND',
-            entityId: refund.id,
-            reason: dto.note,
-            before: { status: refund.status },
-            after: { status: RefundStatus.COMPLETED, method: refund.method },
-          });
-        }
-        return { branchId: refund.order.branchId, refund: updated };
-      },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-    );
-    this.realtime.branch(result.branchId, 'refund.completed', {
-      refundId: result.refund.id,
-      orderId: result.refund.orderId,
-      amount: result.refund.amount.toString(),
-    });
-    return result.refund;
   }
 
   private deriveOrderStatus(items: Array<{ status: OrderItemStatus }>) {

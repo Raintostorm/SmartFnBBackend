@@ -24,7 +24,7 @@ export class PagersService {
     pagerNumber: number | null,
     notify = false,
   ) {
-    const roles = notify ? ['BARISTA', 'MANAGER'] : ['CASHIER', 'MANAGER'];
+    const roles = notify ? ['CASHIER', 'BARISTA', 'MANAGER'] : ['CASHIER', 'MANAGER'];
     if (!roles.includes(user.role) || !user.branchId || !user.employeeId)
       throw new ForbiddenException('Assigned branch staff required');
     if (

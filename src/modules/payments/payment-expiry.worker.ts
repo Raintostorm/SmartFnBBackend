@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { ConfigService } from '@nestjs/config';
 import { PaymentProvider, PaymentStatus } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
-import { CounterPaymentSettlementService } from './counter-payment-settlement.service.js';
+import { PayosPaymentService } from '../payos/payos-payment.service.js';
 
 @Injectable()
 export class PaymentExpiryWorker implements OnModuleInit, OnModuleDestroy {
@@ -12,7 +12,7 @@ export class PaymentExpiryWorker implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly settlement: CounterPaymentSettlementService,
+    private readonly payos: PayosPaymentService,
     private readonly config: ConfigService,
   ) {}
 
@@ -44,9 +44,19 @@ export class PaymentExpiryWorker implements OnModuleInit, OnModuleDestroy {
         orderBy: { expiresAt: 'asc' },
         take: batchSize,
       });
-      for (const payment of expired) await this.settlement.markExpired(payment.id);
+      let processed = 0;
+      for (const payment of expired) {
+        try {
+          await this.payos.expireDuePayment(payment.id);
+          processed += 1;
+        } catch (error) {
+          this.logger.warn(
+            `Could not cancel expired PayOS payment ${payment.id}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
       if (expired.length) this.logger.log(`Expired ${expired.length} PayOS payment(s)`);
-      return expired.length;
+      return processed;
     } catch (error) {
       this.logger.error(
         'Failed to expire PayOS payments',

@@ -11,6 +11,7 @@ import { StationsService } from './stations.service.js';
 import { PayosModule } from '../payos/payos.module.js';
 import { OrderTrackingModule } from '../order-tracking/order-tracking.module.js';
 import { ReceiptDocumentsModule } from '../receipt-documents/receipt-documents.module.js';
+import { CashLedgerModule } from '../payments/cash-ledger.module.js';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { ReceiptDocumentsModule } from '../receipt-documents/receipt-documents.m
     PayosModule,
     OrderTrackingModule,
     ReceiptDocumentsModule,
+    CashLedgerModule,
   ],
   controllers: [PagersController, CashierController, BaristaController, StationsController],
   providers: [PagersService, CounterOperationsService, StationsService],

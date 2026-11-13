@@ -34,7 +34,7 @@ describe('BranchesService role scopes', () => {
     };
     const service = new BranchesService(prisma, branchAccess);
 
-    await service.listBranches(authenticatedUser(AppRole.WAITER, 'branch-one'), {
+    await service.listBranches(authenticatedUser(AppRole.CASHIER, 'branch-one'), {
       chainId: 'ignored-for-staff',
     });
 
@@ -58,7 +58,7 @@ describe('BranchesService role scopes', () => {
     );
   });
 
-  it('shows only dining/pickup to WAITER and kitchen/bar to KITCHEN', async () => {
+  it('shows cashier/pickup to CASHIER and kitchen/bar to BARISTA', async () => {
     const areaFilters = [];
     const prisma = {
       branch: { count: async () => 1 },
@@ -72,14 +72,14 @@ describe('BranchesService role scopes', () => {
     const branchAccess = { assertCanAccessBranch: async () => undefined };
     const service = new BranchesService(prisma, branchAccess);
 
-    await service.listAreas('branch-one', authenticatedUser(AppRole.WAITER, 'branch-one'));
-    await service.listAreas('branch-one', authenticatedUser(AppRole.KITCHEN, 'branch-one'));
+    await service.listAreas('branch-one', authenticatedUser(AppRole.CASHIER, 'branch-one'));
+    await service.listAreas('branch-one', authenticatedUser(AppRole.BARISTA, 'branch-one'));
 
-    assert.deepEqual(areaFilters[0], [BranchAreaType.DINING, BranchAreaType.PICKUP]);
+    assert.deepEqual(areaFilters[0], [BranchAreaType.CASHIER, BranchAreaType.PICKUP]);
     assert.deepEqual(areaFilters[1], [BranchAreaType.KITCHEN, BranchAreaType.BAR]);
   });
 
-  it('allows KITCHEN to change only kitchen/bar area status', async () => {
+  it('allows BARISTA to change only kitchen/bar area status', async () => {
     let updateCount = 0;
     const prisma = {
       branchArea: {
@@ -96,10 +96,10 @@ describe('BranchesService role scopes', () => {
     };
     const branchAccess = { assertCanAccessBranch: async () => undefined };
     const service = new BranchesService(prisma, branchAccess);
-    const kitchen = authenticatedUser(AppRole.KITCHEN, 'branch-one');
+    const barista = authenticatedUser(AppRole.BARISTA, 'branch-one');
 
     await assert.rejects(
-      service.updateAreaStatus('branch-one', 'dining-area', BranchAreaStatus.INACTIVE, kitchen),
+      service.updateAreaStatus('branch-one', 'dining-area', BranchAreaStatus.INACTIVE, barista),
       (error) => error?.getStatus?.() === 403,
     );
 
@@ -107,12 +107,12 @@ describe('BranchesService role scopes', () => {
       'branch-one',
       'kitchen-area',
       BranchAreaStatus.INACTIVE,
-      kitchen,
+      barista,
     );
     assert.equal(updateCount, 1);
   });
 
-  it('rejects WAITER from changing area status even when called outside the controller', async () => {
+  it('rejects CASHIER from changing area status even when called outside the controller', async () => {
     const service = new BranchesService({}, {});
 
     await assert.rejects(
@@ -120,7 +120,7 @@ describe('BranchesService role scopes', () => {
         'branch-one',
         'dining-area',
         BranchAreaStatus.INACTIVE,
-        authenticatedUser(AppRole.WAITER, 'branch-one'),
+        authenticatedUser(AppRole.CASHIER, 'branch-one'),
       ),
       (error) => error?.getStatus?.() === 403,
     );

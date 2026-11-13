@@ -15,7 +15,7 @@ describe('PayOS payment expiry worker', () => {
           },
         },
       },
-      { markExpired: async (id) => expired.push(id) },
+      { expireDuePayment: async (id) => expired.push(id) },
       { get: (name, fallback) => (name === 'PAYMENT_EXPIRY_BATCH_SIZE' ? 25 : fallback) },
     );
     assert.equal(await worker.runOnce(), 2);

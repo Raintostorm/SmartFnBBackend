@@ -38,15 +38,21 @@ export const SWAGGER_TAGS = [
   ['Public order tracking', 'Trang công khai chỉ trả số gọi và trạng thái nhận món qua token.'],
   ['Counter · Pagers', 'Assign and record physical pager calls.'],
   ['Cashier · Cash refunds', 'Same-day cash refunds and receipt data.'],
-  ['Cashier · Refund approvals', 'Cashier gửi yêu cầu hoàn tiền ngày trước và xác nhận sau khi trả tiền mặt.'],
+  [
+    'Cashier · Refund approvals',
+    'Cashier gửi yêu cầu hoàn tiền ngày trước và xác nhận sau khi trả tiền mặt.',
+  ],
   ['Cashier · Orders', 'Cashier tạo, sửa, chốt, hủy và in lại đơn tại quầy.'],
   ['Cashier · Payments', 'Cashier thu tiền mặt hoặc tạo thanh toán QR PayOS.'],
   ['Cashier receipt documents', 'PDF biên nhận bất biến để xem lại và in từ lịch sử đơn quầy.'],
-  ['Cashier refund documents', 'PDF phiếu hoàn tiền bất biến (mỗi khoản hoàn một PDF), ảnh in và nhật ký in lại.'],
+  [
+    'Cashier refund documents',
+    'PDF phiếu hoàn tiền bất biến (mỗi khoản hoàn một PDF), ảnh in và nhật ký in lại.',
+  ],
   ['Barista · Queue', 'Barista nhận mẻ, pha chế, hoàn tác và giao đơn.'],
   ['Barista · Availability', 'Barista báo hết món hoặc tùy chọn tại chi nhánh.'],
   ['Payments', 'Lịch sử thanh toán tại quầy và xác nhận chuyển khoản.'],
-  ['Shifts and work sessions', 'Ca làm việc, phân ca và chấm công.'],
+  ['Cash ledger', 'Sổ thu/hoàn tiền bất biến theo chi nhánh hoặc chuỗi.'],
   ['PayOS webhook', 'Webhook công khai; dữ liệu chỉ được xử lý khi chữ ký PayOS hợp lệ.'],
 ] as const;
 
