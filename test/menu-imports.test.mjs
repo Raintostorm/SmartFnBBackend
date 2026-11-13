@@ -108,10 +108,16 @@ describe('Menu imports', () => {
 
     try {
       const service = new MenuImportsService({}, {});
-      const result = await service.runAi({ texts: ['Cà phê sữa 25.000'] });
+      const result = await service.runAi({
+        texts: ['Cà phê sữa 25.000'],
+        categories: [{ id: 'category-1', name: 'Cà phê' }],
+        items: [{ id: 'item-1', categoryId: 'category-1', name: 'CÀ PHÊ SỮA', price: 25000 }],
+      });
       const body = JSON.parse(request.options.body);
 
-      assert.deepEqual(result, draft);
+      assert.equal(result.categories[0].items[0].action, 'SKIP');
+      assert.equal(result.categories[0].items[0].existingItemId, 'item-1');
+      assert.equal(body.messages[1].content, 'Cà phê sữa 25.000');
       assert.equal(request.url, 'http://127.0.0.1:11435/v1/chat/completions');
       assert.equal(request.options.headers.Authorization, 'Bearer qwen-test-key');
       assert.equal(body.model, 'qwen3.5:4b');
@@ -176,19 +182,11 @@ describe('Menu imports', () => {
     const service = new MenuImportsService({}, {});
     const chunks = service.chunkOcrText(['A'.repeat(3200)]);
     const merged = service.mergeQwenDrafts([draft, draft]);
-    const relevant = service.relevantExistingItems(
-      [
-        { id: 'coffee', name: 'Cà phê sữa', price: 25000 },
-        { id: 'tea', name: 'Trà đào', price: 30000 },
-      ],
-      'CÀ PHÊ SỮA 25.000',
-    );
 
     assert.equal(chunks.length, 3);
     assert.ok(chunks.every((chunk) => chunk.length <= 1500));
     assert.equal(merged.categories.length, 1);
     assert.equal(merged.categories[0].items.length, 1);
-    assert.deepEqual(relevant.map((item) => item.id), ['coffee']);
   });
 
   it('rejects an upload before saving files when the Qwen gateway is not configured', async () => {

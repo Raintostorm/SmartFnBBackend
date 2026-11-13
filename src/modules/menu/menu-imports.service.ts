@@ -61,24 +61,11 @@ const draftSchema = {
             items: {
               type: 'object',
               additionalProperties: false,
-              required: [
-                'name',
-                'description',
-                'price',
-                'action',
-                'existingItemId',
-                'branchIds',
-                'sizes',
-                'extras',
-                'warning',
-              ],
+              required: ['name', 'price'],
               properties: {
                 name: { type: 'string' },
                 description: { type: 'string' },
                 price: { type: 'integer', minimum: 0 },
-                action: { type: 'string', enum: ['CREATE', 'UPDATE_PRICE', 'SKIP'] },
-                existingItemId: { type: 'string' },
-                branchIds: { type: 'array', items: { type: 'string' } },
                 sizes: {
                   type: 'array',
                   items: {
@@ -382,21 +369,14 @@ export class MenuImportsService implements OnModuleInit {
     const drafts: MenuImportDraft[] = [];
 
     for (const chunk of chunks) {
-      const chunkContext = {
-        ...source,
-        texts: [chunk],
-        categories: Array.isArray(source.categories) ? source.categories.slice(0, 100) : [],
-        items: this.relevantExistingItems(source.items, chunk),
-        branches: Array.isArray(source.branches) ? source.branches.slice(0, 100) : [],
-      };
       const text = await this.requestQwen(
         [
           {
             role: 'system',
             content:
-              'Structure this part of Vietnamese OCR text into a compact menu draft. Never invent names or prices. Use only supplied branch and existing item IDs. Convert k and dotted VND prices to integer VND. Put uncertain lines in unresolved and warning. For duplicate items choose UPDATE_PRICE when price differs, otherwise SKIP. Keep description, sizes, extras, and warning empty unless explicitly present in this OCR part. Do not repeat items.',
+              'Extract Vietnamese menu groups, items and prices as compact JSON. Omit optional fields unless explicitly present. Apply a group price to its items when clear. Convert k and dotted VND prices to integer VND. Include each item once. Put uncertain lines in unresolved. Never invent names or prices.',
           },
-          { role: 'user', content: JSON.stringify(chunkContext) },
+          { role: 'user', content: chunk },
         ],
         4096,
         {
@@ -404,31 +384,33 @@ export class MenuImportsService implements OnModuleInit {
           json_schema: { name: 'menu_import_draft', strict: true, schema: draftSchema },
         },
       );
-      drafts.push(JSON.parse(text) as MenuImportDraft);
+      const extracted = JSON.parse(text) as MenuImportDraft;
+      for (const category of extracted.categories) {
+        const categoryId = this.findMenuCategoryId(source.categories, category.name);
+        for (const item of category.items) {
+          const matches = Array.isArray(source.items)
+            ? source.items.filter(candidate => categoryId && candidate.categoryId === categoryId &&
+                this.menuNameKey(candidate.name) === this.menuNameKey(item.name))
+            : [];
+          const existing = matches.length === 1 ? matches[0] : undefined;
+          item.action = existing ? (existing.price === item.price ? 'SKIP' : 'UPDATE_PRICE') : 'CREATE';
+          item.existingItemId = existing?.id ?? '';
+          item.branchIds = [];
+        }
+      }
+      drafts.push(this.validateDraft(extracted));
     }
     return this.mergeQwenDrafts(drafts);
   }
 
-  private relevantExistingItems(value: unknown, chunk: string): unknown[] {
-    if (!Array.isArray(value)) return [];
-    const haystack = this.normalizeMenuText(chunk);
-    return value
-      .filter((item) => {
-        const name = this.normalizeMenuText(String((item as { name?: unknown })?.name ?? ''));
-        return name.length >= 3 && haystack.includes(name);
-      })
-      .slice(0, 100);
+  private findMenuCategoryId(value: unknown, name: string): string | undefined {
+    if (!Array.isArray(value)) return undefined;
+    const matches = value.filter(category => this.menuNameKey(category.name) === this.menuNameKey(name));
+    return matches.length === 1 ? matches[0].id : undefined;
   }
 
-  private normalizeMenuText(value: string): string {
-    return value
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/đ/g, 'd')
-      .replace(/Đ/g, 'D')
-      .toLocaleLowerCase('vi')
-      .replace(/[^a-z0-9]+/g, ' ')
-      .trim();
+  private menuNameKey(value: string): string {
+    return value.normalize('NFC').trim().toLocaleLowerCase('vi');
   }
 
   private chunkOcrText(texts: string[]): string[] {
