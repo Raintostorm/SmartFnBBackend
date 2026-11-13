@@ -382,6 +382,13 @@ export class MenuImportsService implements OnModuleInit {
     const drafts: MenuImportDraft[] = [];
 
     for (const chunk of chunks) {
+      const chunkContext = {
+        ...source,
+        texts: [chunk],
+        categories: Array.isArray(source.categories) ? source.categories.slice(0, 100) : [],
+        items: this.relevantExistingItems(source.items, chunk),
+        branches: Array.isArray(source.branches) ? source.branches.slice(0, 100) : [],
+      };
       const text = await this.requestQwen(
         [
           {
@@ -389,7 +396,7 @@ export class MenuImportsService implements OnModuleInit {
             content:
               'Structure this part of Vietnamese OCR text into a compact menu draft. Never invent names or prices. Use only supplied branch and existing item IDs. Convert k and dotted VND prices to integer VND. Put uncertain lines in unresolved and warning. For duplicate items choose UPDATE_PRICE when price differs, otherwise SKIP. Keep description, sizes, extras, and warning empty unless explicitly present in this OCR part. Do not repeat items.',
           },
-          { role: 'user', content: JSON.stringify({ ...source, texts: [chunk] }) },
+          { role: 'user', content: JSON.stringify(chunkContext) },
         ],
         4096,
         {
@@ -400,6 +407,28 @@ export class MenuImportsService implements OnModuleInit {
       drafts.push(JSON.parse(text) as MenuImportDraft);
     }
     return this.mergeQwenDrafts(drafts);
+  }
+
+  private relevantExistingItems(value: unknown, chunk: string): unknown[] {
+    if (!Array.isArray(value)) return [];
+    const haystack = this.normalizeMenuText(chunk);
+    return value
+      .filter((item) => {
+        const name = this.normalizeMenuText(String((item as { name?: unknown })?.name ?? ''));
+        return name.length >= 3 && haystack.includes(name);
+      })
+      .slice(0, 100);
+  }
+
+  private normalizeMenuText(value: string): string {
+    return value
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/đ/g, 'd')
+      .replace(/Đ/g, 'D')
+      .toLocaleLowerCase('vi')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
   }
 
   private chunkOcrText(texts: string[]): string[] {

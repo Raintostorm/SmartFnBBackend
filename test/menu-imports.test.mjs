@@ -176,11 +176,19 @@ describe('Menu imports', () => {
     const service = new MenuImportsService({}, {});
     const chunks = service.chunkOcrText(['A'.repeat(3200)]);
     const merged = service.mergeQwenDrafts([draft, draft]);
+    const relevant = service.relevantExistingItems(
+      [
+        { id: 'coffee', name: 'Cà phê sữa', price: 25000 },
+        { id: 'tea', name: 'Trà đào', price: 30000 },
+      ],
+      'CÀ PHÊ SỮA 25.000',
+    );
 
     assert.equal(chunks.length, 3);
     assert.ok(chunks.every((chunk) => chunk.length <= 1500));
     assert.equal(merged.categories.length, 1);
     assert.equal(merged.categories[0].items.length, 1);
+    assert.deepEqual(relevant.map((item) => item.id), ['coffee']);
   });
 
   it('rejects an upload before saving files when the Qwen gateway is not configured', async () => {
