@@ -53,7 +53,6 @@ export const SWAGGER_TAGS = [
   ['Barista · Availability', 'Barista báo hết món hoặc tùy chọn tại chi nhánh.'],
   ['Payments', 'Lịch sử thanh toán tại quầy và xác nhận chuyển khoản.'],
   ['Cash ledger', 'Sổ thu/hoàn tiền bất biến theo chi nhánh hoặc chuỗi.'],
-  ['Shifts and work sessions', 'Ca làm việc, phân ca và chấm công.'],
   ['PayOS webhook', 'Webhook công khai; dữ liệu chỉ được xử lý khi chữ ký PayOS hợp lệ.'],
 ] as const;
 

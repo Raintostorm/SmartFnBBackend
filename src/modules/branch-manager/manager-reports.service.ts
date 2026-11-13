@@ -188,8 +188,25 @@ export class ManagerReportsService {
         const cancelledOrders = await tx.$queryRaw`
         WITH ${bounds} SELECT o.id,o.order_code AS "orderCode",o.call_number AS "callNumber",o.total_amount::text AS "totalAmount",
           o.cancelled_at AS "cancelledAt",o.cancellation_reason AS reason,o.cancelled_by_id AS "cancelledById",
-          COALESCE((SELECT SUM(r.amount) FROM refunds r WHERE r.order_id=o.id),0)::text AS "refundAmount"
-        FROM orders o,bounds b WHERE o.branch_id = ${branchId}::uuid AND o.status = 'CANCELLED'
+          CASE WHEN cancelled_by.id IS NULL THEN NULL ELSE jsonb_build_object(
+            'id',cancelled_by.id,'employeeCode',cancelled_by.employee_code,
+            'firstName',cancelled_by.first_name,'lastName',cancelled_by.last_name) END AS "cancelledBy",
+          COALESCE((SELECT SUM(r.amount) FROM refunds r WHERE r.order_id=o.id),0)::text AS "refundAmount",
+          COALESCE((SELECT jsonb_agg(jsonb_build_object(
+            'id',r.id,'amount',r.amount::text,'status',r.status,'reason',r.reason,'note',r.note,
+            'requestedBy',CASE WHEN requested_by.id IS NULL THEN NULL ELSE jsonb_build_object(
+              'id',requested_by.id,'employeeCode',requested_by.employee_code,
+              'firstName',requested_by.first_name,'lastName',requested_by.last_name) END,
+            'completedBy',CASE WHEN completed_by.id IS NULL THEN NULL ELSE jsonb_build_object(
+              'id',completed_by.id,'employeeCode',completed_by.employee_code,
+              'firstName',completed_by.first_name,'lastName',completed_by.last_name) END)
+            ORDER BY r.requested_at)
+            FROM refunds r
+            LEFT JOIN employees requested_by ON requested_by.id=r.requested_by_employee_id
+            LEFT JOIN employees completed_by ON completed_by.id=r.completed_by_employee_id
+            WHERE r.order_id=o.id),'[]'::jsonb) AS refunds
+        FROM orders o,bounds b LEFT JOIN employees cancelled_by ON cancelled_by.id=o.cancelled_by_id
+        WHERE o.branch_id = ${branchId}::uuid AND o.status = 'CANCELLED'
           AND o.cancelled_at >= b.start_at AND o.cancelled_at < b.end_at ORDER BY o.cancelled_at DESC,o.id LIMIT ${query.limit}`;
         return {
           summary,

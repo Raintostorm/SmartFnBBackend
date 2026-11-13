@@ -32,7 +32,7 @@ describe('Append-only cash ledger (BR-94)', () => {
       paymentId: 'payment',
       refundId: 'refund',
       amount: new Prisma.Decimal(20_000),
-      method: 'CASH',
+      method: 'PAYOS',
       occurredAt: new Date(),
     });
     assert.equal(calls[0].skipDuplicates, true);
@@ -46,13 +46,19 @@ describe('Append-only cash ledger (BR-94)', () => {
       { sourceType: 'REFUND', sourceId: 'refund' },
     );
     assert.equal(calls[1].data[0].direction, 'OUTFLOW');
+    assert.equal(calls[1].data[0].paymentMethod, 'CASH');
   });
 
   it('enforces branch scope and Owner chain assignment on reads', async () => {
     let branchChecked;
     const prisma = {
       ownerChainAssignment: { count: async ({ where }) => (where.chainId === 'chain' ? 1 : 0) },
-      cashLedgerEntry: { findMany: async () => [], groupBy: async () => [] },
+      cashLedgerEntry: {
+        findMany: async () => [],
+        count: async () => 0,
+        groupBy: async () => [],
+      },
+      branch: { findMany: async () => [] },
       $transaction: async (items) => Promise.all(items),
     };
     const service = new CashLedgerService(prisma, {

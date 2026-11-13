@@ -25,7 +25,7 @@ import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
 import { AppRole } from '../auth/app-role.enum.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { writeBranchAudit } from '../branch-manager/manager-scope.js';
-import type { CancelPaidOrderDto, CompleteRefundDto } from '../branch-manager/manager.dto.js';
+import type { CancelPaidOrderDto } from '../branch-manager/manager.dto.js';
 import type { RefundListQueryDto } from './dto/payment.dto.js';
 import type { CashierRefundDto } from './cashier-refunds.controller.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
@@ -107,7 +107,34 @@ export class PaidOrderRefundService {
       }),
       this.prisma.refund.count({ where }),
     ]);
-    return { items, total, page: query.page, limit: query.limit };
+    const actorIds = [
+      ...new Set(
+        items
+          .flatMap((refund) => [refund.requestedByEmployeeId, refund.completedByEmployeeId])
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    const actors = actorIds.length
+      ? await this.prisma.employee.findMany({
+          where: { id: { in: actorIds } },
+          select: { id: true, employeeCode: true, firstName: true, lastName: true },
+        })
+      : [];
+    const actorById = new Map(actors.map((actor) => [actor.id, actor]));
+    return {
+      items: items.map((refund) => ({
+        ...refund,
+        requestedBy: refund.requestedByEmployeeId
+          ? (actorById.get(refund.requestedByEmployeeId) ?? null)
+          : null,
+        completedBy: refund.completedByEmployeeId
+          ? (actorById.get(refund.completedByEmployeeId) ?? null)
+          : null,
+      })),
+      total,
+      page: query.page,
+      limit: query.limit,
+    };
   }
 
   async recordLatePayosPayment(
@@ -816,81 +843,6 @@ export class PaidOrderRefundService {
       ? await this.refundDocuments.generateAfterCommit(result.refund.id)
       : { id: null, status: 'DISABLED' };
     return { ...result, refundDocument };
-  }
-
-  async completeRefund(user: AuthenticatedUser, refundId: string, dto: CompleteRefundDto) {
-    if (user.role !== AppRole.OWNER) {
-      throw new ForbiddenException('Only the Owner can settle a legacy bank-transfer refund');
-    }
-    const scopedRefund = await this.prisma.refund.findUnique({
-      where: { id: refundId },
-      select: { order: { select: { branchId: true } } },
-    });
-    if (!scopedRefund) throw new NotFoundException('Refund not found');
-    await this.assertRefundAccess(user, scopedRefund.order.branchId);
-    const result = await this.prisma.$transaction(
-      async (tx) => {
-        await tx.$queryRaw`SELECT id FROM refunds WHERE id = ${refundId}::uuid FOR UPDATE`;
-        const refund = await tx.refund.findUnique({
-          where: { id: refundId },
-          include: {
-            order: { select: { branchId: true, branch: { select: { chainId: true } } } },
-            payment: { select: { method: true } },
-            ...refundInclude,
-          },
-        });
-        if (!refund) throw new NotFoundException('Refund not found');
-        if (refund.status !== RefundStatus.PENDING) {
-          throw new ConflictException('Only a pending refund can be completed');
-        }
-        if (refund.method !== RefundMethod.BANK_TRANSFER) {
-          throw new ConflictException('Cash refunds are completed when the order is cancelled');
-        }
-        const now = new Date();
-        const updated = await tx.refund.update({
-          where: { id: refund.id },
-          data: {
-            status: RefundStatus.COMPLETED,
-            completedByUserId: user.id,
-            completedByEmployeeId: user.employeeId,
-            completedByRole: user.role,
-            completedAt: now,
-            note: dto.note || null,
-          },
-          include: refundInclude,
-        });
-        if (this.ledger) {
-          await this.ledger.recordRefund(tx, {
-            branchId: refund.order.branchId,
-            chainId: refund.order.branch.chainId,
-            orderId: refund.orderId,
-            paymentId: refund.paymentId,
-            refundId: refund.id,
-            amount: refund.amount,
-            method: refund.payment.method,
-            occurredAt: now,
-          });
-        }
-        if (user.role === AppRole.MANAGER) {
-          await writeBranchAudit(tx, user, {
-            action: 'REFUND_COMPLETED',
-            entityType: 'REFUND',
-            entityId: refund.id,
-            reason: dto.note,
-            before: { status: refund.status },
-            after: { status: RefundStatus.COMPLETED, method: refund.method },
-          });
-        }
-        return { branchId: refund.order.branchId, refund: updated };
-      },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-    );
-    this.realtime.branch(result.branchId, 'refund.completed', {
-      refundId: result.refund.id,
-      orderId: result.refund.orderId,
-      amount: result.refund.amount.toString(),
-    });
-    return result.refund;
   }
 
   private deriveOrderStatus(items: Array<{ status: OrderItemStatus }>) {

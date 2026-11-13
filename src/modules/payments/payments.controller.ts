@@ -9,12 +9,7 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import {
-  ApiBearerAuth,
-  ApiOkResponse,
-  ApiOperation,
-  ApiTags,
-} from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
   ApiAuthenticatedOperation,
   ApiStandardMutationErrors,
@@ -34,7 +29,6 @@ import {
 } from './dto/payment.dto.js';
 import { PaymentsService } from './payments.service.js';
 import { PaidOrderRefundService } from './paid-order-refund.service.js';
-import { CompleteRefundDto } from '../branch-manager/manager.dto.js';
 
 @ApiTags('Payments')
 @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
@@ -89,22 +83,6 @@ export class PaymentsController {
   @ApiOperation({ summary: 'List pending or historical refunds within the caller scope' })
   listRefunds(@Query() query: RefundListQueryDto, @CurrentUser() user: AuthenticatedUser) {
     return this.refunds.listRefunds(user, query);
-  }
-
-  @Roles(AppRole.OWNER)
-  @Post('refunds/:refundId/complete')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Owner settles a legacy pending bank-transfer refund',
-    description:
-      'The platform records the action only; it does not transfer money or call a PayOS refund API.',
-  })
-  completeRefund(
-    @Param('refundId', new ParseUUIDPipe()) refundId: string,
-    @Body() dto: CompleteRefundDto,
-    @CurrentUser() user: AuthenticatedUser,
-  ) {
-    return this.refunds.completeRefund(user, refundId, dto);
   }
 
   @Roles(AppRole.OWNER, AppRole.MANAGER, AppRole.CASHIER)

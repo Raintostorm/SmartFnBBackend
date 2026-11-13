@@ -33,9 +33,10 @@ it('registers counter and refund operations without retired table-service routes
   assert.ok(routes.some((r) => r === 'manager/refund-approval-requests/:requestId/reject'));
   assert.ok(routes.some((r) => r === 'cashier/refund-approval-requests/:requestId/complete'));
   assert.ok(!routes.some((r) => r === 'manager/orders/:orderId/cancel-paid'));
+  assert.ok(!routes.some((r) => r === 'refunds/:refundId/complete'));
   assert.deepEqual(
     routes.filter((r) =>
-      /^(tables|table-sessions|reservations|invoices|waiter|kitchen)(\/|$)/.test(r),
+      /^(tables|table-sessions|reservations|invoices|waiter|kitchen|attendance|shift-templates|work-sessions)(\/|$)/.test(r),
     ),
     [],
   );

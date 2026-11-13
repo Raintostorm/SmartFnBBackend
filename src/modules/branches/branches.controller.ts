@@ -41,14 +41,7 @@ import { ListBranchesQueryDto, UpdateBranchDto, UpdateBranchStatusDto } from './
 import { UpsertBranchHourDto, UpsertBranchSpecialHourDto } from './dto/branch-hours.dto.js';
 import { BranchDetailResponseDto, BranchResponseDto } from './dto/branch-response.dto.js';
 
-const INTERNAL_BRANCH_ROLES = [
-  AppRole.OWNER,
-  AppRole.MANAGER,
-  AppRole.WAITER,
-  AppRole.KITCHEN,
-  AppRole.CASHIER,
-  AppRole.BARISTA,
-];
+const INTERNAL_BRANCH_ROLES = [AppRole.OWNER, AppRole.MANAGER, AppRole.CASHIER, AppRole.BARISTA];
 
 @Roles(...INTERNAL_BRANCH_ROLES)
 @ApiTags('Branches - internal')
@@ -211,8 +204,7 @@ export class BranchesController {
   @Get(':branchId/areas')
   @ApiOperation({
     summary: 'List branch areas filtered for the current role',
-    description:
-      'OWNER/MANAGER: all; WAITER: dining/pickup; KITCHEN: kitchen/bar; CASHIER: cashier/pickup.',
+    description: 'OWNER/MANAGER: all; BARISTA: kitchen/bar; CASHIER: cashier/pickup.',
   })
   @ApiParam({ name: 'branchId', format: 'uuid' })
   @ApiOkResponse({ description: 'Role-visible branch areas' })
@@ -253,7 +245,7 @@ export class BranchesController {
     return this.branchesService.updateArea(branchId, areaId, dto, user);
   }
 
-  @Roles(AppRole.OWNER, AppRole.MANAGER, AppRole.KITCHEN, AppRole.BARISTA)
+  @Roles(AppRole.OWNER, AppRole.MANAGER, AppRole.BARISTA)
   @Patch(':branchId/areas/:areaId/status')
   @ApiOperation({
     summary: 'Change area status (OWNER, assigned MANAGER, or assigned BARISTA for kitchen/bar)',

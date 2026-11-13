@@ -308,48 +308,6 @@ describe('Paid order cancellation and external refunds (#43)', () => {
     }
   });
 
-  it('allows Owner to settle a legacy bank refund exactly once', async () => {
-    const { service, calls, tx, order } = fixture();
-    let status = 'PENDING';
-    tx.refund.findUnique = async () => ({
-      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-      orderId: order.id,
-      amount: new Prisma.Decimal(50_000),
-      status,
-      method: 'BANK_TRANSFER',
-      order: { branchId: manager.branchId },
-      items: [],
-    });
-    tx.refund.update = async ({ data }) => {
-      status = data.status;
-      return {
-        id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-        orderId: order.id,
-        amount: new Prisma.Decimal(50_000),
-        method: 'BANK_TRANSFER',
-        items: [],
-        ...data,
-      };
-    };
-    const result = await service.completeRefund(owner, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', {
-      note: 'Đã chuyển cho khách',
-    });
-    assert.equal(result.status, 'COMPLETED');
-    assert.equal(calls.events.at(-1).type, 'refund.completed');
-    await assert.rejects(
-      service.completeRefund(owner, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', {}),
-      (error) => error?.getStatus?.() === 409,
-    );
-  });
-
-  it('keeps Store Manager read only for legacy refunds', async () => {
-    const { service } = fixture();
-    await assert.rejects(
-      service.completeRefund(manager, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', {}),
-      (error) => error.getStatus() === 403,
-    );
-  });
-
   it('flags late money once without creating a pending refund', async () => {
     const { service, calls, tx, payment } = fixture({
       paymentStatus: 'FAILED',

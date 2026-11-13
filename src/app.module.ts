@@ -7,7 +7,6 @@ import { PrismaModule } from './database/prisma.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { BranchesModule } from './modules/branches/branches.module.js';
 import { EmployeesModule } from './modules/employees/employees.module.js';
-import { AttendanceModule } from './modules/attendance/attendance.module.js';
 import { MenuModule } from './modules/menu/menu.module.js';
 import { PaymentsModule } from './modules/payments/payments.module.js';
 import { UsersModule } from './modules/users/users.module.js';
@@ -40,7 +39,6 @@ import { PlatformBillingModule } from './modules/platform-billing/platform-billi
     PaymentsModule,
     BrandingModule,
     RealtimeModule,
-    AttendanceModule,
     PlatformAdminModule,
     ReportsModule,
     BranchManagerModule,

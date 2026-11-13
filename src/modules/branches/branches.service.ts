@@ -496,7 +496,6 @@ export class BranchesService {
     if (
       user.role !== AppRole.OWNER &&
       user.role !== AppRole.MANAGER &&
-      user.role !== AppRole.KITCHEN &&
       user.role !== AppRole.BARISTA
     ) {
       throw new ForbiddenException('Only OWNER, MANAGER, or BARISTA can change area status');
@@ -510,7 +509,7 @@ export class BranchesService {
     const area = await this.ensureAreaInBranch(branchId, areaId);
 
     if (
-      (user.role === AppRole.KITCHEN || user.role === AppRole.BARISTA) &&
+      user.role === AppRole.BARISTA &&
       area.type !== BranchAreaType.KITCHEN &&
       area.type !== BranchAreaType.BAR
     ) {
@@ -782,9 +781,6 @@ export class BranchesService {
       case AppRole.OWNER:
       case AppRole.MANAGER:
         return Object.values(BranchAreaType);
-      case AppRole.WAITER:
-        return [BranchAreaType.DINING, BranchAreaType.PICKUP];
-      case AppRole.KITCHEN:
       case AppRole.BARISTA:
         return [BranchAreaType.KITCHEN, BranchAreaType.BAR];
       case AppRole.CASHIER:
