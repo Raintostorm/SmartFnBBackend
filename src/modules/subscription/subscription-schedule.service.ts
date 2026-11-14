@@ -16,6 +16,10 @@ import {
 } from './subscription-limits.js';
 import { countUsage, listCountedUsage } from './subscription-usage.js';
 
+export function trialPaidPeriodEnd(trialExpiresAt: Date, paidAt: Date): Date {
+  return addSubscriptionMonth(trialExpiresAt > paidAt ? trialExpiresAt : paidAt);
+}
+
 export function addSubscriptionMonth(date: Date): Date {
   const result = new Date(date);
   const day = result.getUTCDate();
@@ -242,7 +246,7 @@ export class SubscriptionScheduleService {
     const periodStart = isTrial ? now : subscription.expiresAt > now ? subscription.expiresAt : now;
     // BR-70: renewing after expiry starts from the payment, even if the invoice was issued earlier.
     const periodEnd = isTrial
-      ? (invoice?.periodEndsAt ?? addSubscriptionMonth(subscription.expiresAt))
+      ? trialPaidPeriodEnd(subscription.expiresAt, now)
       : invoice && invoice.periodStartsAt.getTime() === periodStart.getTime()
         ? invoice.periodEndsAt
         : addSubscriptionMonth(periodStart);

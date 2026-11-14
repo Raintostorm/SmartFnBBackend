@@ -74,6 +74,8 @@ const optionSelect = {
 
 const OPTION_AUDIT_KEYS = ['groupId', 'code', 'name', 'priceDelta', 'isActive', 'isDefault'] as const;
 
+const GROUP_AUDIT_KEYS = ['code', 'name', 'isRequired', 'minSelections', 'maxSelections', 'displayOrder', 'isActive'] as const;
+
 const optionGroupSelect = {
   id: true,
   chainId: true,
@@ -209,11 +211,13 @@ export class MenuService {
 
     return this.withUniqueConflict(
       'An option group with this code already exists in the chain',
-      () =>
-        this.prisma.menuOptionGroup.create({
-          data: { ...dto, chainId, isRequired, minSelections, maxSelections },
-          select: optionGroupSelect,
-        }),
+      () => this.prisma.$transaction(async tx => {
+        const group = await tx.menuOptionGroup.create({
+          data: { ...dto, chainId, isRequired, minSelections, maxSelections }, select: optionGroupSelect,
+        });
+        await writeChainAudit(tx, user, chainId, { action: 'OPTION_GROUP_CREATED', entityType: 'MenuOptionGroup', entityId: group.id, after: auditSnapshot(group, GROUP_AUDIT_KEYS) });
+        return group;
+      }),
     );
   }
 
@@ -224,40 +228,46 @@ export class MenuService {
     user: AuthenticatedUser,
   ) {
     await this.branchAccess.assertCanManageChain(user, chainId);
-    const group = await this.getOptionGroupOrFail(chainId, groupId);
-    let minSelections = dto.minSelections ?? group.minSelections;
-    if (dto.isRequired === true && dto.minSelections === undefined && minSelections === 0) {
-      minSelections = 1;
-    }
-    if (dto.isRequired === false && dto.minSelections === undefined) {
-      minSelections = 0;
-    }
-    const isRequired =
-      dto.isRequired ?? (dto.minSelections !== undefined ? minSelections > 0 : group.isRequired);
-    const maxSelections = dto.maxSelections ?? group.maxSelections;
-    this.assertOptionGroupRules(isRequired, minSelections, maxSelections);
-    if (maxSelections < group.maxSelections) {
-      const defaults = await this.prisma.menuOption.count({ where: { groupId, isDefault: true } });
-      if (defaults > maxSelections) {
-        throw new BadRequestException('Clear extra default options before lowering maxSelections');
-      }
-    }
-
-    return this.withUniqueConflict(
-      'An option group with this code already exists in the chain',
-      () =>
-        this.prisma.menuOptionGroup.update({
-          where: { id: groupId },
-          data: { ...dto, isRequired, minSelections, maxSelections },
-          select: optionGroupSelect,
-        }),
+    return this.withUniqueConflict('An option group with this code already exists in the chain', () =>
+      this.prisma.$transaction(async tx => {
+        await tx.$queryRaw`SELECT id FROM menu_option_groups WHERE id = ${groupId}::uuid FOR UPDATE`;
+        const group = await tx.menuOptionGroup.findFirst({ where: { id: groupId, chainId } });
+        if (!group) throw new NotFoundException('Option group not found');
+        let minSelections = dto.minSelections ?? group.minSelections;
+        if (dto.isRequired === true && dto.minSelections === undefined && minSelections === 0) {
+          minSelections = 1;
+        }
+        if (dto.isRequired === false && dto.minSelections === undefined) {
+          minSelections = 0;
+        }
+        const isRequired =
+          dto.isRequired ?? (dto.minSelections !== undefined ? minSelections > 0 : group.isRequired);
+        const maxSelections = dto.maxSelections ?? group.maxSelections;
+        this.assertOptionGroupRules(isRequired, minSelections, maxSelections);
+        if (maxSelections < group.maxSelections) {
+          const defaults = await tx.menuOption.count({ where: { groupId, isDefault: true } });
+          if (defaults > maxSelections) {
+            throw new BadRequestException('Clear extra default options before lowering maxSelections');
+          }
+        }
+        const updated = await tx.menuOptionGroup.update({
+          where: { id: groupId }, data: { ...dto, isRequired, minSelections, maxSelections }, select: optionGroupSelect,
+        });
+        await writeChainAudit(tx, user, chainId, { action: 'OPTION_GROUP_UPDATED', entityType: 'MenuOptionGroup', entityId: groupId, before: auditSnapshot(group, GROUP_AUDIT_KEYS), after: auditSnapshot(updated, GROUP_AUDIT_KEYS) });
+        return updated;
+      }),
     );
   }
 
   async deleteOptionGroup(chainId: string, groupId: string, user: AuthenticatedUser) {
     await this.branchAccess.assertCanManageChain(user, chainId);
-    await this.getOptionGroupOrFail(chainId, groupId);
-    await this.prisma.menuOptionGroup.delete({ where: { id: groupId } });
+    await this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM menu_option_groups WHERE id = ${groupId}::uuid FOR UPDATE`;
+      const group = await tx.menuOptionGroup.findFirst({ where: { id: groupId, chainId } });
+      if (!group) throw new NotFoundException('Option group not found');
+      await tx.menuOptionGroup.delete({ where: { id: groupId } });
+      await writeChainAudit(tx, user, chainId, { action: 'OPTION_GROUP_DELETED', entityType: 'MenuOptionGroup', entityId: groupId, before: auditSnapshot(group, GROUP_AUDIT_KEYS) });
+    });
     return { message: 'Menu option group deleted successfully' };
   }
 
@@ -626,6 +636,12 @@ export class MenuService {
     const selectedIds = await this.assertOptionGroupsInChain(chainId, dto.optionGroupIds);
 
     await this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw`SELECT id FROM menu_items WHERE id = ${itemId}::uuid FOR UPDATE`;
+      const previous = await transaction.menuItemOptionGroup.findMany({ where: { menuItemId: itemId }, orderBy: { displayOrder: 'asc' }, select: { groupId: true } });
+      await writeChainAudit(transaction, user, chainId, {
+        action: 'MENU_ITEM_OPTION_GROUPS_CHANGED', entityType: 'MenuItem', entityId: itemId,
+        before: { groupIds: previous.map(link => link.groupId) }, after: { groupIds: selectedIds },
+      });
       await transaction.menuItemOptionGroup.deleteMany({
         where: { menuItemId: itemId, groupId: { notIn: selectedIds } },
       });

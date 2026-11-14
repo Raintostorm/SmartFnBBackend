@@ -18,7 +18,7 @@ import { PrismaService } from '../../database/prisma.service.js';
 import { AppRole } from '../auth/app-role.enum.js';
 import { PasswordService } from '../auth/password.service.js';
 import { EmailOutboxService } from '../email/email-outbox.service.js';
-import { PayosApiService } from '../payos/payos-api.service.js';
+import { PayosApiError, PayosApiService } from '../payos/payos-api.service.js';
 import type {
   ApproveRegistrationApplicationDto,
   CreateServicePlanDto,
@@ -250,10 +250,10 @@ export class PlatformAdminService {
     const plan = await this.getActivePlan(planId);
     if (plan.code === 'TRIAL' && !application.requestedPlanId) throw new BadRequestException('Trial must be chosen by the applicant');
     const duplicateUser = await this.prisma.user.count({
-      where: { email: application.representativeEmail, deletedAt: null },
+      where: { OR: [{ email: application.representativeEmail }, { phone: application.representativePhone }] },
     });
     if (duplicateUser > 0) {
-      throw new ConflictException('Representative email already belongs to an account');
+      throw new ConflictException('Email hoặc số điện thoại đã thuộc về một tài khoản');
     }
 
     const token = randomBytes(32).toString('base64url');
@@ -294,10 +294,14 @@ export class PlatformAdminService {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${application.id}))`;
       const fresh = await tx.registrationApplication.findUniqueOrThrow({ where: { id: application.id } });
       if (fresh.status !== 'APPROVED' || fresh.activationTokenHash !== this.hashToken(token) || fresh.approvedPlanId !== application.approvedPlanId || !fresh.activationExpiresAt || fresh.activationExpiresAt <= new Date()) throw new ConflictException('Activation link is expired or already used');
+      const checkout = await tx.registrationCheckout.findFirst({
+        where: { applicationId: fresh.id, status: { in: ['PENDING', 'PAID', 'NEEDS_REVIEW'] } },
+      });
+      if (checkout) throw new ConflictException('Hồ sơ đã có giao dịch thanh toán. Vui lòng kiểm tra giao dịch trước khi kích hoạt.');
       return this.provisionRegistration(tx, fresh, trialPlan, true);
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
-    await this.emails.deliver(emailId);
-    return { activated: true, loginEmail: application.representativeEmail };
+    const emailStatus = await this.emails.deliver(emailId);
+    return { emailStatus, activated: true, loginEmail: application.representativeEmail };
   }
 
   async createActivationCheckout(token: string) {
@@ -307,19 +311,31 @@ export class PlatformAdminService {
     const amount = Number(plan.monthlyPrice);
     if (!Number.isSafeInteger(amount) || amount <= 0) throw new BadRequestException('Plan price must be a whole VND amount');
     const orderCode = String(Date.now() * 1000 + Math.floor(Math.random() * 1000));
+    const webUrl = this.config.getOrThrow<string>('PUBLIC_WEB_URL').replace(/\/+$/, '');
+    const credentials = this.payosCredentials();
+    const existing = await this.prisma.registrationCheckout.findFirst({
+      where: { applicationId: application.id, status: 'PENDING' }, orderBy: { createdAt: 'desc' },
+    });
+    const expired = existing && Date.now() - existing.createdAt.getTime() >= 15 * 60_000 ? existing : null;
+    if (expired) await this.retireRegistrationQr(expired);
     const checkout = await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${application.id}))`;
       const fresh = await tx.registrationApplication.findUniqueOrThrow({ where: { id: application.id } });
       if (fresh.status !== 'APPROVED' || fresh.activationTokenHash !== this.hashToken(token) || fresh.approvedPlanId !== plan.id || !fresh.activationExpiresAt || fresh.activationExpiresAt <= new Date()) throw new ConflictException('Activation link or approved plan changed');
+      if (await tx.user.count({ where: { OR: [{ email: application.representativeEmail }, { phone: application.representativePhone }] } }))
+        throw new ConflictException('Email hoặc số điện thoại đã thuộc về một tài khoản');
+      if (await tx.registrationCheckout.findFirst({ where: { applicationId: application.id, status: 'NEEDS_REVIEW' } }))
+        throw new ConflictException('Đã ghi nhận khoản thu cần đối soát. Không thanh toán lại.');
       const pending = await tx.registrationCheckout.findFirst({ where: { applicationId: application.id, status: 'PENDING' }, orderBy: { createdAt: 'desc' } });
+      if (pending && !pending.checkoutUrl && Date.now() - pending.createdAt.getTime() < 15 * 60_000) throw new ConflictException('QR đang được tạo. Vui lòng thử lại sau.');
       if (pending && Date.now() - pending.createdAt.getTime() < 15 * 60_000 && pending.planId === plan.id && pending.checkoutUrl) return pending;
+      if (pending && pending.id !== expired?.id) throw new ConflictException('Trạng thái QR đã thay đổi. Vui lòng tải lại.');
       if (pending) await tx.registrationCheckout.update({ where: { id: pending.id }, data: { status: 'FAILED' } });
       return tx.registrationCheckout.create({ data: { applicationId: application.id, planId: plan.id, providerOrderCode: orderCode, amount } });
     });
     if (checkout.checkoutUrl) return { id: checkout.id, checkoutUrl: checkout.checkoutUrl, status: checkout.status };
-    const webUrl = this.config.getOrThrow<string>('PUBLIC_WEB_URL').replace(/\/+$/, '');
     try {
-      const payment = await this.payos.createPayment(this.payosCredentials(), {
+      const payment = await this.payos.createPayment(credentials, {
         orderCode: Number(orderCode), amount, description: `SmartFnB ${plan.code}`.slice(0, 25),
         returnUrl: `${webUrl}/activate?token=${encodeURIComponent(token)}&checkout=${checkout.id}`,
         cancelUrl: `${webUrl}/activate?token=${encodeURIComponent(token)}&checkout=${checkout.id}&cancelled=1`,
@@ -334,7 +350,9 @@ export class PlatformAdminService {
       });
       return { id: updated.id, checkoutUrl: updated.checkoutUrl, status: updated.status };
     } catch (error) {
-      await this.prisma.registrationCheckout.update({ where: { id: checkout.id }, data: { status: 'FAILED' } });
+      if (error instanceof PayosApiError && !error.temporary) {
+        await this.prisma.registrationCheckout.updateMany({ where: { id: checkout.id, status: 'PENDING' }, data: { status: 'FAILED' } });
+      }
       throw error;
     }
   }
@@ -343,7 +361,10 @@ export class PlatformAdminService {
     const application = await this.findActivation(token, true);
     const checkout = await this.prisma.registrationCheckout.findFirst({ where: { id: checkoutId, applicationId: application.id } });
     if (!checkout) throw new NotFoundException('Activation checkout not found');
-    return { id: checkout.id, status: checkout.status, checkoutUrl: checkout.checkoutUrl, reviewReason: checkout.reviewReason };
+    const mail = checkout.status === 'PAID' && application.ownerUserId
+      ? await this.prisma.emailOutbox.findFirst({ where: { recipient: application.representativeEmail, template: 'OWNER_ACCOUNT_CREATED', createdAt: { gte: checkout.createdAt } }, orderBy: { createdAt: 'asc' }, select: { status: true } })
+      : null;
+    return { id: checkout.id, status: checkout.status, checkoutUrl: checkout.checkoutUrl, reviewReason: checkout.reviewReason, emailStatus: mail?.status ?? 'PENDING' };
   }
 
   async completePaidActivation(orderCode: string, amount: number): Promise<boolean> {
@@ -363,7 +384,15 @@ export class PlatformAdminService {
       const sentEmailId = await this.provisionRegistration(tx, application, plan, false);
       await tx.registrationCheckout.update({ where: { id: fresh.id }, data: { status: 'PAID', paidAt: new Date() } });
       return sentEmailId;
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable  }).catch(async error => {
+      // A concurrent signup can still claim the unique email/phone after QR creation.
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error;
+      await this.prisma.registrationCheckout.updateMany({
+        where: { id: checkout.id, status: { notIn: ['PAID', 'NEEDS_REVIEW'] } },
+        data: { status: 'NEEDS_REVIEW', paidAt: new Date(), reviewReason: 'Thông tin tạo doanh nghiệp hoặc tài khoản đã tồn tại' },
+      });
+      return null;
+    });
     if (emailId) await this.emails.deliver(emailId);
     return true;
   }
@@ -389,7 +418,7 @@ export class PlatformAdminService {
         const now = new Date();
         await tx.registrationCheckout.update({
           where: { id: checkout.id },
-          data: { status: SubscriptionCheckoutStatus.PAID, paidAt: now },
+          data: { status: SubscriptionCheckoutStatus.PAID, paidAt: checkout.paidAt ?? now },
         });
         await tx.platformSupportAction.create({
           data: {
@@ -413,17 +442,18 @@ export class PlatformAdminService {
 
 
   async changeApprovedPlan(id: string, planId: string, note: string, actorUserId: string) {
+    if (note.trim().length < 3) throw new BadRequestException('Nhập ghi chú yêu cầu ít nhất 3 ký tự');
     const plan = await this.getActivePlan(planId);
-    if (plan.code === 'TRIAL') throw new BadRequestException('Select a paid plan');
     const token = randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60_000);
     const emailId = await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${id}))`;
       const application = await tx.registrationApplication.findUnique({ where: { id } });
       if (!application || application.status !== 'APPROVED') throw new ConflictException('Only approved applications awaiting activation can change plan');
-      if (application.requestedPlanId) throw new ConflictException('The applicant-selected plan cannot be changed after approval');
+      const checkout = await tx.registrationCheckout.findFirst({ where: { applicationId: id }, select: { id: true } });
+      if (checkout) throw new ConflictException('Hồ sơ đã tạo hóa đơn kỳ đầu. Sau khi kích hoạt, có thể đăng ký đổi gói cho kỳ kế tiếp.');
+      if (application.approvedPlanId === planId) throw new BadRequestException('Chọn gói khác với gói đã duyệt');
       await tx.registrationApplication.update({ where: { id }, data: { approvedPlanId: planId, activationTokenHash: this.hashToken(token), activationExpiresAt: expiresAt, activationSentAt: null, activationLastOpenedAt: null } });
-      await tx.registrationCheckout.updateMany({ where: { applicationId: id, status: 'PENDING' }, data: { status: 'FAILED' } });
       await tx.platformSupportAction.create({ data: { actorUserId, applicationId: id, action: 'CHANGE_APPROVED_PLAN', note: note.trim(), details: { fromPlanId: application.approvedPlanId, toPlanId: planId } } });
       const email = await tx.emailOutbox.create({ data: { recipient: application.representativeEmail, subject: 'Cập nhật gói kích hoạt Smart F&B', template: 'REGISTRATION_ACTIVATION', payload: { businessName: application.businessName, employeeName: application.representativeName, setupTokenEncrypted: this.emails.sealSetupToken(token), setupPath: '/activate', expiresAt: expiresAt.toISOString(), planName: plan.name } } });
       return email.id;
@@ -432,13 +462,43 @@ export class PlatformAdminService {
     return this.getRegistrationApplication(id);
   }
 
+  private async retireRegistrationQr(pending: { providerOrderCode: string; paymentLinkId: string | null }) {
+    const credentials = this.payosCredentials();
+    const key = pending.paymentLinkId ?? pending.providerOrderCode;
+    const readState = () => this.payos.getPayment(credentials, key).catch(() => {
+      throw new ConflictException('Chưa xác minh được trạng thái QR với PayOS. Vui lòng thử lại sau.');
+    });
+    let state = await readState();
+    if (state.status === 'PENDING' && !state.amountPaid) {
+      try { await this.payos.cancelPayment(credentials, key, 'Thay liên kết thanh toán kích hoạt'); }
+      catch { /* The provider may already have processed a payment. Re-read its state. */ }
+      state = await readState();
+    }
+    if (state.status === 'PAID' || Number(state.amountPaid) > 0) {
+      if (Number.isSafeInteger(state.amountPaid) && Number(state.amountPaid) > 0)
+        await this.completePaidActivation(pending.providerOrderCode, Number(state.amountPaid));
+      throw new ConflictException('PayOS đã ghi nhận tiền. Kiểm tra trạng thái kích hoạt hoặc đối soát trước khi tiếp tục.');
+    }
+    if (!['CANCELLED', 'EXPIRED'].includes(state.status ?? ''))
+      throw new ConflictException('Chưa xác nhận được việc hủy QR tại PayOS. Vui lòng kiểm tra lại.');
+  }
+
   async resendActivation(id: string, note: string, actorUserId: string) {
+    const pending = await this.prisma.registrationCheckout.findFirst({
+      where: { applicationId: id, status: 'PENDING' }, orderBy: { createdAt: 'desc' },
+    });
+    if (pending) await this.retireRegistrationQr(pending);
     const token = randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60_000);
     const email = await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${id}))`;
       const application = await tx.registrationApplication.findUnique({ where: { id }, include: { approvedPlan: true } });
       if (!application || application.status !== 'APPROVED') throw new ConflictException('Only approved applications awaiting activation can receive a new link');
+      const current = await tx.registrationCheckout.findFirst({
+        where: { applicationId: id, status: { in: ['PENDING', 'NEEDS_REVIEW'] } }, orderBy: { createdAt: 'desc' },
+      });
+      if (current && (current.status === 'NEEDS_REVIEW' || current.id !== pending?.id))
+        throw new ConflictException('Thanh toán đã thay đổi. Tải lại hồ sơ để kiểm tra.');
       await tx.registrationApplication.update({ where: { id }, data: { activationTokenHash: this.hashToken(token), activationExpiresAt: expiresAt, activationSentAt: null, activationLastOpenedAt: null } });
       await tx.registrationCheckout.updateMany({ where: { applicationId: id, status: 'PENDING' }, data: { status: 'FAILED' } });
       await tx.platformSupportAction.create({ data: { actorUserId, applicationId: id, action: 'RESEND_ACTIVATION', note: note.trim() } });
@@ -479,7 +539,7 @@ export class PlatformAdminService {
     await tx.subscriptionPeriod.updateMany({ where: { subscriptionId: subscription.id, startsAt: now }, data: { appliedAt: now } });
     await tx.businessSubscriptionEvent.create({ data: { subscriptionId: subscription.id, type: SubscriptionEventType.CREATED, toPlanId: plan.id, changedById: application.reviewedById, note: trial ? 'Basic trial chosen during activation' : 'First month paid through platform PayOS' } });
     await tx.passwordSetupToken.create({ data: { userId: user.id, tokenHash: this.hashToken(setupToken), expiresAt: setupExpiresAt } });
-    const email = await tx.emailOutbox.create({ data: { recipient: user.email, subject: 'Thiết lập tài khoản Brand Manager Smart F&B', template: 'OWNER_ACCOUNT_CREATED', payload: { businessName: application.businessName, employeeName: application.representativeName, loginEmail: user.email, setupToken, setupPath: '/setup-password', expiresAt: setupExpiresAt.toISOString() } } });
+    const email = await tx.emailOutbox.create({ data: { recipient: user.email, subject: 'Thiết lập tài khoản Brand Manager Smart F&B', template: 'OWNER_ACCOUNT_CREATED', payload: { businessName: application.businessName, employeeName: application.representativeName, loginEmail: user.email, setupTokenEncrypted: this.emails.sealSetupToken(setupToken), setupPath: '/setup-password', expiresAt: setupExpiresAt.toISOString() } } });
     await tx.registrationApplication.update({ where: { id: application.id }, data: { status: 'ACTIVATED', activatedAt: now, approvedChainId: chain.id, ownerUserId: user.id } });
     return email.id;
   }

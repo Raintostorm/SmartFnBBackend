@@ -22,7 +22,7 @@ import { EmailOutboxService } from '../email/email-outbox.service.js';
 import { PlatformAdminService } from '../platform-admin/platform-admin.service.js';
 import { PayosApiService, type PayosCredentials } from '../payos/payos-api.service.js';
 import { verifyPayosSignature } from '../payos/payos-signature.js';
-import { addSubscriptionMonth, SubscriptionScheduleService } from '../subscription/subscription-schedule.service.js';
+import { trialPaidPeriodEnd, SubscriptionScheduleService } from '../subscription/subscription-schedule.service.js';
 
 type PlatformWebhook = {
   code?: string;
@@ -81,9 +81,10 @@ export class PlatformBillingService {
 
     if (isTrial) await this.prisma.subscriptionInvoice.updateMany({ where: { chainId, status: 'PENDING' }, data: { status: 'CANCELLED' } });
 
+    const issuedAt = new Date();
     const invoice = isTrial
       ? await this.prisma.subscriptionInvoice.create({
-          data: { chainId, subscriptionId: subscription.id, planId, planName: plan.name, periodStartsAt: new Date(), periodEndsAt: addSubscriptionMonth(subscription.expiresAt), total: Number(plan.monthlyPrice), lines: { create: [{ planId, kind: 'PLAN', description: plan.name, quantity: 1, unitPrice: Number(plan.monthlyPrice), amount: Number(plan.monthlyPrice) }] } },
+          data: { chainId, subscriptionId: subscription.id, planId, planName: plan.name, periodStartsAt: issuedAt, periodEndsAt: trialPaidPeriodEnd(subscription.expiresAt, issuedAt), total: Number(plan.monthlyPrice), lines: { create: [{ planId, kind: 'PLAN', description: plan.name, quantity: 1, unitPrice: Number(plan.monthlyPrice), amount: Number(plan.monthlyPrice) }] } },
         })
       : await this.schedule.getOrCreateInvoice(chainId);
     const amount = invoice.total;
@@ -270,7 +271,7 @@ export class PlatformBillingService {
           where: { id: checkout.id },
           data: { status: SubscriptionCheckoutStatus.PAID, paidAt: now },
         });
-        if (invoice) await tx.subscriptionInvoice.update({ where: { id: invoice.id }, data: { status: 'PAID', paidAt: now } });
+        if (invoice) await tx.subscriptionInvoice.update({ where: { id: invoice.id }, data: { status: 'PAID', paidAt: now, periodStartsAt: periodStart, periodEndsAt: periodEnd } });
         await tx.platformSupportAction.create({
           data: {
             actorUserId,
@@ -343,7 +344,7 @@ export class PlatformBillingService {
           where: { id: fresh.id },
           data: { status: SubscriptionCheckoutStatus.PAID, paidAt: now },
         });
-        if (invoice) await tx.subscriptionInvoice.update({ where: { id: invoice.id }, data: { status: 'PAID', paidAt: now } });
+        if (invoice) await tx.subscriptionInvoice.update({ where: { id: invoice.id }, data: { status: 'PAID', paidAt: now, periodStartsAt: periodStart, periodEndsAt: periodEnd } });
         return 'paid';
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },

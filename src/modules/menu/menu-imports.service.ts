@@ -240,7 +240,7 @@ export class MenuImportsService implements OnModuleInit {
           }
           const branchIds = itemDraft.branchIds.length
             ? [...new Set(itemDraft.branchIds)]
-            : [...allowedBranches];
+            : itemDraft.action === 'CREATE' ? [...allowedBranches] : [];
           if (branchIds.some((branchId) => !allowedBranches.has(branchId)))
             throw new BadRequestException(`Branch selection is invalid for ${itemDraft.name}`);
 
@@ -393,7 +393,7 @@ export class MenuImportsService implements OnModuleInit {
                 this.menuNameKey(candidate.name) === this.menuNameKey(item.name))
             : [];
           const existing = matches.length === 1 ? matches[0] : undefined;
-          item.action = existing ? (existing.price === item.price ? 'SKIP' : 'UPDATE_PRICE') : 'CREATE';
+          item.action = existing ? (new Prisma.Decimal(existing.price).equals(item.price) ? 'SKIP' : 'UPDATE_PRICE') : 'CREATE';
           item.existingItemId = existing?.id ?? '';
           item.branchIds = [];
         }

@@ -59,7 +59,7 @@ export class EmailOutboxService {
     if (!message || message.status === EmailOutboxStatus.SENT) {
       return message?.status ?? EmailOutboxStatus.FAILED;
     }
-    const accountEmail = ['STAFF_ACCOUNT_CREATED', 'PASSWORD_RESET', 'SELF_PASSWORD_RESET', 'PLATFORM_STAFF_INVITATION', 'PLATFORM_STAFF_PASSWORD_RESET', 'OWNER_PASSWORD_RESET'].includes(message.template);
+    const accountEmail = ['OWNER_ACCOUNT_CREATED', 'STAFF_ACCOUNT_CREATED', 'PASSWORD_RESET', 'SELF_PASSWORD_RESET', 'PLATFORM_STAFF_INVITATION', 'PLATFORM_STAFF_PASSWORD_RESET', 'OWNER_PASSWORD_RESET'].includes(message.template);
     if (accountEmail) await this.recordAccountEmail(message.recipient, message.template, EmailOutboxStatus.PENDING);
     const apiKey = this.config.get<string>('EMAIL_API_KEY')?.trim();
     const from = this.config.get<string>('EMAIL_FROM')?.trim();

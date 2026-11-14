@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { Prisma } from '../dist/generated/prisma/client.js';
 import { MenuImportsService } from '../dist/modules/menu/menu-imports.service.js';
 
 const owner = { id: 'user-1', role: 'OWNER', ownerId: 'owner-1' };
@@ -111,7 +112,7 @@ describe('Menu imports', () => {
       const result = await service.runAi({
         texts: ['Cà phê sữa 25.000'],
         categories: [{ id: 'category-1', name: 'Cà phê' }],
-        items: [{ id: 'item-1', categoryId: 'category-1', name: 'CÀ PHÊ SỮA', price: 25000 }],
+        items: [{ id: 'item-1', categoryId: 'category-1', name: 'CÀ PHÊ SỮA', price: new Prisma.Decimal('25000.00') }],
       });
       const body = JSON.parse(request.options.body);
 

@@ -332,6 +332,7 @@ describe('Platform subscription PayOS checkout', () => {
     const service = new PlatformBillingService(prisma, config, access, payos, {}, {}, realSchedule);
     assert.equal(await service.reconcilePending(), 1);
     assert.equal(checkoutStatus, 'PAID');
+    assert.ok(updated.expiresAt.getTime() - updated.startsAt.getTime() >= 28 * 86_400_000);
     assert.equal(updated.status, 'ACTIVE');
     assert.equal(updated.planId, paidPlan.id);
     assert.equal(events, 1);

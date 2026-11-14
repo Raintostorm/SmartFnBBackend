@@ -496,6 +496,8 @@ describe('Chain menu boundaries', () => {
     const captured = {};
     const service = new MenuService(
       {
+        $transaction(callback) { return callback(this); },
+        chainAuditLog: { create: async ({ data }) => { captured.audit = data; } },
         menuOptionGroup: {
           create: async (args) => {
             captured.args = args;
@@ -513,6 +515,7 @@ describe('Chain menu boundaries', () => {
     );
 
     assert.equal(captured.args.data.chainId, 'chain-one');
+    assert.equal(captured.audit.action, 'OPTION_GROUP_CREATED');
     assert.equal(captured.args.data.isRequired, true);
     assert.equal(captured.args.data.minSelections, 1);
     assert.equal(captured.args.data.maxSelections, 1);
@@ -539,7 +542,10 @@ describe('Chain menu boundaries', () => {
   it('replaces item option groups and preserves the submitted order', async () => {
     const operations = [];
     const transaction = {
+      $queryRaw: async () => [],
+      chainAuditLog: { create: async ({ data }) => operations.push({ type: 'audit', data }) },
       menuItemOptionGroup: {
+        findMany: async () => [{ groupId: 'size-group' }],
         deleteMany: async (args) => operations.push({ type: 'deleteMany', args }),
         upsert: async (args) => operations.push({ type: 'upsert', args }),
       },
