@@ -177,3 +177,22 @@ test('email delivery persists the account status and removes the queued token', 
     globalThis.fetch = originalFetch;
   }
 });
+
+test('Platform Staff pending list and badge include only live Owner requests even beyond the history limit', async () => {
+  const queries = [];
+  const service = new PasswordResetService({ passwordResetRequest: {
+    findMany: async args => { queries.push(args); return []; },
+    count: async args => { queries.push(args); return 137; },
+  } }, {}, {}, events());
+  const actor = { role: 'PLATFORM_STAFF' };
+  await service.list(actor, true);
+  const pending = queries.at(-1);
+  assert.equal(pending.take, undefined);
+  assert.equal(pending.where.status, 'PENDING');
+  assert.equal(pending.where.user.role.code, 'OWNER');
+  assert.ok(pending.where.expiresAt.gt instanceof Date);
+  assert.deepEqual(await service.count(actor), { count: 137 });
+  assert.deepEqual(queries.at(-1).where.user, pending.where.user);
+  await service.list(actor);
+  assert.equal(queries.at(-1).take, 100);
+});

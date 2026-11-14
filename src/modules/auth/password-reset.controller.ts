@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Query, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { AuthService } from './auth.service.js';
 import { PasswordResetService } from './password-reset.service.js';
@@ -27,7 +27,7 @@ export class PasswordResetController {
   confirm(@Body() dto: ConfirmPasswordResetDto, @Req() req: Request) { return this.auth.setupPassword({ token: dto.token, password: dto.newPassword }, { ipAddress: req.ip, userAgent: req.get('user-agent') }); }
 
   @Get('password-reset-requests')
-  list(@CurrentUser() actor: AuthenticatedUser) { return this.resets.list(actor); }
+  list(@CurrentUser() actor: AuthenticatedUser, @Query('status') status?: string) { return this.resets.list(actor, status === 'PENDING'); }
 
   @Get('password-reset-requests/count')
   count(@CurrentUser() actor: AuthenticatedUser) { return this.resets.count(actor); }

@@ -125,11 +125,13 @@ export class PasswordResetService implements OnModuleInit, OnModuleDestroy {
     if (mailId) await this.emails.deliver(mailId);
   }
 
-  async list(actor: AuthenticatedUser) {
+  async list(actor: AuthenticatedUser, pendingOnly = false) {
     const now = new Date();
     await this.expirePendingRequests(now);
     const scope = this.scope(actor);
-    const rows = await this.prisma.passwordResetRequest.findMany({ where: { ...scope, createdAt: { gt: new Date(now.getTime() - 30 * DAY) } }, include: { user: { select: { email: true, status: true, emailSendStatus: true, emailSentAt: true, role: { select: { code: true } }, employee: { select: { firstName: true, lastName: true } }, owner: { select: { firstName: true, lastName: true } } } }, handledBy: { select: { email: true, role: { select: { code: true } }, employee: { select: { firstName: true, lastName: true } }, owner: { select: { firstName: true, lastName: true } } } } }, orderBy: { createdAt: 'desc' }, take: 100 });
+    const rows = await this.prisma.passwordResetRequest.findMany({ where: pendingOnly
+      ? { ...scope, status: 'PENDING', expiresAt: { gt: now } }
+      : { ...scope, createdAt: { gt: new Date(now.getTime() - 30 * DAY) } }, include: { user: { select: { email: true, status: true, emailSendStatus: true, emailSentAt: true, role: { select: { code: true } }, employee: { select: { firstName: true, lastName: true } }, owner: { select: { firstName: true, lastName: true } } } }, handledBy: { select: { email: true, role: { select: { code: true } }, employee: { select: { firstName: true, lastName: true } }, owner: { select: { firstName: true, lastName: true } } } } }, orderBy: { createdAt: 'desc' }, take: pendingOnly ? undefined : 100 });
     return rows.map((row) => ({ ...row, handledByName: this.handlerName(row.handledBy), handledBy: undefined }));
   }
 
