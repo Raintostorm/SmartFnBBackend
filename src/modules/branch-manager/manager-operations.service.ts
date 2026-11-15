@@ -1,9 +1,19 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
-import type { ManagerAuditQueryDto, ManagerOrderQueryDto } from './manager.dto.js';
+import { AppRole } from '../auth/app-role.enum.js';
+import type {
+  ChainOrderQueryDto,
+  ManagerAuditQueryDto,
+  ManagerOrderQueryDto,
+} from './manager.dto.js';
 import { managerActor, writeBranchAudit } from './manager-scope.js';
 
 const actorSelect = { id: true, employeeCode: true, firstName: true, lastName: true };
@@ -93,12 +103,59 @@ export class ManagerOperationsService {
 
   async orders(user: AuthenticatedUser, query: ManagerOrderQueryDto) {
     const { branchId } = await this.scope(user);
+    return this.searchOrders({ branchId }, query, false);
+  }
+
+  /** The chain must be assigned to the Brand Manager; anything else looks like it does not exist. */
+  private async assertChainOwner(user: AuthenticatedUser, chainId: string) {
+    if (user.role !== AppRole.OWNER || !user.ownerId)
+      throw new ForbiddenException('Brand Manager required');
+    const assigned = await this.prisma.ownerChainAssignment.count({
+      where: { ownerId: user.ownerId, chainId, chain: { deletedAt: null } },
+    });
+    if (!assigned) throw new NotFoundException('Chain not found');
+  }
+
+  /** GAP-310: Brand Manager searches orders of one assigned chain, optionally narrowed to one branch. */
+  async chainOrders(user: AuthenticatedUser, chainId: string, query: ChainOrderQueryDto) {
+    await this.assertChainOwner(user, chainId);
+    if (query.branchId) {
+      const inChain = await this.prisma.branch.count({
+        where: { id: query.branchId, chainId, deletedAt: null },
+      });
+      if (!inChain) throw new NotFoundException('Branch not found in this chain');
+    }
+    return this.searchOrders(
+      {
+        branch: { chainId, deletedAt: null },
+        ...(query.branchId ? { branchId: query.branchId } : {}),
+      },
+      query,
+      true,
+    );
+  }
+
+  /** GAP-310: one order of an assigned chain, same shape as the Store Manager order detail plus its branch. */
+  async chainOrder(user: AuthenticatedUser, chainId: string, id: string) {
+    await this.assertChainOwner(user, chainId);
+    return this.loadOrder(
+      { id, branch: { chainId, deletedAt: null } },
+      true,
+      'Order not found in this chain',
+    );
+  }
+
+  private async searchOrders(
+    scopeWhere: Prisma.OrderWhereInput,
+    query: ManagerOrderQueryDto,
+    withBranch: boolean,
+  ) {
     if (query.from && query.to && new Date(query.from) >= new Date(query.to))
       throw new BadRequestException('from must be earlier than to');
     const search = query.search?.trim();
     const number = search && /^\d+$/.test(search) ? Number(search) : undefined;
     const where: Prisma.OrderWhereInput = {
-      branchId,
+      ...scopeWhere,
       type: query.type,
       status: query.status,
       paymentStatus: query.paymentStatus,
@@ -155,7 +212,10 @@ export class ManagerOperationsService {
     const [items, total] = await this.prisma.$transaction([
       this.prisma.order.findMany({
         where,
-        select: summarySelect,
+        select: {
+          ...summarySelect,
+          ...(withBranch ? { branch: { select: { id: true, code: true, name: true } } } : {}),
+        },
         orderBy: [
           { [query.sortBy ?? 'placedAt']: query.sortOrder ?? 'desc' },
           { id: query.sortOrder ?? 'desc' },
@@ -170,10 +230,15 @@ export class ManagerOperationsService {
 
   async order(user: AuthenticatedUser, id: string) {
     const { branchId } = await this.scope(user);
+    return this.loadOrder({ id, branchId }, false, 'Order not found in your branch');
+  }
+
+  private async loadOrder(where: Prisma.OrderWhereInput, withBranch: boolean, notFound: string) {
     const order = await this.prisma.order.findFirst({
-      where: { id, branchId },
+      where,
       select: {
         ...summarySelect,
+        ...(withBranch ? { branch: { select: { id: true, code: true, name: true } } } : {}),
         branchId: true,
         subtotal: true,
         discountAmount: true,
@@ -207,7 +272,7 @@ export class ManagerOperationsService {
         },
       },
     });
-    if (!order) throw new NotFoundException('Order not found in your branch');
+    if (!order) throw new NotFoundException(notFound);
     const paymentIds = [...order.payments, ...(order.tableSession?.payments ?? [])].map(
       (p) => p.id,
     );
@@ -223,7 +288,7 @@ export class ManagerOperationsService {
     ];
     const [audit, actorUsers] = await Promise.all([
       this.prisma.branchAuditLog.findMany({
-        where: { branchId, entityId: { in: [id, ...paymentIds, ...refundIds] } },
+        where: { branchId: order.branchId, entityId: { in: [order.id, ...paymentIds, ...refundIds] } },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       }),
       actorUserIds.length
