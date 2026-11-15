@@ -14,7 +14,6 @@ import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { Roles } from '../auth/decorators/roles.decorator.js';
 import {
-  CancellationsQueryDto,
   ReportRangeQueryDto,
   RevenueTimeseriesQueryDto,
   TopItemsQueryDto,
@@ -76,13 +75,10 @@ export class ReportsController {
 
   @Get('cancellations')
   @ApiOperation({
-    summary: 'Cancelled orders and refunds across the Owner report scope (BR-50)',
-    description:
-      'Totals plus the most recent cancelled orders (limit), each with who cancelled it and who requested and completed each refund. ' +
-      'Orders are placed on the range by cancelledAt and refunds by their cancellation date, both in the chain timezone (Vietnam time).',
+    summary: 'Cancelled orders and refunds in the report scope (BR-50)',
+    description: 'Count by cancellation time, refunds by cancellation date, and the latest orders with who cancelled and who refunded.',
   })
-  @ApiOkResponse({ description: 'Cancellation totals and the latest cancelled orders' })
-  getCancellations(@CurrentUser() user: AuthenticatedUser, @Query() query: CancellationsQueryDto) {
+  getCancellations(@CurrentUser() user: AuthenticatedUser, @Query() query: TopItemsQueryDto) {
     return this.reportsService.getCancellations(user, query);
   }
 

@@ -6,6 +6,16 @@ import { BranchAccessService } from '../branches/branch-access.service.js';
 import type { ManagerReportQueryDto } from './manager.dto.js';
 import { managerActor } from './manager-scope.js';
 
+type SummaryRow = {
+  grossRevenue: string;
+  refundAmount: string;
+  pendingRefundAmount: string;
+  netRevenue: string;
+  revenue: string;
+  orderCount: number;
+  averageOrderValue: string;
+};
+
 @Injectable()
 export class ManagerReportsService {
   constructor(
@@ -29,34 +39,22 @@ export class ManagerReportsService {
       ${endAt}::timestamptz AS end_at)`;
     const sales = Prisma.sql`sales AS (SELECT o.* FROM orders o CROSS JOIN bounds b WHERE o.branch_id = ${branchId}::uuid
       AND o.payment_status = 'PAID' AND o.paid_at >= b.start_at AND o.paid_at < b.end_at)`;
+    // Previous period of the same length, ending the day before `from`: "so với kỳ trước" on the cards.
+    const days = Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1;
+    const shift = (date: string, delta: number) => {
+      const d = new Date(`${date}T00:00:00.000Z`);
+      d.setUTCDate(d.getUTCDate() + delta);
+      return d.toISOString().slice(0, 10);
+    };
+    const previousFrom = shift(from, -days);
+    const previousTo = shift(from, -1);
+    const previousStartAt = this.zonedMidnight(previousFrom, branch.timezone);
     const result = await this.prisma.$transaction(
       async (tx) => {
-        const [summary] = await tx.$queryRaw<
-          Array<{
-            grossRevenue: string;
-            refundAmount: string;
-            pendingRefundAmount: string;
-            netRevenue: string;
-            revenue: string;
-            orderCount: number;
-            averageOrderValue: string;
-          }>
-        >`
-        WITH ${bounds}, ${sales}, refund_totals AS (
-          SELECT COALESCE(SUM(r.amount),0) AS total,
-            COALESCE(SUM(r.amount) FILTER (WHERE r.status = 'PENDING'),0) AS pending
-          FROM refunds r JOIN orders o ON o.id = r.order_id AND r.source <> 'LATE_PAYMENT' CROSS JOIN bounds b
-          WHERE o.branch_id = ${branchId}::uuid AND r.cancellation_date >= ${from}::date
-            AND r.cancellation_date <= ${to}::date
-        ), sale_totals AS (
-          SELECT COALESCE(SUM(total_amount),0) AS gross,
-            COUNT(*) FILTER (WHERE status <> 'CANCELLED')::int AS orders FROM sales
-        ) SELECT st.gross::text AS "grossRevenue",
-          rt.total::text AS "refundAmount", rt.pending::text AS "pendingRefundAmount",
-          (st.gross - rt.total)::text AS "netRevenue", (st.gross - rt.total)::text AS revenue,
-          st.orders AS "orderCount",
-          CASE WHEN st.orders = 0 THEN '0' ELSE ROUND((st.gross - rt.total) / st.orders, 2)::text END
-            AS "averageOrderValue" FROM sale_totals st CROSS JOIN refund_totals rt`;
+        const [summary] = await tx.$queryRaw<SummaryRow[]>(this.summarySql(branchId, startAt, endAt, from, to));
+        const [previousSummary] = await tx.$queryRaw<SummaryRow[]>(
+          this.summarySql(branchId, previousStartAt, startAt, previousFrom, previousTo),
+        );
         const revenue = await tx.$queryRaw`
         WITH ${bounds}, ${sales}, buckets AS (
           SELECT generate_series(date_trunc(${query.granularity}, ${from}::date::timestamp),
@@ -121,6 +119,24 @@ export class ManagerReportsService {
             SUM(m.refunded)::text AS "cashRefunded", (SUM(m.collected)-SUM(m.refunded))::text AS "netCash"
           FROM movements m LEFT JOIN employees e ON e.id=m.employee_id
           GROUP BY m.employee_id,e.first_name,e.last_name ORDER BY m.employee_id`;
+        // BR-83: the same three cash numbers per business day (branch time zone); days without
+        // cash movement are omitted. Totals equal the per-cashier table above.
+        const cashByDay = await tx.$queryRaw`
+          WITH movements AS (
+            SELECT (p.paid_at AT TIME ZONE ${branch.timezone})::date AS day, p.amount AS collected, 0::numeric AS refunded
+            FROM payments p JOIN orders o ON o.id=p.order_id
+            WHERE o.branch_id=${branchId}::uuid AND o.type='COUNTER_PICKUP'
+              AND p.method='CASH' AND p.status='SUCCESS' AND p.paid_at >= ${startAt} AND p.paid_at < ${endAt}
+            UNION ALL
+            SELECT (r.completed_at AT TIME ZONE ${branch.timezone})::date, 0::numeric, r.amount
+            FROM refunds r JOIN orders o ON o.id=r.order_id
+            WHERE o.branch_id=${branchId}::uuid AND o.type='COUNTER_PICKUP'
+              AND r.method='CASH' AND r.status='COMPLETED'
+              AND r.completed_at >= ${startAt} AND r.completed_at < ${endAt}
+          ) SELECT to_char(day,'YYYY-MM-DD') AS day,
+            SUM(collected)::text AS "cashCollected", SUM(refunded)::text AS "cashRefunded",
+            (SUM(collected)-SUM(refunded))::text AS "netCash"
+          FROM movements GROUP BY day ORDER BY day`;
         const topItems = await tx.$queryRaw`
         WITH ${bounds}, ${sales} SELECT i.menu_item_id AS "menuItemId", i.item_name AS name,
           SUM(i.quantity)::int AS quantity, SUM(i.total_price)::text AS "lineRevenue"
@@ -212,9 +228,11 @@ export class ManagerReportsService {
           AND o.cancelled_at >= b.start_at AND o.cancelled_at < b.end_at ORDER BY o.cancelled_at DESC,o.id LIMIT ${query.limit}`;
         return {
           summary,
+          previousSummary: { ...previousSummary, from: previousFrom, to: previousTo },
           revenue,
           payments,
           cashDrawer,
+          cashByDay,
           topItems,
           topCombos,
           topOptions,
@@ -231,6 +249,30 @@ export class ManagerReportsService {
       range: { from, to, timezone: branch.timezone, granularity: query.granularity },
       ...result,
     };
+  }
+
+  /** Revenue, refunds and AOV of one period. Same rules for the current and the previous period. */
+  private summarySql(branchId: string, startAt: Date, endAt: Date, from: string, to: string) {
+    return Prisma.sql`
+        WITH bounds AS (SELECT ${startAt}::timestamptz AS start_at, ${endAt}::timestamptz AS end_at),
+        sales AS (SELECT o.* FROM orders o CROSS JOIN bounds b WHERE o.branch_id = ${branchId}::uuid
+          AND o.payment_status = 'PAID' AND o.paid_at >= b.start_at AND o.paid_at < b.end_at),
+        refund_totals AS (
+          SELECT COALESCE(SUM(r.amount),0) AS total,
+            COALESCE(SUM(r.amount) FILTER (WHERE r.status = 'PENDING'),0) AS pending
+          FROM refunds r JOIN orders o ON o.id = r.order_id AND r.source <> 'LATE_PAYMENT'
+          WHERE o.branch_id = ${branchId}::uuid AND r.cancellation_date >= ${from}::date
+            AND r.cancellation_date <= ${to}::date
+        ), sale_totals AS (
+          SELECT COALESCE(SUM(total_amount),0) AS gross,
+            COALESCE(SUM(total_amount) FILTER (WHERE status <> 'CANCELLED'),0) AS completed,
+            COUNT(*) FILTER (WHERE status <> 'CANCELLED')::int AS orders FROM sales
+        ) SELECT st.gross::text AS "grossRevenue",
+          rt.total::text AS "refundAmount", rt.pending::text AS "pendingRefundAmount",
+          (st.gross - rt.total)::text AS "netRevenue", (st.gross - rt.total)::text AS revenue,
+          st.orders AS "orderCount",
+          CASE WHEN st.orders = 0 THEN '0' ELSE ROUND(st.completed / st.orders, 2)::text END
+            AS "averageOrderValue" FROM sale_totals st CROSS JOIN refund_totals rt`;
   }
 
   private range(query: ManagerReportQueryDto, timezone: string) {

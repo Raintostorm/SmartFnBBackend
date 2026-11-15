@@ -11,7 +11,6 @@ import { AppRole } from '../auth/app-role.enum.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
 import {
-  type CancellationsQueryDto,
   ReportGranularity,
   type ReportRangeQueryDto,
   type RevenueTimeseriesQueryDto,
@@ -96,6 +95,7 @@ export class ReportsService {
       this.prisma.order.groupBy({
         by: ['branchId'],
         where: this.countableOrdersWhere(scope),
+        _sum: { totalAmount: true },
         _count: { _all: true },
       }),
       this.prisma.$queryRaw<
@@ -121,6 +121,11 @@ export class ReportsService {
 
     const revenueByBranch = new Map(revenueRows.map((row) => [row.branchId, row]));
     const countsByBranch = new Map(countRows.map((row) => [row.branchId, row._count._all]));
+    // AOV = value of completed (not cancelled) orders / their count. Refunds are booked on the
+    // cancellation day (BR-50), so dividing net revenue by orders would let past refunds distort it.
+    const completedValueByBranch = new Map(
+      countRows.map((row) => [row.branchId, row._sum?.totalAmount ?? new Prisma.Decimal(0)]),
+    );
     const refundsByBranch = new Map(refundRows.map((row) => [row.branch_id, row]));
 
     const branches = scope.branches.map((branch) => {
@@ -142,8 +147,11 @@ export class ReportsService {
         discount: this.money(revenue?._sum.discountAmount ?? new Prisma.Decimal(0)),
         orderCount,
         averageOrderValue: this.money(
-          orderCount > 0 ? netRevenue.dividedBy(orderCount) : new Prisma.Decimal(0),
+          orderCount > 0
+            ? (completedValueByBranch.get(branch.id) ?? new Prisma.Decimal(0)).dividedBy(orderCount)
+            : new Prisma.Decimal(0),
         ),
+        completedOrderValue: this.money(completedValueByBranch.get(branch.id) ?? new Prisma.Decimal(0)),
         guestCount: 0,
         sessionCount: 0,
       };
@@ -169,7 +177,7 @@ export class ReportsService {
         averageOrderValue: this.money(
           branches.reduce((total, { orderCount }) => total + orderCount, 0) > 0
             ? new Prisma.Decimal(
-                this.sumMoney(branches.map(({ netRevenue }) => netRevenue)),
+                this.sumMoney(branches.map(({ completedOrderValue }) => completedOrderValue)),
               ).dividedBy(branches.reduce((total, { orderCount }) => total + orderCount, 0))
             : new Prisma.Decimal(0),
         ),
@@ -258,6 +266,59 @@ export class ReportsService {
         branch,
         methods: rows.filter((row) => row.branch_id === branch.id).map(map),
       })),
+    };
+  }
+
+  /**
+   * BR-50 / OW-08: cancelled orders in the Owner scope as their own section — count by cancellation
+   * time, refunds by cancellation date (same rule as revenue), and the latest orders with who
+   * cancelled and who refunded. Never exposes customer data beyond what Store Manager already sees.
+   */
+  async getCancellations(user: AuthenticatedUser, query: TopItemsQueryDto) {
+    const scope = await this.resolveScope(user, query);
+    if (!scope.branchIds.length)
+      return { range: this.describeRange(scope), total: 0, paidCancellationCount: 0, refundAmount: '0.00', pendingRefundAmount: '0.00', items: [], limit: query.limit };
+    const [[totals], items] = await Promise.all([
+      this.prisma.$queryRaw<Array<{ total: number; paid_count: number; refunds: string; pending: string }>>`
+        WITH cancelled AS (
+          SELECT COUNT(*)::int AS total FROM orders o
+          WHERE o.branch_id = ANY(${scope.branchIds}::uuid[]) AND o.type = 'COUNTER_PICKUP' AND o.status = 'CANCELLED'
+            AND o.cancelled_at >= ${scope.from} AND o.cancelled_at < ${scope.to}
+        ), paid AS (
+          SELECT COUNT(DISTINCT r.order_id)::int AS paid_count, COALESCE(SUM(r.amount),0)::text AS refunds,
+            COALESCE(SUM(r.amount) FILTER (WHERE r.status = 'PENDING'),0)::text AS pending
+          FROM refunds r JOIN orders o ON o.id = r.order_id AND r.source <> 'LATE_PAYMENT'
+          WHERE o.branch_id = ANY(${scope.branchIds}::uuid[]) AND o.type = 'COUNTER_PICKUP'
+            AND r.cancellation_date >= ${scope.fromDate}::date AND r.cancellation_date <= ${scope.toDate}::date
+        ) SELECT c.total, p.paid_count, p.refunds, p.pending FROM cancelled c CROSS JOIN paid p`,
+      this.prisma.$queryRaw<Array<Record<string, unknown>>>`
+        SELECT o.id, o.order_code AS "orderCode", o.call_number AS "callNumber", o.total_amount::text AS "totalAmount",
+          o.cancelled_at AS "cancelledAt", o.cancellation_reason AS reason,
+          jsonb_build_object('id', b.id, 'code', b.code, 'name', b.name) AS branch,
+          CASE WHEN cb.id IS NULL THEN NULL ELSE jsonb_build_object('id', cb.id, 'employeeCode', cb.employee_code,
+            'firstName', cb.first_name, 'lastName', cb.last_name) END AS "cancelledBy",
+          COALESCE((SELECT SUM(r.amount) FROM refunds r WHERE r.order_id = o.id),0)::text AS "refundAmount",
+          COALESCE((SELECT jsonb_agg(jsonb_build_object('id', r.id, 'amount', r.amount::text, 'status', r.status,
+              'method', r.method, 'reason', r.reason,
+              'completedBy', CASE WHEN done.id IS NULL THEN NULL ELSE jsonb_build_object('id', done.id,
+                'employeeCode', done.employee_code, 'firstName', done.first_name, 'lastName', done.last_name) END)
+              ORDER BY r.requested_at)
+            FROM refunds r LEFT JOIN employees done ON done.id = r.completed_by_employee_id
+            WHERE r.order_id = o.id), '[]'::jsonb) AS refunds
+        FROM orders o JOIN branches b ON b.id = o.branch_id
+        LEFT JOIN employees cb ON cb.id = o.cancelled_by_id
+        WHERE o.branch_id = ANY(${scope.branchIds}::uuid[]) AND o.type = 'COUNTER_PICKUP' AND o.status = 'CANCELLED'
+          AND o.cancelled_at >= ${scope.from} AND o.cancelled_at < ${scope.to}
+        ORDER BY o.cancelled_at DESC, o.id LIMIT ${query.limit}`,
+    ]);
+    return {
+      range: this.describeRange(scope),
+      total: totals?.total ?? 0,
+      paidCancellationCount: totals?.paid_count ?? 0,
+      refundAmount: this.money(new Prisma.Decimal(totals?.refunds ?? 0)),
+      pendingRefundAmount: this.money(new Prisma.Decimal(totals?.pending ?? 0)),
+      items,
+      limit: query.limit,
     };
   }
 
@@ -449,130 +510,6 @@ export class ReportsService {
   }
 
   // --- Scope and range ------------------------------------------------------
-
-  /**
-   * BR-50: cancelled orders and refunds in the range. Orders sit on the range by cancelledAt and refunds by their
-   * cancellation date, both in the chain timezone, matching the refund figures of the revenue reports.
-   */
-  async getCancellations(user: AuthenticatedUser, query: CancellationsQueryDto) {
-    const scope = await this.resolveScope(user, query);
-    const limit = query.limit;
-    if (scope.branchIds.length === 0) {
-      return {
-        total: 0,
-        paidCancellationCount: 0,
-        refundAmount: '0.00',
-        pendingRefundAmount: '0.00',
-        limit,
-        items: [],
-      };
-    }
-    const cancelledWhere: Prisma.OrderWhereInput = {
-      branchId: { in: scope.branchIds },
-      status: OrderStatus.CANCELLED,
-      cancelledAt: { gte: scope.from, lt: scope.to },
-    };
-    const personSelect = { id: true, employeeCode: true, firstName: true, lastName: true };
-    const [total, refundRows, orders] = await Promise.all([
-      this.prisma.order.count({ where: cancelledWhere }),
-      this.prisma.$queryRaw<
-        Array<{ count: bigint; refund_amount: string; pending_refund_amount: string }>
-      >`
-        SELECT COUNT(DISTINCT r.order_id) AS count,
-          COALESCE(SUM(r.amount),0)::text AS refund_amount,
-          COALESCE(SUM(r.amount) FILTER (WHERE r.status = 'PENDING'),0)::text AS pending_refund_amount
-        FROM refunds r JOIN orders o ON o.id = r.order_id AND r.source <> 'LATE_PAYMENT'
-        WHERE o.branch_id = ANY(${scope.branchIds}::uuid[])
-          AND o.type = 'COUNTER_PICKUP'
-          AND r.cancellation_date >= ${scope.fromDate}::date
-          AND r.cancellation_date <= ${scope.toDate}::date
-      `,
-      this.prisma.order.findMany({
-        where: cancelledWhere,
-        orderBy: [{ cancelledAt: 'desc' }, { id: 'asc' }],
-        take: limit,
-        select: {
-          id: true,
-          orderCode: true,
-          callNumber: true,
-          totalAmount: true,
-          cancelledAt: true,
-          cancellationReason: true,
-          branch: { select: { id: true, code: true, name: true } },
-          cancelledBy: { select: personSelect },
-          refunds: {
-            orderBy: { requestedAt: 'asc' },
-            select: {
-              id: true,
-              amount: true,
-              status: true,
-              method: true,
-              reason: true,
-              note: true,
-              requestedByEmployeeId: true,
-              completedByEmployeeId: true,
-            },
-          },
-        },
-      }),
-    ]);
-
-    const actorIds = [
-      ...new Set(
-        orders
-          .flatMap((order) =>
-            order.refunds.flatMap((refund) => [
-              refund.requestedByEmployeeId,
-              refund.completedByEmployeeId,
-            ]),
-          )
-          .filter((id): id is string => Boolean(id)),
-      ),
-    ];
-    const actors = actorIds.length
-      ? await this.prisma.employee.findMany({
-          where: { id: { in: actorIds } },
-          select: personSelect,
-        })
-      : [];
-    const actorById = new Map(actors.map((actor) => [actor.id, actor]));
-    const refundTotals = refundRows[0];
-
-    return {
-      total,
-      paidCancellationCount: Number(refundTotals?.count ?? 0),
-      refundAmount: this.money(new Prisma.Decimal(refundTotals?.refund_amount ?? 0)),
-      pendingRefundAmount: this.money(new Prisma.Decimal(refundTotals?.pending_refund_amount ?? 0)),
-      limit,
-      items: orders.map((order) => ({
-        id: order.id,
-        orderCode: order.orderCode,
-        callNumber: order.callNumber,
-        totalAmount: this.money(order.totalAmount),
-        cancelledAt: order.cancelledAt,
-        reason: order.cancellationReason,
-        branch: order.branch,
-        cancelledBy: order.cancelledBy,
-        refundAmount: this.money(
-          order.refunds.reduce((sum, refund) => sum.add(refund.amount), new Prisma.Decimal(0)),
-        ),
-        refunds: order.refunds.map((refund) => ({
-          id: refund.id,
-          amount: this.money(refund.amount),
-          status: refund.status,
-          method: refund.method,
-          reason: refund.reason,
-          note: refund.note,
-          requestedBy: refund.requestedByEmployeeId
-            ? (actorById.get(refund.requestedByEmployeeId) ?? null)
-            : null,
-          completedBy: refund.completedByEmployeeId
-            ? (actorById.get(refund.completedByEmployeeId) ?? null)
-            : null,
-        })),
-      })),
-    };
-  }
 
   private async resolveScope(
     user: AuthenticatedUser,

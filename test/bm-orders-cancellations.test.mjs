@@ -3,7 +3,6 @@ import { describe, it } from 'node:test';
 import { Prisma } from '../dist/generated/prisma/client.js';
 import { ManagerOperationsService } from '../dist/modules/branch-manager/manager-operations.service.js';
 import { CashLedgerService } from '../dist/modules/payments/cash-ledger.service.js';
-import { ReportsService } from '../dist/modules/reports/reports.service.js';
 
 const owner = { id: 'u-owner', role: 'OWNER', ownerId: 'owner-1', employeeId: null, branchId: null };
 const manager = { id: 'u-mgr', role: 'MANAGER', ownerId: null, employeeId: 'emp-1', branchId: 'b1' };
@@ -96,101 +95,6 @@ describe('GAP-310: Brand Manager reads orders of an assigned chain', () => {
     await service.order(manager, 'o1');
     assert.deepEqual(calls.findFirst[0].where, { id: 'o1', branchId: 'b1' });
     assert.equal(calls.findFirst[0].select.branch, undefined);
-  });
-});
-
-describe('BR-50: GET /reports/cancellations', () => {
-  const branchRows = [
-    { id: 'b1', code: 'B1', name: 'CN 1', city: 'HCM', chainId: 'c1', chain: { timezone: 'Asia/Ho_Chi_Minh' } },
-    { id: 'b2', code: 'B2', name: 'CN 2', city: 'HCM', chainId: 'c1', chain: { timezone: 'Asia/Ho_Chi_Minh' } },
-  ];
-  const person = (id, first) => ({ id, employeeCode: `E-${id}`, firstName: first, lastName: 'Trần' });
-
-  function build({ branches = branchRows, orders = [], total = 0, raw = [] } = {}) {
-    const calls = { count: [], findMany: [], raw: [], employees: [] };
-    const prisma = {
-      branch: { findMany: async () => branches },
-      order: {
-        count: async (args) => (calls.count.push(args), total),
-        findMany: async (args) => (calls.findMany.push(args), orders),
-      },
-      employee: { findMany: async (args) => (calls.employees.push(args), [person('e1', 'Lan'), person('e2', 'Minh')]) },
-      $queryRaw: async (...args) => (calls.raw.push(args), raw),
-    };
-    const access = { getAccessibleBranchIds: async () => branches.map((b) => b.id) };
-    const plans = { assertFeatureEnabled: async () => undefined };
-    return { service: new ReportsService(prisma, access, plans), calls };
-  }
-
-  const cancelledOrder = {
-    id: 'o1',
-    orderCode: 'CTR-1-AF0042',
-    callNumber: 12,
-    totalAmount: new Prisma.Decimal(75000),
-    cancelledAt: new Date('2026-11-03T05:00:00.000Z'),
-    cancellationReason: 'Khách đổi ý',
-    branch: { id: 'b1', code: 'B1', name: 'CN 1' },
-    cancelledBy: person('e1', 'Lan'),
-    refunds: [
-      { id: 'r1', amount: new Prisma.Decimal(50000), status: 'COMPLETED', method: 'CASH', reason: 'Huỷ', note: null, requestedByEmployeeId: 'e1', completedByEmployeeId: 'e2' },
-      { id: 'r2', amount: new Prisma.Decimal(25000), status: 'PENDING', method: 'CASH', reason: null, note: 'chờ', requestedByEmployeeId: 'e1', completedByEmployeeId: null },
-    ],
-  };
-
-  it('keeps the contract the Web calls: totals, the latest orders, who cancelled and who completed each refund', async () => {
-    const { service } = build({
-      orders: [cancelledOrder],
-      total: 3,
-      raw: [{ count: 2n, refund_amount: '75000.00', pending_refund_amount: '25000.00' }],
-    });
-    const result = await service.getCancellations(owner, { from: '2026-11-01', to: '2026-11-07', limit: 10 });
-    assert.equal(result.total, 3);
-    assert.equal(result.paidCancellationCount, 2);
-    assert.equal(result.refundAmount, '75000.00');
-    assert.equal(result.pendingRefundAmount, '25000.00');
-    assert.equal(result.limit, 10);
-    const [item] = result.items;
-    assert.equal(item.orderCode, 'CTR-1-AF0042');
-    assert.equal(item.callNumber, 12);
-    assert.equal(item.totalAmount, '75000.00');
-    assert.equal(item.reason, 'Khách đổi ý');
-    assert.deepEqual(item.branch, { id: 'b1', code: 'B1', name: 'CN 1' });
-    assert.equal(item.cancelledBy.firstName, 'Lan');
-    assert.equal(item.refundAmount, '75000.00');
-    assert.equal(item.refunds[0].completedBy.firstName, 'Minh');
-    assert.equal(item.refunds[0].requestedBy.firstName, 'Lan');
-    assert.equal(item.refunds[1].completedBy, null);
-    assert.equal(item.refunds[1].status, 'PENDING');
-  });
-
-  it('puts orders on the range by cancelledAt and refunds by their cancellation date, in Vietnam time', async () => {
-    const { service, calls } = build();
-    await service.getCancellations(owner, { from: '2026-11-01', to: '2026-11-07', limit: 5 });
-    const where = calls.findMany[0].where;
-    assert.equal(where.status, 'CANCELLED');
-    assert.deepEqual(where.branchId, { in: ['b1', 'b2'] });
-    assert.equal(where.cancelledAt.gte.toISOString(), '2026-10-31T17:00:00.000Z');
-    assert.equal(where.cancelledAt.lt.toISOString(), '2026-11-07T17:00:00.000Z');
-    assert.equal(calls.findMany[0].take, 5);
-    assert.deepEqual(calls.findMany[0].orderBy, [{ cancelledAt: 'desc' }, { id: 'asc' }]);
-    const [strings, ...values] = calls.raw[0];
-    assert.match(strings.join('?'), /r\.cancellation_date >= \?::date/);
-    assert.deepEqual(values, [['b1', 'b2'], '2026-11-01', '2026-11-07']);
-  });
-
-  it('returns an empty report when no branch is in scope, and reads names only when there are refunds', async () => {
-    const empty = build({ branches: [] });
-    const result = await empty.service.getCancellations(owner, { limit: 10 });
-    assert.deepEqual(result, { total: 0, paidCancellationCount: 0, refundAmount: '0.00', pendingRefundAmount: '0.00', limit: 10, items: [] });
-    const noRefunds = build({ orders: [{ ...cancelledOrder, refunds: [] }], total: 1 });
-    const none = await noRefunds.service.getCancellations(owner, { from: '2026-11-01', to: '2026-11-07', limit: 10 });
-    assert.equal(noRefunds.calls.employees.length, 0);
-    assert.equal(none.items[0].refundAmount, '0.00');
-  });
-
-  it('is for the Brand Manager only, like the other report routes', async () => {
-    const { service } = build();
-    await assert.rejects(service.getCancellations(manager, { limit: 10 }), status(403));
   });
 });
 

@@ -15,8 +15,15 @@ describe('Platform Admin analytics', () => {
           { status: 'APPROVED', _count: { _all: 2 } },
         ],
       },
-      businessSubscription: {
+      // MRR now comes from the period snapshots covering "now" (30.4), including add-ons.
+      subscriptionPeriod: {
         findMany: async () => [
+          { subscriptionId: 's-basic', monthlyPrice: 299000, extraBranches: 1, extraBranchPrice: 150000, accountPacks: 2, accountPackPrice: 50000, subscription: { status: 'ACTIVE', suspendedAt: null } },
+          { subscriptionId: 's-suspended', monthlyPrice: 499000, extraBranches: 0, extraBranchPrice: 0, accountPacks: 0, accountPackPrice: 0, subscription: { status: 'SUSPENDED', suspendedAt: new Date(Date.now() - 86_400_000) } },
+        ],
+      },
+      businessSubscription: {
+        findMany: async ({ where } = {}) => where?.periods ? [] : [
           {
             status: 'ACTIVE',
             expiresAt: new Date(Date.now() + 86_400_000),
@@ -57,7 +64,8 @@ describe('Platform Admin analytics', () => {
     assert.equal(result.registrations.PENDING, 3);
     assert.equal(result.registrations.REJECTED, 0);
     assert.deepEqual(result.businesses, { total: 4, paid: 1, trial: 1, expired: 1, suspended: 1 });
-    assert.equal(result.mrr, 299000);
+    // 299k plan + 1 extra branch (150k) + 2 account packs (2 × 50k); the suspended business is excluded.
+    assert.equal(result.mrr, 549000);
     assert.equal(result.revenueThisMonth, 798000);
     assert.equal(result.invoicesNeedReview, 3);
     assert.equal(prisma.order, undefined);
@@ -113,10 +121,24 @@ describe('Platform Admin analytics', () => {
             trialConvertedAt: paidAt,
             plan: { code: 'BASIC' },
           },
+          // October trial cohort: one converted, one still in trial, one ended without paying.
+          { status: 'ACTIVE', expiresAt: new Date('2027-01-01'), monthlyPrice: new Prisma.Decimal(299000), trialStartedAt: new Date('2026-10-05T03:00:00Z'), trialEndsAt: new Date('2026-10-19T03:00:00Z'), trialConvertedAt: new Date('2026-10-18T03:00:00Z'), plan: { code: 'BASIC' } },
+          { status: 'ACTIVE', expiresAt: new Date('2099-01-01'), monthlyPrice: new Prisma.Decimal(0), trialStartedAt: new Date('2026-10-30T03:00:00Z'), trialEndsAt: new Date('2099-01-01T00:00:00Z'), trialConvertedAt: null, plan: { code: 'TRIAL' } },
+          { status: 'EXPIRED', expiresAt: new Date('2026-10-24T03:00:00Z'), monthlyPrice: new Prisma.Decimal(0), trialStartedAt: new Date('2026-10-10T03:00:00Z'), trialEndsAt: new Date('2026-10-24T03:00:00Z'), trialConvertedAt: null, plan: { code: 'TRIAL' } },
         ],
+      },
+      subscriptionPeriod: {
+        findMany: async ({ where }) => {
+          mrrWhere = where;
+          return [
+            { subscriptionId: 's1', monthlyPrice: 499000, extraBranches: 0, extraBranchPrice: 0, accountPacks: 0, accountPackPrice: 0, subscription: { status: 'ACTIVE', suspendedAt: null } },
+            { subscriptionId: 's2', monthlyPrice: 299000, extraBranches: 0, extraBranchPrice: 0, accountPacks: 0, accountPackPrice: 0, subscription: { status: 'ACTIVE', suspendedAt: null } },
+          ];
+        },
       },
       businessSubscriptionEvent: { count: async () => 1 },
     };
+    let mrrWhere;
     const result = await new PlatformAdminAnalyticsService(prisma).revenue({
       from: '2026-10-01',
       to: '2026-10-31',
@@ -125,6 +147,13 @@ describe('Platform Admin analytics', () => {
     assert.equal(result.summary.revenue, 798000);
     assert.equal(result.summary.invoiceCount, 2);
     assert.equal(result.summary.mrr, 798000);
+    // A past range reads MRR at its last instant (31/10 23:59:59 Vietnam time), not "now".
+    assert.equal(mrrWhere.startsAt.lte.toISOString(), '2026-10-31T16:59:59.999Z');
+    assert.equal(result.summary.mrrAt, '2026-10-31T16:59:59.999Z');
+    // Cohort by trial START month; the September trial is outside the range.
+    assert.deepEqual(result.trialCohorts, [{ month: '2026-10', started: 3, converted: 1, inTrial: 1, conversionRate: 1 / 3, settledConversionRate: 0.5 }]);
+    assert.equal(result.summary.trialConversionRate, 1 / 3);
+    assert.equal(result.summary.trialInProgress, 1);
     assert.equal(result.summary.unpaidInvoices, 1);
     assert.equal(result.summary.reviewInvoices, 1);
     assert.equal(result.summary.manualRenewals, 1);
