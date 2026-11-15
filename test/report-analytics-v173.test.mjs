@@ -5,7 +5,8 @@ import { ManagerReportsService } from '../dist/modules/branch-manager/manager-re
 
 const owner = { id: 'user-owner', role: 'OWNER', ownerId: 'owner-id', branchId: null, chainIds: ['chain-one'] };
 const branch = { id: 'branch-one', code: 'B1', name: 'Branch 1', city: 'HCM', chainId: 'chain-one', chain: { timezone: 'Asia/Ho_Chi_Minh' } };
-const sqlOf = (strings) => strings.join('?');
+// Accepts both a tagged-template call and a Prisma.sql object.
+const sqlOf = (strings) => (Array.isArray(strings) ? strings : strings.strings).join('?');
 
 test('owner cancellations section counts by cancel time, refunds by cancel date, and names who refunded', async () => {
   const queries = [];
@@ -38,11 +39,15 @@ test('owner cancellations section counts by cancel time, refunds by cancel date,
 
 test('store report returns cash per day next to cash per cashier, and AOV ignores refunds of earlier days', async () => {
   const sqls = [];
+  const summaryValues = [];
   const tx = {
-    $queryRaw: async (strings) => {
+    $queryRaw: async (strings, ...values) => {
       const sql = sqlOf(strings);
       sqls.push(sql);
-      if (sql.includes('AS "averageOrderValue"')) return [{ grossRevenue: '0', orderCount: 0 }];
+      if (sql.includes('AS "averageOrderValue"')) {
+        summaryValues.push(Array.isArray(strings) ? values : strings.values);
+        return [{ grossRevenue: summaryValues.length === 1 ? '700000' : '500000', orderCount: summaryValues.length === 1 ? 7 : 5 }];
+      }
       if (sql.includes('"averageSeconds"')) return [{ averageSeconds: null, completedUnits: 0 }];
       if (sql.includes('AS "paidCancellationCount"')) return [{ total: 0, paidCancellationCount: 0, refundAmount: '0', pendingRefundAmount: '0' }];
       if (sql.includes('GROUP BY day')) return [{ day: '2026-11-02', cashCollected: '300000', cashRefunded: '50000', netCash: '250000' }];
@@ -59,6 +64,11 @@ test('store report returns cash per day next to cash per cashier, and AOV ignore
   const manager = { id: 'u-m', role: 'MANAGER', branchId: 'branch-one', employeeId: 'e-m', chainIds: [] };
   const result = await service.report(manager, { from: '2026-11-01', to: '2026-11-07', granularity: 'day', limit: 10 });
   assert.deepEqual(result.cashByDay, [{ day: '2026-11-02', cashCollected: '300000', cashRefunded: '50000', netCash: '250000' }]);
+  // Previous period: same 7 days, ending the day before `from`, same SQL rules.
+  assert.deepEqual(result.previousSummary, { grossRevenue: '500000', orderCount: 5, from: '2026-10-25', to: '2026-10-31' });
+  assert.equal(summaryValues.length, 2);
+  assert.ok(summaryValues[1].includes('2026-10-25') && summaryValues[1].includes('2026-10-31'));
+  assert.equal(result.summary.grossRevenue, '700000');
   const summarySql = sqls.find((sql) => sql.includes('AS "averageOrderValue"'));
   assert.match(summarySql, /ROUND\(st\.completed \/ st\.orders, 2\)/);
   assert.doesNotMatch(summarySql, /ROUND\(\(st\.gross - rt\.total\) \/ st\.orders/);
