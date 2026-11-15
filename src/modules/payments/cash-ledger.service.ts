@@ -190,6 +190,7 @@ export class CashLedgerService {
         occurredAtVietnam: this.vietnamTime(entry.occurredAt),
         businessDate: entry.order?.businessDate,
         branch: entry.branch,
+        orderId: entry.orderId ?? null,
         orderCode: entry.order?.orderCode ?? null,
         callNumber: entry.order?.callNumber ?? null,
         actor,

@@ -196,6 +196,14 @@ export class ManagerOrderQueryDto extends ManagerPageDto {
   type?: OrderType;
 }
 
+/** GAP-310: the Brand Manager order search takes every Store Manager filter plus an optional branch of the chain. */
+export class ChainOrderQueryDto extends ManagerOrderQueryDto {
+  @ApiPropertyOptional({ format: 'uuid', description: 'Only orders of this branch (must belong to the chain)' })
+  @IsOptional()
+  @IsUUID()
+  branchId?: string;
+}
+
 export class CancelPaidOrderDto {
   @ApiPropertyOptional({
     enum: ['CHANGE_OF_MIND', 'WRONG_ITEM', 'OUT_OF_STOCK', 'LONG_WAIT', 'OTHER'],

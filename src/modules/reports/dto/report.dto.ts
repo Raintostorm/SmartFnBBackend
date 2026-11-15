@@ -83,6 +83,17 @@ export class RevenueTimeseriesQueryDto extends ReportRangeQueryDto {
   granularity: ReportGranularity = ReportGranularity.DAY;
 }
 
+/** BR-50: cancelled orders and refunds in the range; limit caps the number of listed orders (totals are never capped). */
+export class CancellationsQueryDto extends ReportRangeQueryDto {
+  @ApiPropertyOptional({ default: 10, minimum: 1, maximum: 50 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(50)
+  limit: number = 10;
+}
+
 export class TopItemsQueryDto extends ReportRangeQueryDto {
   @ApiPropertyOptional({ default: 10, minimum: 1, maximum: 50 })
   @IsOptional()

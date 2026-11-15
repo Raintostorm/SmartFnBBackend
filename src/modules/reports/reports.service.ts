@@ -11,6 +11,7 @@ import { AppRole } from '../auth/app-role.enum.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
 import {
+  type CancellationsQueryDto,
   ReportGranularity,
   type ReportRangeQueryDto,
   type RevenueTimeseriesQueryDto,
@@ -448,6 +449,130 @@ export class ReportsService {
   }
 
   // --- Scope and range ------------------------------------------------------
+
+  /**
+   * BR-50: cancelled orders and refunds in the range. Orders sit on the range by cancelledAt and refunds by their
+   * cancellation date, both in the chain timezone, matching the refund figures of the revenue reports.
+   */
+  async getCancellations(user: AuthenticatedUser, query: CancellationsQueryDto) {
+    const scope = await this.resolveScope(user, query);
+    const limit = query.limit;
+    if (scope.branchIds.length === 0) {
+      return {
+        total: 0,
+        paidCancellationCount: 0,
+        refundAmount: '0.00',
+        pendingRefundAmount: '0.00',
+        limit,
+        items: [],
+      };
+    }
+    const cancelledWhere: Prisma.OrderWhereInput = {
+      branchId: { in: scope.branchIds },
+      status: OrderStatus.CANCELLED,
+      cancelledAt: { gte: scope.from, lt: scope.to },
+    };
+    const personSelect = { id: true, employeeCode: true, firstName: true, lastName: true };
+    const [total, refundRows, orders] = await Promise.all([
+      this.prisma.order.count({ where: cancelledWhere }),
+      this.prisma.$queryRaw<
+        Array<{ count: bigint; refund_amount: string; pending_refund_amount: string }>
+      >`
+        SELECT COUNT(DISTINCT r.order_id) AS count,
+          COALESCE(SUM(r.amount),0)::text AS refund_amount,
+          COALESCE(SUM(r.amount) FILTER (WHERE r.status = 'PENDING'),0)::text AS pending_refund_amount
+        FROM refunds r JOIN orders o ON o.id = r.order_id AND r.source <> 'LATE_PAYMENT'
+        WHERE o.branch_id = ANY(${scope.branchIds}::uuid[])
+          AND o.type = 'COUNTER_PICKUP'
+          AND r.cancellation_date >= ${scope.fromDate}::date
+          AND r.cancellation_date <= ${scope.toDate}::date
+      `,
+      this.prisma.order.findMany({
+        where: cancelledWhere,
+        orderBy: [{ cancelledAt: 'desc' }, { id: 'asc' }],
+        take: limit,
+        select: {
+          id: true,
+          orderCode: true,
+          callNumber: true,
+          totalAmount: true,
+          cancelledAt: true,
+          cancellationReason: true,
+          branch: { select: { id: true, code: true, name: true } },
+          cancelledBy: { select: personSelect },
+          refunds: {
+            orderBy: { requestedAt: 'asc' },
+            select: {
+              id: true,
+              amount: true,
+              status: true,
+              method: true,
+              reason: true,
+              note: true,
+              requestedByEmployeeId: true,
+              completedByEmployeeId: true,
+            },
+          },
+        },
+      }),
+    ]);
+
+    const actorIds = [
+      ...new Set(
+        orders
+          .flatMap((order) =>
+            order.refunds.flatMap((refund) => [
+              refund.requestedByEmployeeId,
+              refund.completedByEmployeeId,
+            ]),
+          )
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    const actors = actorIds.length
+      ? await this.prisma.employee.findMany({
+          where: { id: { in: actorIds } },
+          select: personSelect,
+        })
+      : [];
+    const actorById = new Map(actors.map((actor) => [actor.id, actor]));
+    const refundTotals = refundRows[0];
+
+    return {
+      total,
+      paidCancellationCount: Number(refundTotals?.count ?? 0),
+      refundAmount: this.money(new Prisma.Decimal(refundTotals?.refund_amount ?? 0)),
+      pendingRefundAmount: this.money(new Prisma.Decimal(refundTotals?.pending_refund_amount ?? 0)),
+      limit,
+      items: orders.map((order) => ({
+        id: order.id,
+        orderCode: order.orderCode,
+        callNumber: order.callNumber,
+        totalAmount: this.money(order.totalAmount),
+        cancelledAt: order.cancelledAt,
+        reason: order.cancellationReason,
+        branch: order.branch,
+        cancelledBy: order.cancelledBy,
+        refundAmount: this.money(
+          order.refunds.reduce((sum, refund) => sum.add(refund.amount), new Prisma.Decimal(0)),
+        ),
+        refunds: order.refunds.map((refund) => ({
+          id: refund.id,
+          amount: this.money(refund.amount),
+          status: refund.status,
+          method: refund.method,
+          reason: refund.reason,
+          note: refund.note,
+          requestedBy: refund.requestedByEmployeeId
+            ? (actorById.get(refund.requestedByEmployeeId) ?? null)
+            : null,
+          completedBy: refund.completedByEmployeeId
+            ? (actorById.get(refund.completedByEmployeeId) ?? null)
+            : null,
+        })),
+      })),
+    };
+  }
 
   private async resolveScope(
     user: AuthenticatedUser,

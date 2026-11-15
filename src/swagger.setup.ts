@@ -25,6 +25,7 @@ export const SWAGGER_TAGS = [
     'Brand Manager duyệt bản nháp OCR + AI trước khi nhập vào menu toàn chuỗi.',
   ],
   ['Reports - OWNER', 'Báo cáo doanh thu và vận hành của OWNER.'],
+  ['Brand Manager - Orders', 'Brand Manager tra cứu đơn của các chi nhánh trong chuỗi được gán (chỉ đọc).'],
   [
     'Store Manager',
     'Quản lý Cashier/Barista, tùy chọn, báo cáo, tra cứu đơn và audit trong chi nhánh được gán.',
