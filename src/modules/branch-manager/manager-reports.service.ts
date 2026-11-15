@@ -27,7 +27,7 @@ export class ManagerReportsService {
     const endAt = this.zonedMidnight(nextDate.toISOString().slice(0, 10), branch.timezone);
     const bounds = Prisma.sql`bounds AS (SELECT ${startAt}::timestamptz AS start_at,
       ${endAt}::timestamptz AS end_at)`;
-    const sales = Prisma.sql`sales AS (SELECT o.* FROM orders o, bounds b WHERE o.branch_id = ${branchId}::uuid
+    const sales = Prisma.sql`sales AS (SELECT o.* FROM orders o CROSS JOIN bounds b WHERE o.branch_id = ${branchId}::uuid
       AND o.payment_status = 'PAID' AND o.paid_at >= b.start_at AND o.paid_at < b.end_at)`;
     const result = await this.prisma.$transaction(
       async (tx) => {
@@ -45,7 +45,7 @@ export class ManagerReportsService {
         WITH ${bounds}, ${sales}, refund_totals AS (
           SELECT COALESCE(SUM(r.amount),0) AS total,
             COALESCE(SUM(r.amount) FILTER (WHERE r.status = 'PENDING'),0) AS pending
-          FROM refunds r JOIN orders o ON o.id = r.order_id AND r.source <> 'LATE_PAYMENT', bounds b
+          FROM refunds r JOIN orders o ON o.id = r.order_id AND r.source <> 'LATE_PAYMENT' CROSS JOIN bounds b
           WHERE o.branch_id = ${branchId}::uuid AND r.cancellation_date >= ${from}::date
             AND r.cancellation_date <= ${to}::date
         ), sale_totals AS (
@@ -84,7 +84,7 @@ export class ManagerReportsService {
             SUM(COALESCE(p.received_amount,p.amount)) AS gross_received,
             COUNT(*) FILTER (WHERE po.status <> 'CANCELLED')::int AS successful_count,
             COUNT(*) FILTER (WHERE po.status = 'CANCELLED')::int AS cancelled_count
-          FROM payments p JOIN sales po ON po.id = p.order_id, bounds b
+          FROM payments p JOIN sales po ON po.id = p.order_id CROSS JOIN bounds b
           WHERE p.status = 'SUCCESS' AND p.paid_at >= b.start_at AND p.paid_at < b.end_at
           GROUP BY p.method
         ), refund_totals AS (
@@ -158,11 +158,11 @@ export class ManagerReportsService {
         >`
         WITH ${bounds}, durations AS (
           SELECT EXTRACT(EPOCH FROM (u.completed_at - u.started_at)) AS seconds FROM order_item_units u
-          JOIN order_items i ON i.id = u.order_item_id JOIN orders o ON o.id = i.order_id, bounds b
+          JOIN order_items i ON i.id = u.order_item_id JOIN orders o ON o.id = i.order_id CROSS JOIN bounds b
           WHERE o.branch_id = ${branchId}::uuid AND u.completed_at >= b.start_at AND u.completed_at < b.end_at
             AND u.started_at IS NOT NULL AND u.completed_at >= u.started_at AND u.status <> 'CANCELLED' AND o.status <> 'CANCELLED'
           UNION ALL
-          SELECT EXTRACT(EPOCH FROM (i.completed_at - i.started_at)) FROM order_items i JOIN orders o ON o.id = i.order_id, bounds b
+          SELECT EXTRACT(EPOCH FROM (i.completed_at - i.started_at)) FROM order_items i JOIN orders o ON o.id = i.order_id CROSS JOIN bounds b
           WHERE o.branch_id = ${branchId}::uuid AND i.completed_at >= b.start_at AND i.completed_at < b.end_at
             AND i.started_at IS NOT NULL AND i.completed_at >= i.started_at AND i.status <> 'CANCELLED' AND o.status <> 'CANCELLED'
             AND NOT EXISTS (SELECT 1 FROM order_item_units u WHERE u.order_item_id = i.id)
@@ -176,7 +176,7 @@ export class ManagerReportsService {
           }>
         >`
         WITH ${bounds}, cancelled AS (
-          SELECT COUNT(*)::int AS total FROM orders o,bounds b WHERE o.branch_id=${branchId}::uuid
+          SELECT COUNT(*)::int AS total FROM orders o CROSS JOIN bounds b WHERE o.branch_id=${branchId}::uuid
             AND o.status='CANCELLED' AND o.cancelled_at>=b.start_at AND o.cancelled_at<b.end_at
         ), paid AS (
           SELECT COUNT(DISTINCT r.order_id)::int AS count, COALESCE(SUM(r.amount),0) AS refunds,
@@ -205,7 +205,9 @@ export class ManagerReportsService {
             LEFT JOIN employees requested_by ON requested_by.id=r.requested_by_employee_id
             LEFT JOIN employees completed_by ON completed_by.id=r.completed_by_employee_id
             WHERE r.order_id=o.id),'[]'::jsonb) AS refunds
-        FROM orders o,bounds b LEFT JOIN employees cancelled_by ON cancelled_by.id=o.cancelled_by_id
+        FROM orders o
+        LEFT JOIN employees cancelled_by ON cancelled_by.id=o.cancelled_by_id
+        CROSS JOIN bounds b
         WHERE o.branch_id = ${branchId}::uuid AND o.status = 'CANCELLED'
           AND o.cancelled_at >= b.start_at AND o.cancelled_at < b.end_at ORDER BY o.cancelled_at DESC,o.id LIMIT ${query.limit}`;
         return {
