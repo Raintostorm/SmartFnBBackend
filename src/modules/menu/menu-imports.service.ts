@@ -25,7 +25,14 @@ export interface MenuImportFile {
 }
 
 type DraftAction = 'CREATE' | 'UPDATE_PRICE' | 'SKIP';
-type DraftSize = { name: string; priceDelta: number };
+type DraftOption = { name: string; priceDelta: number };
+type DraftOptionGroup = {
+  name: string;
+  isRequired: boolean;
+  minSelections: number;
+  maxSelections: number;
+  options: DraftOption[];
+};
 type DraftExtra = { name: string; price: number };
 type DraftItem = {
   name: string;
@@ -34,7 +41,9 @@ type DraftItem = {
   action: DraftAction;
   existingItemId: string;
   branchIds: string[];
-  sizes: DraftSize[];
+  optionGroups: DraftOptionGroup[];
+  /** Older drafts are normalized to optionGroups before review or commit. */
+  sizes?: DraftOption[];
   extras: DraftExtra[];
   warning: string;
 };
@@ -66,15 +75,29 @@ const draftSchema = {
                 name: { type: 'string' },
                 description: { type: 'string' },
                 price: { type: 'integer', minimum: 0 },
-                sizes: {
+                optionGroups: {
                   type: 'array',
                   items: {
                     type: 'object',
                     additionalProperties: false,
-                    required: ['name', 'priceDelta'],
+                    required: ['name', 'isRequired', 'minSelections', 'maxSelections', 'options'],
                     properties: {
                       name: { type: 'string' },
-                      priceDelta: { type: 'integer', minimum: 0 },
+                      isRequired: { type: 'boolean' },
+                      minSelections: { type: 'integer', minimum: 0 },
+                      maxSelections: { type: 'integer', minimum: 1 },
+                      options: {
+                        type: 'array',
+                        items: {
+                          type: 'object',
+                          additionalProperties: false,
+                          required: ['name', 'priceDelta'],
+                          properties: {
+                            name: { type: 'string' },
+                            priceDelta: { type: 'integer', minimum: 0 },
+                          },
+                        },
+                      },
                     },
                   },
                 },
@@ -240,7 +263,9 @@ export class MenuImportsService implements OnModuleInit {
           }
           const branchIds = itemDraft.branchIds.length
             ? [...new Set(itemDraft.branchIds)]
-            : itemDraft.action === 'CREATE' ? [...allowedBranches] : [];
+            : itemDraft.action === 'CREATE'
+              ? [...allowedBranches]
+              : [];
           if (branchIds.some((branchId) => !allowedBranches.has(branchId)))
             throw new BadRequestException(`Branch selection is invalid for ${itemDraft.name}`);
 
@@ -283,7 +308,7 @@ export class MenuImportsService implements OnModuleInit {
               create: { branchId, menuItemId: item.id },
               update: { isEnabled: true },
             });
-          await this.attachSizes(tx, chainId, item.id, itemDraft.sizes);
+          await this.attachOptionGroups(tx, chainId, item.id, itemDraft.optionGroups);
           await this.attachExtras(tx, chainId, item.id, itemDraft.extras);
         }
       }
@@ -374,7 +399,7 @@ export class MenuImportsService implements OnModuleInit {
           {
             role: 'system',
             content:
-              'Extract Vietnamese menu groups, items and prices as compact JSON. Omit optional fields unless explicitly present. Apply a group price to its items when clear. Convert k and dotted VND prices to integer VND. Include each item once. Put uncertain lines in unresolved. Never invent names or prices.',
+              'Extract Vietnamese menu categories, items and prices as compact JSON. Put choices such as size, temperature or sugar level into named optionGroups with options; use isRequired/minSelections/maxSelections to describe the selection rule. Put separately priced add-ons in extras. Omit optional fields unless explicitly present. Apply a category price to its items when clear. Convert k and dotted VND prices to integer VND. Include each item once. Put uncertain lines in unresolved. Never invent names or prices.',
           },
           { role: 'user', content: chunk },
         ],
@@ -389,11 +414,19 @@ export class MenuImportsService implements OnModuleInit {
         const categoryId = this.findMenuCategoryId(source.categories, category.name);
         for (const item of category.items) {
           const matches = Array.isArray(source.items)
-            ? source.items.filter(candidate => categoryId && candidate.categoryId === categoryId &&
-                this.menuNameKey(candidate.name) === this.menuNameKey(item.name))
+            ? source.items.filter(
+                (candidate) =>
+                  categoryId &&
+                  candidate.categoryId === categoryId &&
+                  this.menuNameKey(candidate.name) === this.menuNameKey(item.name),
+              )
             : [];
           const existing = matches.length === 1 ? matches[0] : undefined;
-          item.action = existing ? (new Prisma.Decimal(existing.price).equals(item.price) ? 'SKIP' : 'UPDATE_PRICE') : 'CREATE';
+          item.action = existing
+            ? new Prisma.Decimal(existing.price).equals(item.price)
+              ? 'SKIP'
+              : 'UPDATE_PRICE'
+            : 'CREATE';
           item.existingItemId = existing?.id ?? '';
           item.branchIds = [];
         }
@@ -405,7 +438,9 @@ export class MenuImportsService implements OnModuleInit {
 
   private findMenuCategoryId(value: unknown, name: string): string | undefined {
     if (!Array.isArray(value)) return undefined;
-    const matches = value.filter(category => this.menuNameKey(category.name) === this.menuNameKey(name));
+    const matches = value.filter(
+      (category) => this.menuNameKey(category.name) === this.menuNameKey(name),
+    );
     return matches.length === 1 ? matches[0].id : undefined;
   }
 
@@ -442,7 +477,9 @@ export class MenuImportsService implements OnModuleInit {
     const unresolved = new Set<string>();
     for (const draft of drafts) {
       for (const category of Array.isArray(draft?.categories) ? draft.categories : []) {
-        const categoryKey = String(category?.name ?? '').trim().toLocaleLowerCase('vi');
+        const categoryKey = String(category?.name ?? '')
+          .trim()
+          .toLocaleLowerCase('vi');
         if (!categoryKey) continue;
         let target = categories.get(categoryKey);
         if (!target) {
@@ -452,7 +489,9 @@ export class MenuImportsService implements OnModuleInit {
         for (const item of Array.isArray(category.items) ? category.items : []) {
           const itemKey = [
             categoryKey,
-            String(item?.name ?? '').trim().toLocaleLowerCase('vi'),
+            String(item?.name ?? '')
+              .trim()
+              .toLocaleLowerCase('vi'),
             Number(item?.price),
             String(item?.action ?? ''),
             String(item?.existingItemId ?? ''),
@@ -483,7 +522,9 @@ export class MenuImportsService implements OnModuleInit {
             },
             {
               type: 'image_url',
-              image_url: { url: `data:${image.contentType};base64,${image.data.toString('base64')}` },
+              image_url: {
+                url: `data:${image.contentType};base64,${image.data.toString('base64')}`,
+              },
             },
           ],
         },
@@ -501,7 +542,9 @@ export class MenuImportsService implements OnModuleInit {
     const model = process.env.AI_MODEL?.trim() || 'qwen3.5:4b';
     const timeoutMs = Number(process.env.AI_REQUEST_TIMEOUT_MS || 190_000);
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1000)
-      throw new ServiceUnavailableException('AI_REQUEST_TIMEOUT_MS must be an integer of at least 1000');
+      throw new ServiceUnavailableException(
+        'AI_REQUEST_TIMEOUT_MS must be an integer of at least 1000',
+      );
     const headers: Record<string, string> = {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
@@ -531,7 +574,9 @@ export class MenuImportsService implements OnModuleInit {
       choices?: Array<{ finish_reason?: string; message?: { content?: string } }>;
     };
     if (!response.ok)
-      throw new Error(body.error?.message || `Qwen gateway rejected menu import (${response.status})`);
+      throw new Error(
+        body.error?.message || `Qwen gateway rejected menu import (${response.status})`,
+      );
     if (body.choices?.[0]?.finish_reason === 'length')
       throw new Error('Qwen output exceeded the configured token limit');
     const text = body.choices?.[0]?.message?.content;
@@ -576,17 +621,55 @@ export class MenuImportsService implements OnModuleInit {
             action: item.action,
             existingItemId: String(item.existingItemId ?? ''),
             branchIds: Array.isArray(item.branchIds) ? item.branchIds.map(String) : [],
-            sizes: Array.isArray(item.sizes)
-              ? item.sizes
-                  .map((size) => ({
-                    name: String(size.name).trim().slice(0, 100),
-                    priceDelta: Number(size.priceDelta),
-                  }))
-                  .filter(
-                    (size) =>
-                      size.name && Number.isInteger(size.priceDelta) && size.priceDelta >= 0,
-                  )
-              : [],
+            optionGroups: (Array.isArray(item.optionGroups)
+              ? item.optionGroups
+              : Array.isArray(item.sizes) && item.sizes.length
+                ? [
+                    {
+                      name: 'Kích cỡ',
+                      isRequired: true,
+                      minSelections: 1,
+                      maxSelections: 1,
+                      options: item.sizes,
+                    },
+                  ]
+                : []
+            ).map((group) => {
+              const options = Array.isArray(group.options)
+                ? group.options
+                    .map((option) => ({
+                      name: String(option.name ?? '')
+                        .trim()
+                        .slice(0, 100),
+                      priceDelta: Number(option.priceDelta),
+                    }))
+                    .filter(
+                      (option) =>
+                        option.name &&
+                        Number.isInteger(option.priceDelta) &&
+                        option.priceDelta >= 0,
+                    )
+                : [];
+              const name = String(group.name ?? '')
+                .trim()
+                .slice(0, 100);
+              const isRequired = group.isRequired === true;
+              const minSelections = Number(group.minSelections ?? (isRequired ? 1 : 0));
+              const maxSelections = Number(group.maxSelections ?? 1);
+              if (
+                !name ||
+                !options.length ||
+                !Number.isInteger(minSelections) ||
+                !Number.isInteger(maxSelections) ||
+                isRequired !== minSelections > 0 ||
+                maxSelections < Math.max(1, minSelections) ||
+                maxSelections > options.length ||
+                new Set(options.map((option) => option.name.toLocaleLowerCase('vi'))).size !==
+                  options.length
+              )
+                throw new BadRequestException(`Invalid option group for ${item.name}`);
+              return { name, isRequired, minSelections, maxSelections, options };
+            }),
             extras: Array.isArray(item.extras)
               ? item.extras
                   .map((extra) => ({
@@ -654,61 +737,69 @@ export class MenuImportsService implements OnModuleInit {
     return `IMPORT-${stem}-${randomUUID().slice(0, 6).toUpperCase()}`;
   }
 
-  private async attachSizes(
+  private async attachOptionGroups(
     tx: Prisma.TransactionClient,
     chainId: string,
     menuItemId: string,
-    sizes: DraftSize[],
+    groups: DraftOptionGroup[],
   ) {
-    if (!sizes.length) return;
-    const signature = createHash('sha256')
-      .update(
-        JSON.stringify(
-          sizes.map((size) => [size.name.trim().toLocaleLowerCase('vi'), size.priceDelta]),
-        ),
-      )
-      .digest('hex')
-      .slice(0, 10)
-      .toUpperCase();
-    const groupCode = `SIZE_IMPORT_${signature}`;
-    let group = await tx.menuOptionGroup.findFirst({ where: { chainId, code: groupCode } });
-    if (!group)
-      group = await tx.menuOptionGroup.create({
-        data: {
-          chainId,
-          name: 'Kích cỡ',
-          code: groupCode,
-          isRequired: true,
-          minSelections: 1,
-          maxSelections: 1,
-        },
-      });
-    for (const [index, size] of sizes.entries()) {
-      const code =
-        size.name
-          .normalize('NFD')
-          .replace(/[\u0300-\u036f]/g, '')
-          .toUpperCase()
-          .replace(/[^A-Z0-9]+/g, '_')
-          .slice(0, 50) || `SIZE_${index + 1}`;
-      await tx.menuOption.upsert({
-        where: { groupId_code: { groupId: group.id, code } },
-        create: {
-          groupId: group.id,
-          name: size.name,
-          code,
-          priceDelta: size.priceDelta,
-          isDefault: index === 0,
-          displayOrder: index,
-        },
-        update: { name: size.name, priceDelta: size.priceDelta, isActive: true },
+    for (const [groupIndex, value] of groups.entries()) {
+      const signature = createHash('sha256')
+        .update(
+          JSON.stringify([
+            value.name.toLocaleLowerCase('vi'),
+            value.isRequired,
+            value.minSelections,
+            value.maxSelections,
+            value.options.map((option) => [option.name.toLocaleLowerCase('vi'), option.priceDelta]),
+          ]),
+        )
+        .digest('hex')
+        .slice(0, 12)
+        .toUpperCase();
+      const groupCode = `OPT_IMPORT_${signature}`;
+      let group = await tx.menuOptionGroup.findFirst({ where: { chainId, code: groupCode } });
+      if (!group)
+        group = await tx.menuOptionGroup.create({
+          data: {
+            chainId,
+            name: value.name,
+            code: groupCode,
+            isRequired: value.isRequired,
+            minSelections: value.minSelections,
+            maxSelections: value.maxSelections,
+            displayOrder: groupIndex,
+          },
+        });
+      for (const [index, option] of value.options.entries()) {
+        const stem =
+          option.name
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toUpperCase()
+            .replace(/[^A-Z0-9]+/g, '_')
+            .replace(/^_|_$/g, '')
+            .slice(0, 40) || 'OPTION';
+        const code = `${stem}_${index + 1}`;
+        await tx.menuOption.upsert({
+          where: { groupId_code: { groupId: group.id, code } },
+          create: {
+            groupId: group.id,
+            name: option.name,
+            code,
+            priceDelta: option.priceDelta,
+            isDefault: value.isRequired && value.maxSelections === 1 && index === 0,
+            displayOrder: index,
+          },
+          update: { name: option.name, priceDelta: option.priceDelta, isActive: true },
+        });
+      }
+      await tx.menuItemOptionGroup.upsert({
+        where: { menuItemId_groupId: { menuItemId, groupId: group.id } },
+        create: { menuItemId, groupId: group.id, displayOrder: groupIndex },
+        update: { displayOrder: groupIndex },
       });
     }
-    await tx.menuItemOptionGroup.upsert({
-      where: { menuItemId_groupId: { menuItemId, groupId: group.id } },
-      create: { menuItemId, groupId: group.id },
-      update: {},
-    });
   }
 
   private async attachExtras(

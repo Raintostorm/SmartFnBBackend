@@ -16,7 +16,7 @@ const draft = {
           action: 'SKIP',
           existingItemId: '',
           branchIds: [],
-          sizes: [],
+          optionGroups: [],
           extras: [],
           warning: '',
         },
@@ -59,6 +59,96 @@ describe('Menu imports', () => {
     assert.equal('menuItem' in prisma, false);
   });
 
+  it('converts a legacy size draft into a named menu option group', () => {
+    const service = new MenuImportsService({}, {});
+    const old = structuredClone(draft);
+    old.categories[0].items[0].sizes = [{ name: 'Lớn', priceDelta: 5000 }];
+    delete old.categories[0].items[0].optionGroups;
+    const normalized = service.validateDraft(old);
+    assert.deepEqual(normalized.categories[0].items[0].optionGroups, [
+      {
+        name: 'Kích cỡ',
+        isRequired: true,
+        minSelections: 1,
+        maxSelections: 1,
+        options: [{ name: 'Lớn', priceDelta: 5000 }],
+      },
+    ]);
+    assert.equal('sizes' in normalized.categories[0].items[0], false);
+  });
+
+  it('attaches separate option groups with their selection rules', async () => {
+    const createdGroups = [];
+    const createdOptions = [];
+    const linkedGroups = [];
+    const tx = {
+      menuOptionGroup: {
+        findFirst: async () => null,
+        create: async ({ data }) => {
+          const group = { id: `group-${createdGroups.length + 1}`, ...data };
+          createdGroups.push(group);
+          return group;
+        },
+      },
+      menuOption: {
+        upsert: async ({ create }) => {
+          createdOptions.push(create);
+        },
+      },
+      menuItemOptionGroup: {
+        upsert: async ({ create }) => {
+          linkedGroups.push(create);
+        },
+      },
+    };
+    const groups = [
+      {
+        name: 'Mức đường',
+        isRequired: true,
+        minSelections: 1,
+        maxSelections: 1,
+        options: [
+          { name: 'Ít đường', priceDelta: 0 },
+          { name: 'Nhiều đường', priceDelta: 0 },
+        ],
+      },
+      {
+        name: 'Thêm đá',
+        isRequired: false,
+        minSelections: 0,
+        maxSelections: 1,
+        options: [{ name: 'Có đá', priceDelta: 2000 }],
+      },
+    ];
+    await new MenuImportsService({}, {}).attachOptionGroups(tx, 'chain-1', 'item-1', groups);
+    assert.equal(createdGroups.length, 2);
+    assert.deepEqual(
+      createdGroups.map(({ name, isRequired, minSelections, maxSelections }) => ({
+        name,
+        isRequired,
+        minSelections,
+        maxSelections,
+      })),
+      groups.map(({ name, isRequired, minSelections, maxSelections }) => ({
+        name,
+        isRequired,
+        minSelections,
+        maxSelections,
+      })),
+    );
+    assert.deepEqual(
+      linkedGroups.map(({ displayOrder }) => displayOrder),
+      [0, 1],
+    );
+    assert.equal(createdOptions.length, 3);
+    assert.equal(
+      new Set(createdOptions.map((option) => `${option.groupId}:${option.code}`)).size,
+      3,
+    );
+    assert.equal(createdOptions[0].isDefault, true);
+    assert.equal(createdOptions[2].isDefault, false);
+  });
+
   it('marks OCR/AI failures as FAILED without touching the menu', async () => {
     let failedUpdate;
     const prisma = {
@@ -90,10 +180,7 @@ describe('Menu imports', () => {
   it('uses the authenticated Qwen gateway for the menu draft', async () => {
     const originalFetch = globalThis.fetch;
     const originalValues = Object.fromEntries(
-      ['AI_BASE_URL', 'AI_API_KEY', 'AI_MODEL'].map((key) => [
-        key,
-        process.env[key],
-      ]),
+      ['AI_BASE_URL', 'AI_API_KEY', 'AI_MODEL'].map((key) => [key, process.env[key]]),
     );
     let request;
     process.env.AI_BASE_URL = 'http://127.0.0.1:11435/v1/';
@@ -112,7 +199,14 @@ describe('Menu imports', () => {
       const result = await service.runAi({
         texts: ['Cà phê sữa 25.000'],
         categories: [{ id: 'category-1', name: 'Cà phê' }],
-        items: [{ id: 'item-1', categoryId: 'category-1', name: 'CÀ PHÊ SỮA', price: new Prisma.Decimal('25000.00') }],
+        items: [
+          {
+            id: 'item-1',
+            categoryId: 'category-1',
+            name: 'CÀ PHÊ SỮA',
+            price: new Prisma.Decimal('25000.00'),
+          },
+        ],
       });
       const body = JSON.parse(request.options.body);
 
@@ -197,7 +291,15 @@ describe('Menu imports', () => {
     delete process.env.AI_API_KEY;
     try {
       const service = new MenuImportsService({}, { assertCanManageChain: async () => undefined });
-      await assert.rejects(() => service.create('chain-1', [{ buffer: Buffer.from('image'), mimetype: 'image/png', size: 5 }], owner), /AI_BASE_URL and AI_API_KEY/);
+      await assert.rejects(
+        () =>
+          service.create(
+            'chain-1',
+            [{ buffer: Buffer.from('image'), mimetype: 'image/png', size: 5 }],
+            owner,
+          ),
+        /AI_BASE_URL and AI_API_KEY/,
+      );
     } finally {
       if (originalBaseUrl === undefined) delete process.env.AI_BASE_URL;
       else process.env.AI_BASE_URL = originalBaseUrl;
