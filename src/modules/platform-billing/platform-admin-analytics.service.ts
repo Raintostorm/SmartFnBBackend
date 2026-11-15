@@ -11,6 +11,7 @@ import type {
   ListPlatformInvoicesQueryDto,
   PlatformRevenueQueryDto,
 } from '../platform-admin/dto/platform-admin.dto.js';
+import { PlatformRevenueGroupBy } from '../platform-admin/dto/platform-admin.dto.js';
 
 type RevenueInvoice = {
   source: 'REGISTRATION' | 'SUBSCRIPTION';
@@ -71,14 +72,7 @@ export class PlatformAdminAnalyticsService {
     for (const row of registrationGroups) registrationCounts[row.status] = row._count._all;
 
     const states = this.subscriptionStates(subscriptions, now);
-    const mrr = subscriptions
-      .filter(
-        (subscription) =>
-          subscription.status === BusinessSubscriptionStatus.ACTIVE &&
-          subscription.expiresAt > now &&
-          subscription.plan.code !== 'TRIAL',
-      )
-      .reduce((sum, subscription) => sum + Number(subscription.monthlyPrice), 0);
+    const mrr = await this.mrrAt(now);
 
     return {
       registrations: registrationCounts,
@@ -138,6 +132,7 @@ export class PlatformAdminAnalyticsService {
           expiresAt: true,
           monthlyPrice: true,
           trialStartedAt: true,
+          trialEndsAt: true,
           trialConvertedAt: true,
           plan: { select: { code: true } },
         },
@@ -227,10 +222,33 @@ export class PlatformAdminAnalyticsService {
 
     const now = new Date();
     const states = this.subscriptionStates(subscriptions, now);
-    const trialBusinesses = subscriptions.filter((subscription) => subscription.trialStartedAt);
-    const convertedTrials = trialBusinesses.filter(
-      (subscription) => subscription.trialConvertedAt,
-    ).length;
+    // 30.4: MRR is read at the END of the viewed range (or now, if the range reaches today).
+    const mrrAt = toExclusive.getTime() > now.getTime() ? now : new Date(toExclusive.getTime() - 1);
+    const mrr = await this.mrrAt(mrrAt);
+    // 30.4: trial conversion by the month the trial STARTED, for trials started in the range.
+    // Trials still running and not converted are reported apart so an immature cohort is visible.
+    const cohorts = new Map<string, { month: string; started: number; converted: number; inTrial: number }>();
+    for (const subscription of subscriptions) {
+      const startedAt = subscription.trialStartedAt;
+      if (!startedAt || startedAt < from || startedAt >= toExclusive) continue;
+      const month = this.bucket(startedAt, PlatformRevenueGroupBy.MONTH);
+      const cohort = cohorts.get(month) ?? { month, started: 0, converted: 0, inTrial: 0 };
+      cohort.started += 1;
+      if (subscription.trialConvertedAt) cohort.converted += 1;
+      else if (subscription.trialEndsAt && subscription.trialEndsAt > now) cohort.inTrial += 1;
+      cohorts.set(month, cohort);
+    }
+    const trialCohorts = [...cohorts.values()]
+      .sort((a, b) => a.month.localeCompare(b.month))
+      .map((cohort) => ({
+        ...cohort,
+        conversionRate: cohort.started ? cohort.converted / cohort.started : 0,
+        // Only trials that have finished can still be judged; excludes the ones in progress.
+        settledConversionRate: cohort.started - cohort.inTrial > 0 ? cohort.converted / (cohort.started - cohort.inTrial) : null,
+      }));
+    const trialStarted = trialCohorts.reduce((sum, c) => sum + c.started, 0);
+    const trialConverted = trialCohorts.reduce((sum, c) => sum + c.converted, 0);
+    const trialInProgress = trialCohorts.reduce((sum, c) => sum + c.inTrial, 0);
     const openInvoices = [...pendingRecurring, ...pendingActivation];
 
     return {
@@ -238,19 +256,16 @@ export class PlatformAdminAnalyticsService {
       summary: {
         revenue: invoices.reduce((sum, invoice) => sum + invoice.amount, 0),
         invoiceCount: invoices.length,
-        mrr: subscriptions
-          .filter(
-            (subscription) =>
-              subscription.status === BusinessSubscriptionStatus.ACTIVE &&
-              subscription.expiresAt > now &&
-              subscription.plan.code !== 'TRIAL',
-          )
-          .reduce((sum, subscription) => sum + Number(subscription.monthlyPrice), 0),
+        mrr,
+        mrrAt: mrrAt.toISOString(),
         paidBusinesses: states.paid,
         trialBusinesses: states.trial,
         expiredBusinesses: states.expired,
         suspendedBusinesses: states.suspended,
-        trialConversionRate: trialBusinesses.length ? convertedTrials / trialBusinesses.length : 0,
+        trialConversionRate: trialStarted ? trialConverted / trialStarted : 0,
+        trialStarted,
+        trialConverted,
+        trialInProgress,
         unpaidInvoices: openInvoices.filter(
           (invoice) => invoice.status === SubscriptionCheckoutStatus.PENDING,
         ).length,
@@ -264,7 +279,46 @@ export class PlatformAdminAnalyticsService {
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([period, value]) => ({ period, ...value })),
       plans: [...byPlan.values()].sort((a, b) => b.revenue - a.revenue),
+      trialCohorts,
     };
+  }
+
+  /**
+   * MRR at instant `at` (30.4): monthly plan price + add-ons (extra branches, account packs) of every
+   * paid period covering `at`, from the period snapshots so later price changes do not rewrite history.
+   * Trials and businesses suspended at that time are excluded. Periods are the billing source of truth;
+   * a subscription with no period row (created before periods existed) falls back to its current price
+   * only when `at` is now.
+   */
+  private async mrrAt(at: Date) {
+    const [periods, subscriptions] = await Promise.all([
+      this.prisma.subscriptionPeriod.findMany({
+        where: { startsAt: { lte: at }, endsAt: { gt: at }, planCode: { not: 'TRIAL' } },
+        select: {
+          subscriptionId: true, monthlyPrice: true, extraBranches: true, extraBranchPrice: true,
+          accountPacks: true, accountPackPrice: true,
+          subscription: { select: { status: true, suspendedAt: true } },
+        },
+      }),
+      Math.abs(Date.now() - at.getTime()) < 60_000
+        ? this.prisma.businessSubscription.findMany({
+            where: { status: BusinessSubscriptionStatus.ACTIVE, expiresAt: { gt: at }, plan: { code: { not: 'TRIAL' } }, periods: { none: {} } },
+            select: { monthlyPrice: true, activeExtraBranches: true, activeAccountPacks: true, plan: { select: { extraBranchPrice: true, extraAccountPackPrice: true } } },
+          })
+        : Promise.resolve([]),
+    ]);
+    const counted = new Set<string>();
+    let total = 0;
+    for (const period of periods) {
+      if (counted.has(period.subscriptionId)) continue;
+      const suspended = period.subscription.status === BusinessSubscriptionStatus.SUSPENDED && period.subscription.suspendedAt && period.subscription.suspendedAt <= at;
+      if (suspended) continue;
+      counted.add(period.subscriptionId);
+      total += period.monthlyPrice + period.extraBranches * period.extraBranchPrice + period.accountPacks * period.accountPackPrice;
+    }
+    for (const legacy of subscriptions)
+      total += Number(legacy.monthlyPrice) + legacy.activeExtraBranches * legacy.plan.extraBranchPrice + legacy.activeAccountPacks * legacy.plan.extraAccountPackPrice;
+    return total;
   }
 
   async listInvoices(query: ListPlatformInvoicesQueryDto) {

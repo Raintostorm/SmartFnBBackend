@@ -73,6 +73,15 @@ export class ReportsController {
     return this.reportsService.getPaymentMethods(user, query);
   }
 
+  @Get('cancellations')
+  @ApiOperation({
+    summary: 'Cancelled orders and refunds in the report scope (BR-50)',
+    description: 'Count by cancellation time, refunds by cancellation date, and the latest orders with who cancelled and who refunded.',
+  })
+  getCancellations(@CurrentUser() user: AuthenticatedUser, @Query() query: TopItemsQueryDto) {
+    return this.reportsService.getCancellations(user, query);
+  }
+
   @Get('top-combos')
   @ApiOperation({ summary: 'Best-selling combos; revenue is recorded only on parent lines' })
   getTopCombos(@CurrentUser() user: AuthenticatedUser, @Query() query: TopItemsQueryDto) {

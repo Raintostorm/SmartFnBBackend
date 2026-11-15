@@ -681,7 +681,7 @@ describe('Report range validation', () => {
     });
   });
 
-  it('calculates total average order value from total net revenue', async () => {
+  it('averages only completed orders, so refunds of earlier days do not distort AOV', async () => {
     let groupCall = 0;
     const report = new ReportsService(
       {
@@ -710,7 +710,7 @@ describe('Report range validation', () => {
                     _count: { _all: 3 },
                   },
                 ]
-              : [{ branchId: 'branch-one', _count: { _all: 2 } }],
+              : [{ branchId: 'branch-one', _sum: { totalAmount: new Prisma.Decimal(240) }, _count: { _all: 2 } }],
         },
         tableSession: { groupBy: async () => [] },
         $queryRaw: async () => [
@@ -731,7 +731,9 @@ describe('Report range validation', () => {
     });
     assert.equal(result.totals.netRevenue, '200.00');
     assert.equal(result.totals.orderCount, 2);
-    assert.equal(result.totals.averageOrderValue, '100.00');
+    // 2 completed orders worth 240 → 120. The 100 refund lowers net revenue (BR-50), not AOV.
+    assert.equal(result.totals.averageOrderValue, '120.00');
+    assert.equal(result.branches[0].averageOrderValue, '120.00');
   });
 });
 
