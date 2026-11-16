@@ -1,5 +1,5 @@
 import { ValidationPipe, type INestApplication } from '@nestjs/common';
-import { json } from 'express';
+import { json, Router } from 'express';
 import { ConfigService } from '@nestjs/config';
 
 export function configureApplication(app: INestApplication): void {
@@ -17,7 +17,10 @@ export function configureApplication(app: INestApplication): void {
     credentials: true,
   });
   const importsPath = `/${apiPrefix}/restaurant-chains/:chainId/menu-imports`;
-  app.use([`${importsPath}/excel`, `${importsPath}/:id/draft`], json({ limit: '8mb' }));
+  // Nest detects global parsers by middleware name. Keep the scoped parser inside a router.
+  const importRouter = Router();
+  importRouter.use(['/excel', '/:id/draft'], json({ limit: '8mb' }));
+  app.use(importsPath, importRouter);
   app.useGlobalPipes(
     new ValidationPipe({
       transform: true,
