@@ -27,6 +27,22 @@ const draft = {
 };
 
 describe('Menu imports', () => {
+  it('prepares an Excel draft, skips catalog matches and rejects repeated rows', async () => {
+    const service = new MenuImportsService({
+      menuItem: { findMany: async () => [{ name: 'Espresso', category: { name: 'Coffee' } }] },
+      menuImport: { count: async () => 0, create: async ({ data }) => data },
+    }, { assertCanManageChain: async () => {} });
+    const rows = [
+      { category: 'Coffee', name: 'espresso', price: 32000 },
+      { category: 'Coffee', name: 'Latte', price: 42000 },
+    ];
+    const result = await service.createExcel('chain-1', rows, owner);
+    assert.equal(result.status, 'WAITING_REVIEW');
+    assert.deepEqual(result.draft.categories[0].items.map(i => i.action), ['SKIP', 'CREATE']);
+    await assert.rejects(service.createExcel('chain-1', [...rows, rows[0]], owner));
+    await assert.rejects(service.createExcel('chain-1', [{ ...rows[0], price: -1 }], owner));
+  });
+
   it('saves a reviewed draft without writing any menu rows', async () => {
     let update;
     const record = {
@@ -77,76 +93,42 @@ describe('Menu imports', () => {
     assert.equal('sizes' in normalized.categories[0].items[0], false);
   });
 
-  it('attaches separate option groups with their selection rules', async () => {
-    const createdGroups = [];
-    const createdOptions = [];
-    const linkedGroups = [];
+  it('links active library entries by chain and id without updating shared definitions', async () => {
+    const links = [];
     const tx = {
-      menuOptionGroup: {
-        findFirst: async () => null,
-        create: async ({ data }) => {
-          const group = { id: `group-${createdGroups.length + 1}`, ...data };
-          createdGroups.push(group);
-          return group;
-        },
-      },
-      menuOption: {
-        upsert: async ({ create }) => {
-          createdOptions.push(create);
-        },
-      },
-      menuItemOptionGroup: {
-        upsert: async ({ create }) => {
-          linkedGroups.push(create);
-        },
-      },
+      menuOptionGroup: { findFirst: async ({ where }) => {
+        assert.deepEqual(where, { id: 'group-1', chainId: 'chain-1', isActive: true });
+        return { id: 'group-1' };
+      } },
+      menuExtra: { findFirst: async ({ where }) => {
+        assert.deepEqual(where, { id: 'extra-1', chainId: 'chain-1', isActive: true });
+        return { id: 'extra-1' };
+      } },
+      menuItemOptionGroup: { upsert: async ({ create }) => links.push(create) },
+      menuItemExtra: { upsert: async ({ create }) => links.push(create) },
     };
-    const groups = [
-      {
-        name: 'Mức đường',
-        isRequired: true,
-        minSelections: 1,
-        maxSelections: 1,
-        options: [
-          { name: 'Ít đường', priceDelta: 0 },
-          { name: 'Nhiều đường', priceDelta: 0 },
-        ],
-      },
-      {
-        name: 'Thêm đá',
-        isRequired: false,
-        minSelections: 0,
-        maxSelections: 1,
-        options: [{ name: 'Có đá', priceDelta: 2000 }],
-      },
-    ];
-    await new MenuImportsService({}, {}).attachOptionGroups(tx, 'chain-1', 'item-1', groups);
-    assert.equal(createdGroups.length, 2);
-    assert.deepEqual(
-      createdGroups.map(({ name, isRequired, minSelections, maxSelections }) => ({
-        name,
-        isRequired,
-        minSelections,
-        maxSelections,
-      })),
-      groups.map(({ name, isRequired, minSelections, maxSelections }) => ({
-        name,
-        isRequired,
-        minSelections,
-        maxSelections,
-      })),
-    );
-    assert.deepEqual(
-      linkedGroups.map(({ displayOrder }) => displayOrder),
-      [0, 1],
-    );
-    assert.equal(createdOptions.length, 3);
-    assert.equal(
-      new Set(createdOptions.map((option) => `${option.groupId}:${option.code}`)).size,
-      3,
-    );
-    assert.equal(createdOptions[0].isDefault, true);
-    assert.equal(createdOptions[2].isDefault, false);
+    const service = new MenuImportsService({}, {});
+    const input = structuredClone(draft);
+    const item = input.categories[0].items[0];
+    item.optionGroups = [{ groupId: 'group-1', name: 'Size', isRequired: true, minSelections: 1, maxSelections: 1, options: [{name: 'S', priceDelta: 0}] }];
+    item.extras = [{ extraId: 'extra-1', name: 'Flan', price: 9000, maxQuantity: 2 }];
+    const saved = service.validateDraft(input).categories[0].items[0];
+    await service.attachOptionGroups(tx, 'chain-1', 'item-1', saved.optionGroups);
+    await service.attachExtras(tx, 'chain-1', 'item-1', saved.extras);
+    assert.equal(links[0].groupId, 'group-1');
+    assert.equal(links[1].extraId, 'extra-1');
+    assert.equal(links[1].price, 9000);
+    assert.equal(links[1].maxQuantity, 2);
+    tx.menuOptionGroup.findFirst = tx.menuExtra.findFirst = async () => null;
+    await assert.rejects(service.attachOptionGroups(tx, 'chain-1', 'item-1', saved.optionGroups));
+    await assert.rejects(service.attachExtras(tx, 'chain-1', 'item-1', saved.extras));
+    assert.equal(links.length, 2);
+  });
+
+  it('ignores OCR suggestions without a selected library id', async () => {
+    const service = new MenuImportsService({}, {});
+    await service.attachOptionGroups({}, 'chain-1', 'item-1', [{ name: 'Size' }]);
+    await service.attachExtras({}, 'chain-1', 'item-1', [{ name: 'Flan', price: 15000 }]);
   });
 
   it('marks OCR/AI failures as FAILED without touching the menu', async () => {

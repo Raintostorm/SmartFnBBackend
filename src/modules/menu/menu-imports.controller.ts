@@ -61,6 +61,16 @@ export class MenuImportsController {
     return this.service.create(chainId, files, user);
   }
 
+  @Post('excel')
+  @ApiOperation({ summary: 'Prepare a spreadsheet menu draft for review' })
+  createExcel(
+    @Param('chainId', new ParseUUIDPipe()) chainId: string,
+    @Body('rows') rows: unknown,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.service.createExcel(chainId, rows, user);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Read OCR/AI status and the editable menu draft' })
   get(

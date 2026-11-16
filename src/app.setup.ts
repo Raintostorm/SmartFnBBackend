@@ -1,4 +1,5 @@
 import { ValidationPipe, type INestApplication } from '@nestjs/common';
+import { json } from 'express';
 import { ConfigService } from '@nestjs/config';
 
 export function configureApplication(app: INestApplication): void {
@@ -15,6 +16,8 @@ export function configureApplication(app: INestApplication): void {
     origin: corsOrigins.length > 0 ? corsOrigins : true,
     credentials: true,
   });
+  const importsPath = `/${apiPrefix}/restaurant-chains/:chainId/menu-imports`;
+  app.use([`${importsPath}/excel`, `${importsPath}/:id/draft`], json({ limit: '8mb' }));
   app.useGlobalPipes(
     new ValidationPipe({
       transform: true,

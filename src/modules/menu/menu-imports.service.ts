@@ -7,7 +7,7 @@ import {
   OnModuleInit,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { Prisma, MenuImportStatus } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
@@ -27,13 +27,14 @@ export interface MenuImportFile {
 type DraftAction = 'CREATE' | 'UPDATE_PRICE' | 'SKIP';
 type DraftOption = { name: string; priceDelta: number };
 type DraftOptionGroup = {
+  groupId?: string;
   name: string;
   isRequired: boolean;
   minSelections: number;
   maxSelections: number;
   options: DraftOption[];
 };
-type DraftExtra = { name: string; price: number };
+type DraftExtra = { extraId?: string; maxQuantity?: number; name: string; price: number };
 type DraftItem = {
   name: string;
   description: string;
@@ -163,13 +164,7 @@ export class MenuImportsService implements OnModuleInit {
     if (!files?.length || files.length > MENU_IMPORT_MAX_FILES)
       throw new BadRequestException('Upload 1–5 menu images');
     const extensions = files.map((file) => this.validateImage(file));
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    if (
-      (await this.prisma.menuImport.count({
-        where: { chainId, createdAt: { gte: since } },
-      })) >= MENU_IMPORT_DAILY_LIMIT
-    )
-      throw new ConflictException('A chain may start at most 20 menu imports per 24 hours');
+    await this.checkImportLimit(chainId);
 
     const keys: string[] = [];
     for (const [index, file] of files.entries()) {
@@ -187,6 +182,57 @@ export class MenuImportsService implements OnModuleInit {
     });
     setImmediate(() => void this.process(record.id));
     return record;
+  }
+
+  private async checkImportLimit(chainId: string) {
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    if (
+      (await this.prisma.menuImport.count({
+        where: { chainId, createdAt: { gte: since } },
+      })) >= MENU_IMPORT_DAILY_LIMIT
+    )
+      throw new ConflictException('A chain may start at most 20 menu imports per 24 hours');
+  }
+
+  async createExcel(chainId: string, rows: unknown, user: AuthenticatedUser) {
+    await this.access.assertCanManageChain(user, chainId);
+    if (!Array.isArray(rows) || !rows.length || rows.length > 500)
+      throw new BadRequestException('File Excel cần có từ 1 đến 500 món');
+    await this.checkImportLimit(chainId);
+    const existing = await this.prisma.menuItem.findMany({
+      where: { deletedAt: null, category: { chainId, deletedAt: null } },
+      select: { name: true, category: { select: { name: true } } },
+    });
+    const key = (s: string) => s.trim().normalize('NFC').toLocaleLowerCase('vi');
+    const itemKey = (category: string, name: string) => JSON.stringify([key(category), key(name)]);
+    const known = new Set(existing.map(item => itemKey(item.category.name, item.name)));
+    const seen = new Set<string>();
+    const categories = new Map<string, MenuImportDraft['categories'][number]>();
+    for (const [index, row] of rows.entries()) {
+      if (typeof row?.category !== 'string' || !row.category.trim() || row.category.length > 150 ||
+          typeof row.name !== 'string' || !row.name.trim() || row.name.length > 150 ||
+          !Number.isSafeInteger(row.price) || row.price < 0 || row.price > 2147483647 ||
+          (row.description !== undefined && (typeof row.description !== 'string' || row.description.length > 2000)))
+        throw new BadRequestException(`Dữ liệu món thứ ${index + 1} không hợp lệ`);
+      const id = itemKey(row.category, row.name);
+      if (seen.has(id)) throw new BadRequestException(`Món "${row.name}" xuất hiện hai lần trong danh mục "${row.category}"`);
+      seen.add(id);
+      const categoryKey = key(row.category);
+      const category: MenuImportDraft['categories'][number] = categories.get(categoryKey) ?? { name: row.category.trim(), items: [] };
+      const duplicate = known.has(id);
+      category.items.push({
+        name: row.name.trim(), price: row.price, description: row.description?.trim() ?? '',
+        action: duplicate ? 'SKIP' : 'CREATE', existingItemId: '', branchIds: [], optionGroups: [], extras: [],
+        warning: duplicate ? 'Món đã có trong danh mục. Chọn Cập nhật giá nếu muốn đổi giá.' : '',
+      });
+      categories.set(categoryKey, category);
+    }
+    const draft = { categories: [...categories.values()], unresolved: [] };
+    return this.prisma.menuImport.create({
+      data: { chainId, createdById: user.id, status: MenuImportStatus.WAITING_REVIEW,
+        imageUrls: [], draft: draft as unknown as Prisma.InputJsonValue,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) },
+    });
   }
 
   async get(chainId: string, id: string, user: AuthenticatedUser) {
@@ -658,21 +704,23 @@ export class MenuImportsService implements OnModuleInit {
               const maxSelections = Number(group.maxSelections ?? 1);
               if (
                 !name ||
-                !options.length ||
+                (!group.groupId && !options.length) ||
                 !Number.isInteger(minSelections) ||
                 !Number.isInteger(maxSelections) ||
                 isRequired !== minSelections > 0 ||
                 maxSelections < Math.max(1, minSelections) ||
-                maxSelections > options.length ||
+                (!group.groupId && maxSelections > options.length) ||
                 new Set(options.map((option) => option.name.toLocaleLowerCase('vi'))).size !==
                   options.length
               )
                 throw new BadRequestException(`Invalid option group for ${item.name}`);
-              return { name, isRequired, minSelections, maxSelections, options };
+              return { ...(group.groupId && { groupId: group.groupId }), name, isRequired, minSelections, maxSelections, options };
             }),
             extras: Array.isArray(item.extras)
               ? item.extras
                   .map((extra) => ({
+                    ...(extra.extraId && { extraId: extra.extraId }),
+                    ...(extra.maxQuantity !== undefined && { maxQuantity: extra.maxQuantity }),
                     name: String(extra.name).trim().slice(0, 100),
                     price: Number(extra.price),
                   }))
@@ -744,56 +792,12 @@ export class MenuImportsService implements OnModuleInit {
     groups: DraftOptionGroup[],
   ) {
     for (const [groupIndex, value] of groups.entries()) {
-      const signature = createHash('sha256')
-        .update(
-          JSON.stringify([
-            value.name.toLocaleLowerCase('vi'),
-            value.isRequired,
-            value.minSelections,
-            value.maxSelections,
-            value.options.map((option) => [option.name.toLocaleLowerCase('vi'), option.priceDelta]),
-          ]),
-        )
-        .digest('hex')
-        .slice(0, 12)
-        .toUpperCase();
-      const groupCode = `OPT_IMPORT_${signature}`;
-      let group = await tx.menuOptionGroup.findFirst({ where: { chainId, code: groupCode } });
-      if (!group)
-        group = await tx.menuOptionGroup.create({
-          data: {
-            chainId,
-            name: value.name,
-            code: groupCode,
-            isRequired: value.isRequired,
-            minSelections: value.minSelections,
-            maxSelections: value.maxSelections,
-            displayOrder: groupIndex,
-          },
-        });
-      for (const [index, option] of value.options.entries()) {
-        const stem =
-          option.name
-            .normalize('NFD')
-            .replace(/[\u0300-\u036f]/g, '')
-            .toUpperCase()
-            .replace(/[^A-Z0-9]+/g, '_')
-            .replace(/^_|_$/g, '')
-            .slice(0, 40) || 'OPTION';
-        const code = `${stem}_${index + 1}`;
-        await tx.menuOption.upsert({
-          where: { groupId_code: { groupId: group.id, code } },
-          create: {
-            groupId: group.id,
-            name: option.name,
-            code,
-            priceDelta: option.priceDelta,
-            isDefault: value.isRequired && value.maxSelections === 1 && index === 0,
-            displayOrder: index,
-          },
-          update: { name: option.name, priceDelta: option.priceDelta, isActive: true },
-        });
-      }
+      if (!value.groupId) continue;
+      const group = await tx.menuOptionGroup.findFirst({
+        where: { id: value.groupId, chainId, isActive: true },
+        select: { id: true },
+      });
+      if (!group) throw new BadRequestException(`Nhóm tùy chọn "${value.name}" không còn khả dụng`);
       await tx.menuItemOptionGroup.upsert({
         where: { menuItemId_groupId: { menuItemId, groupId: group.id } },
         create: { menuItemId, groupId: group.id, displayOrder: groupIndex },
@@ -809,23 +813,25 @@ export class MenuImportsService implements OnModuleInit {
     extras: DraftExtra[],
   ) {
     for (const [index, value] of extras.entries()) {
-      let extra = await tx.menuExtra.findFirst({
-        where: { chainId, name: { equals: value.name, mode: 'insensitive' } },
+      if (!value.extraId) continue;
+      const maxQuantity = value.maxQuantity ?? 3;
+      if (!Number.isInteger(maxQuantity) || maxQuantity < 1 || maxQuantity > 5)
+        throw new BadRequestException('Số phần topping phải từ 1 đến 5');
+      const extra = await tx.menuExtra.findFirst({
+        where: { id: value.extraId, chainId, isActive: true },
       });
       if (!extra)
-        extra = await tx.menuExtra.create({
-          data: { chainId, name: value.name, price: value.price },
-        });
+        throw new BadRequestException(`Topping "${value.name}" không còn khả dụng`);
       await tx.menuItemExtra.upsert({
         where: { menuItemId_extraId: { menuItemId, extraId: extra.id } },
         create: {
           menuItemId,
           extraId: extra.id,
           price: value.price,
-          maxQuantity: 3,
+          maxQuantity,
           displayOrder: index,
         },
-        update: { price: value.price, maxQuantity: 3, displayOrder: index },
+        update: { price: value.price, maxQuantity, displayOrder: index },
       });
     }
   }
