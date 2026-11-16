@@ -8,7 +8,11 @@ import {
   Post,
   Put,
   Patch,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { MENU_IMAGE_MAX_BYTES } from './menu-image.js';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AppRole } from '../auth/app-role.enum.js';
 import { SWAGGER_ACCESS_TOKEN } from '../auth/auth.constants.js';
@@ -23,6 +27,16 @@ import { MenuExtrasService } from './menu-extras.service.js';
 @Controller('restaurant-chains/:chainId/menu')
 export class MenuExtrasController {
   constructor(private readonly service: MenuExtrasService) {}
+  @Post('extras/:extraId/image')
+  @UseInterceptors(FileInterceptor('file', { limits: { files: 1, fileSize: MENU_IMAGE_MAX_BYTES } }))
+  uploadImage(
+    @Param('chainId', ParseUUIDPipe) chainId: string,
+    @Param('extraId', ParseUUIDPipe) id: string,
+    @UploadedFile() file: { buffer: Buffer; mimetype: string; size: number } | undefined,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.service.uploadImage(chainId, id, file, user);
+  }
   @Get('extras')
   @ApiOperation({ summary: 'List the chain extra library' })
   list(

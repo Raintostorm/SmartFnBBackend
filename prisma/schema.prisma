@@ -2190,6 +2190,7 @@ model MenuExtra {
   id        String            @id @default(uuid()) @db.Uuid
   chainId   String            @map("chain_id") @db.Uuid
   name      String            @db.VarChar(100)
+  imageUrl  String?           @map("image_url") @db.VarChar(500)
   price     Decimal           @db.Decimal(14, 2)
   isActive  Boolean           @default(true) @map("is_active")
   createdAt DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)

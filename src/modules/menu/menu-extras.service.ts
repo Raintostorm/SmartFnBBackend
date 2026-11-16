@@ -12,6 +12,10 @@ import { BranchAccessService } from '../branches/branch-access.service.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { auditSnapshot, writeChainAudit } from '../audit/chain-audit.js';
 import type { SaveExtraDto, SetItemExtrasDto } from './menu-extras.dto.js';
+import { randomUUID } from 'node:crypto';
+import { basename } from 'node:path';
+import { deleteAsset, putAsset } from '../assets/asset-storage.js';
+import { MENU_IMAGE_MAX_BYTES, MENU_IMAGE_PUBLIC_PREFIX } from './menu-image.js';
 const EXTRA_AUDIT_KEYS = ['name', 'price', 'isActive'] as const;
 
 @Injectable()
@@ -21,6 +25,33 @@ export class MenuExtrasService {
     private readonly access: BranchAccessService,
     private readonly realtime: RealtimePublisher,
   ) {}
+  async uploadImage(chainId: string, id: string, file: { buffer: Buffer; mimetype: string; size: number } | undefined, user: AuthenticatedUser) {
+    await this.access.assertCanManageChain(user, chainId);
+    const extra = await this.prisma.menuExtra.findFirst({ where: { id, chainId } });
+    if (!extra) throw new NotFoundException('Extra not found in this chain');
+    if (!file?.buffer?.length || file.size > MENU_IMAGE_MAX_BYTES || file.buffer.length > MENU_IMAGE_MAX_BYTES)
+      throw new BadRequestException('Image is required and must not exceed 5 MB');
+    const b = file.buffer;
+    const ext = file.mimetype === 'image/jpeg' && b.length >= 3 && b.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff])) ? 'jpg'
+      : file.mimetype === 'image/png' && b.length >= 8 && b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) ? 'png'
+      : file.mimetype === 'image/webp' && b.length >= 12 && b.subarray(0, 4).toString('ascii') === 'RIFF' && b.subarray(8, 12).toString('ascii') === 'WEBP' ? 'webp' : null;
+    if (!ext) throw new BadRequestException('Image must be a valid JPEG, PNG, or WebP file');
+    const filename = `${chainId}-${id}-${randomUUID()}.${ext}`;
+    const key = `menu/${filename}`;
+    await putAsset(key, b);
+    let saved;
+    try {
+      saved = await this.prisma.menuExtra.update({ where: { id }, data: { imageUrl: `${MENU_IMAGE_PUBLIC_PREFIX}/${filename}` } });
+    } catch (error) {
+      await deleteAsset(key).catch(() => undefined);
+      throw error;
+    }
+    if (extra.imageUrl?.startsWith(`${MENU_IMAGE_PUBLIC_PREFIX}/`)) {
+      const oldName = extra.imageUrl.slice(MENU_IMAGE_PUBLIC_PREFIX.length + 1);
+      if (oldName && basename(oldName) === oldName) await deleteAsset(`menu/${oldName}`).catch(() => undefined);
+    }
+    return saved;
+  }
   async listBranch(user: AuthenticatedUser) {
     if (user.role !== 'MANAGER' || !user.branchId)
       throw new ForbiddenException('Assigned Store Manager required');
@@ -34,7 +65,7 @@ export class MenuExtrasService {
       orderBy: { name: 'asc' },
     });
     return extras.map((extra) => ({
-      id: extra.id, name: extra.name, price: extra.price,
+      id: extra.id, name: extra.name, price: extra.price, imageUrl: extra.imageUrl,
       chainAvailable: extra.isActive,
       isAvailable: extra.isActive && (extra.branches[0]?.isAvailable ?? true),
       branchAvailable: extra.branches[0]?.isAvailable ?? true,
