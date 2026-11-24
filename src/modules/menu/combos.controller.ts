@@ -8,8 +8,12 @@ import {
   Patch,
   Post,
   Put,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { MENU_IMAGE_MAX_BYTES, type MenuImageFile } from './menu-image.js';
 import { AppRole } from '../auth/app-role.enum.js';
 import { SWAGGER_ACCESS_TOKEN } from '../auth/auth.constants.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
@@ -51,6 +55,19 @@ export class CombosController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.service.save(chain, id, dto, user);
+  }
+  @Post(':id/image')
+  @UseInterceptors(FileInterceptor('file', { limits: { files: 1, fileSize: MENU_IMAGE_MAX_BYTES } }))
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({ schema: { type: 'object', required: ['file'], properties: { file: { type: 'string', format: 'binary' } } } })
+  @ApiOperation({ summary: 'Upload a combo image (JPEG, PNG, or WebP; maximum 5 MB)' })
+  uploadImage(
+    @Param('chainId', ParseUUIDPipe) chain: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFile() file: MenuImageFile | undefined,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.service.uploadImage(chain, id, file, user);
   }
   @Delete(':id')
   @ApiOperation({ summary: 'Stop selling a combo without deleting order history' })

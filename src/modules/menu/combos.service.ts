@@ -12,6 +12,7 @@ import { BranchAccessService } from '../branches/branch-access.service.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { comboSnapshot, writeChainAudit } from '../audit/chain-audit.js';
 import type { SaveComboDto, UpdateComboDto } from './combos.dto.js';
+import { replaceMenuImage, type MenuImageFile } from './menu-image.js';
 import type {
   AddCounterOrderItemDto,
   SelectedComboDto,
@@ -179,6 +180,17 @@ export class CombosService {
       return fresh;
     });
     await this.emit(chainId, saved.id);
+    return saved;
+  }
+  /** Same storage rules as menu item / topping images: JPEG, PNG or WebP, maximum 5 MB. */
+  async uploadImage(chainId: string, id: string, file: MenuImageFile | undefined, user: AuthenticatedUser) {
+    await this.access.assertCanManageChain(user, chainId);
+    const combo = await this.prisma.combo.findFirst({ where: { id, chainId, deletedAt: null }, select: { id: true, imageUrl: true } });
+    if (!combo) throw new NotFoundException('Combo not found');
+    const saved = await replaceMenuImage(chainId, id, file, combo.imageUrl, (imageUrl) =>
+      this.prisma.combo.update({ where: { id }, data: { imageUrl }, include: { ...include, branches: true } }),
+    );
+    await this.emit(chainId, id);
     return saved;
   }
   async remove(chainId: string, id: string, user: AuthenticatedUser) {

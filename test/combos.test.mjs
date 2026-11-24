@@ -152,3 +152,39 @@ test('new database drafts are retired; checkout is the only cart submission path
     (error) => error.getStatus() === 410,
   );
 });
+test('combo image upload stores a validated file, replaces the old upload and notifies branches', async () => {
+  const { mkdtemp, readdir, rm, writeFile, mkdir } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const dir = await mkdtemp(join(tmpdir(), 'combo-image-'));
+  const previous = process.env.UPLOAD_DIR;
+  process.env.UPLOAD_DIR = dir;
+  try {
+    await mkdir(join(dir, 'menu'), { recursive: true });
+    await writeFile(join(dir, 'menu', 'old.png'), 'old');
+    let updated;
+    const events = [];
+    const prisma = {
+      combo: {
+        findFirst: async ({ where }) => (where.id === 'k1' ? { id: 'k1', imageUrl: '/uploads/menu/old.png' } : null),
+        update: async (args) => { updated = args; return { id: 'k1', imageUrl: args.data.imageUrl }; },
+      },
+      branch: { findMany: async () => [{ id: 'b1' }] },
+    };
+    const service = new CombosService(prisma, { assertCanManageChain: async () => undefined }, { branch: (...args) => events.push(args) });
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2]);
+    await assert.rejects(service.uploadImage('c1', 'k1', { buffer: Buffer.from('nope'), mimetype: 'image/png', size: 4 }, {}), /valid JPEG, PNG, or WebP/);
+    await assert.rejects(service.uploadImage('c1', 'k1', undefined, {}), /image file is required/);
+    await assert.rejects(service.uploadImage('c1', 'missing', { buffer: png, mimetype: 'image/png', size: png.length }, {}), /Combo not found/);
+    const saved = await service.uploadImage('c1', 'k1', { buffer: png, mimetype: 'image/png', size: png.length }, {});
+    assert.match(saved.imageUrl, /^\/uploads\/menu\/c1-k1-.+\.png$/);
+    assert.equal(updated.where.id, 'k1');
+    const files = await readdir(join(dir, 'menu'));
+    assert.deepEqual(files, [saved.imageUrl.slice('/uploads/menu/'.length)]);
+    assert.deepEqual(events, [['b1', 'menu.prices-updated', { comboId: 'k1' }]]);
+  } finally {
+    if (previous === undefined) delete process.env.UPLOAD_DIR;
+    else process.env.UPLOAD_DIR = previous;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
