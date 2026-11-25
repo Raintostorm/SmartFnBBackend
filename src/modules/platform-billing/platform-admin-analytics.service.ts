@@ -30,7 +30,9 @@ export class PlatformAdminAnalyticsService {
 
   async overview() {
     const now = new Date();
-    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    // "Tháng này" theo giờ Việt Nam (UTC+7): 00:00 ngày 1 giờ VN = 17:00 UTC của ngày cuối tháng trước.
+    const vnNow = new Date(now.getTime() + 7 * 3_600_000);
+    const monthStart = new Date(Date.UTC(vnNow.getUTCFullYear(), vnNow.getUTCMonth(), 1) - 7 * 3_600_000);
     const [
       registrationGroups,
       subscriptions,
@@ -39,6 +41,8 @@ export class PlatformAdminAnalyticsService {
       activationRevenue,
       reviewRecurring,
       reviewActivation,
+      unpaidRecurring,
+      unpaidActivation,
     ] = await Promise.all([
       this.prisma.registrationApplication.groupBy({ by: ['status'], _count: { _all: true } }),
       this.prisma.businessSubscription.findMany({
@@ -64,6 +68,17 @@ export class PlatformAdminAnalyticsService {
       this.prisma.registrationCheckout.count({
         where: { status: SubscriptionCheckoutStatus.NEEDS_REVIEW },
       }),
+      // PA-06 "hoá đơn chưa trả": hiện ở Tổng quan như việc cần xử lý, kèm số tiền còn phải thu.
+      this.prisma.subscriptionCheckout.aggregate({
+        where: { status: SubscriptionCheckoutStatus.PENDING },
+        _count: { _all: true },
+        _sum: { amount: true },
+      }),
+      this.prisma.registrationCheckout.aggregate({
+        where: { status: SubscriptionCheckoutStatus.PENDING },
+        _count: { _all: true },
+        _sum: { amount: true },
+      }),
     ]);
 
     const registrationCounts = Object.fromEntries(
@@ -82,6 +97,8 @@ export class PlatformAdminAnalyticsService {
       revenueThisMonth:
         Number(recurringRevenue._sum.amount ?? 0) + Number(activationRevenue._sum.amount ?? 0),
       invoicesNeedReview: reviewRecurring + reviewActivation,
+      unpaidInvoices: (unpaidRecurring._count?._all ?? 0) + (unpaidActivation._count?._all ?? 0),
+      outstandingAmount: Number(unpaidRecurring._sum?.amount ?? 0) + Number(unpaidActivation._sum?.amount ?? 0),
       generatedAt: now,
     };
   }

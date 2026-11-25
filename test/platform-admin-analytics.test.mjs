@@ -52,14 +52,23 @@ describe('Platform Admin analytics', () => {
       },
       servicePlan: { count: async () => 3 },
       subscriptionCheckout: {
-        aggregate: async () => ({ _sum: { amount: new Prisma.Decimal(499000) } }),
+        aggregate: async ({ where }) => {
+          if (where.status === 'PAID') monthStarts.push(where.paidAt.gte);
+          return where.status === 'PENDING'
+            ? { _count: { _all: 2 }, _sum: { amount: new Prisma.Decimal(598000) } }
+            : { _sum: { amount: new Prisma.Decimal(499000) } };
+        },
         count: async () => 1,
       },
       registrationCheckout: {
-        aggregate: async () => ({ _sum: { amount: new Prisma.Decimal(299000) } }),
+        aggregate: async ({ where }) =>
+          where.status === 'PENDING'
+            ? { _count: { _all: 1 }, _sum: { amount: new Prisma.Decimal(299000) } }
+            : { _sum: { amount: new Prisma.Decimal(299000) } },
         count: async () => 2,
       },
     };
+    const monthStarts = [];
     const result = await new PlatformAdminAnalyticsService(prisma).overview();
     assert.equal(result.registrations.PENDING, 3);
     assert.equal(result.registrations.REJECTED, 0);
@@ -68,6 +77,13 @@ describe('Platform Admin analytics', () => {
     assert.equal(result.mrr, 549000);
     assert.equal(result.revenueThisMonth, 798000);
     assert.equal(result.invoicesNeedReview, 3);
+    // Unpaid invoices (renewal + first period) shown on the overview as work to follow up.
+    assert.equal(result.unpaidInvoices, 3);
+    assert.equal(result.outstandingAmount, 897000);
+    // "Doanh thu tháng này" starts at 00:00 on the 1st in Vietnam time (17:00 UTC the day before).
+    const vn = new Date(Date.now() + 7 * 3_600_000);
+    assert.equal(monthStarts[0].toISOString(), new Date(Date.UTC(vn.getUTCFullYear(), vn.getUTCMonth(), 1) - 7 * 3_600_000).toISOString());
+    assert.equal(monthStarts[0].getUTCHours(), 17);
     assert.equal(prisma.order, undefined);
   });
 
