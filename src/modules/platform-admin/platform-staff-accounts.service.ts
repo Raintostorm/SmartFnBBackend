@@ -5,7 +5,7 @@ import { PrismaService } from '../../database/prisma.service.js';
 import { AppRole } from '../auth/app-role.enum.js';
 import { PasswordService } from '../auth/password.service.js';
 import { EmailOutboxService } from '../email/email-outbox.service.js';
-import { applyRemoval, assertRemovable, maskEmail, removalMode, type RemovableAccount } from '../users/account-removal.js';
+import { accountFootprint, applyRemoval, assertRemovable, decideMode, maskEmail, removalMode, type RemovableAccount } from '../users/account-removal.js';
 
 const SETUP_LINK_TTL_MS = 24 * 60 * 60_000;
 
@@ -143,11 +143,15 @@ export class PlatformStaffAccountsService {
 
   /** PA-07: Platform Admin removes a locked Platform Staff account; same two modes as staff accounts. */
   async remove(id: string, note: string, actorUserId: string, ipAddress?: string) {
+    // Footprint outside the write transaction (parallel, pooled); a locked account cannot add rows meanwhile.
+    const before = await this.removable(this.prisma, id);
+    assertRemovable(before, actorUserId);
+    const footprint = await accountFootprint(this.prisma as unknown as Prisma.TransactionClient, before);
     return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM users WHERE id = ${id}::uuid FOR UPDATE`;
       const account = await this.removable(tx, id);
       assertRemovable(account, actorUserId);
-      const { mode, footprint } = await removalMode(tx, account);
+      const mode = decideMode(account, footprint);
       await tx.platformSupportAction.create({
         data: {
           actorUserId,

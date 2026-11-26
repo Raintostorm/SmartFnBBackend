@@ -71,10 +71,36 @@ describe('Account removal — reference list stays in sync with schema.prisma', 
   });
 });
 
+describe('Account removal — footprint queries are valid for every table', () => {
+  it('only uses columns that exist (composite-key tables like branchMenuItem have no id)', async () => {
+    const schema = readFileSync(new URL('../prisma/schema.prisma', import.meta.url), 'utf8');
+    const columns = Object.fromEntries(
+      [...schema.matchAll(/model (\w+) \{([\s\S]*?)\n\}/g)].map(([, name, body]) => [
+        lc(name),
+        new Set(body.split('\n').map((line) => line.trim().split(/\s+/)[0]).filter((word) => /^[a-z]\w*$/.test(word))),
+      ]),
+    );
+    // Mimics Prisma's validation: an unknown field in where/select is rejected, like the 500 seen in production.
+    const strict = new Proxy({}, {
+      get: (_, model) => {
+        const known = columns[String(model)];
+        const check = (args = {}) => {
+          if (!known) throw new Error(`Unknown model ${String(model)}`);
+          for (const field of [...Object.keys(args.where ?? {}), ...Object.keys(args.select ?? {})])
+            if (!known.has(field)) throw new Error(`Unknown field ${String(model)}.${field}`);
+        };
+        return { count: async (args) => { check(args); return 0; }, findFirst: async (args) => { check(args); return null; } };
+      },
+    });
+    const result = await removalMode(strict, { userId: 'u1', employeeId: 'e1', status: 'SUSPENDED', staffInvitationState: 'CANCELLED', emailVerifiedAt: null, lastLoginAt: null, lastPasswordChangedAt: null });
+    assert.deepEqual(result, { mode: 'DELETE', footprint: [] });
+  });
+});
+
 describe('Account removal — mode and privacy', () => {
   const account = { userId: 'u1', employeeId: 'e1', status: 'SUSPENDED', staffInvitationState: 'CANCELLED', emailVerifiedAt: null, lastLoginAt: null, lastPasswordChangedAt: null };
   const client = (hits = []) =>
-    new Proxy({}, { get: (_, model) => ({ findFirst: async ({ where }) => (hits.includes(`${String(model)}.${Object.keys(where)[0]}`) ? { id: 'x' } : null) }) });
+    new Proxy({}, { get: (_, model) => ({ count: async ({ where }) => (hits.includes(`${String(model)}.${Object.keys(where)[0]}`) ? 1 : 0) }) });
 
   it('never activated and no footprint → DELETE; activated or any footprint → ANONYMIZE', async () => {
     assert.equal((await removalMode(client(), account)).mode, 'DELETE');
@@ -94,6 +120,12 @@ describe('Account removal — mode and privacy', () => {
 
 function staffFixture({ user = {}, footprint = [] } = {}) {
   const calls = [];
+  let inTransaction = false;
+  // Footprint checks must run outside the write transaction (5 s Prisma timeout on a remote DB).
+  const footprintCount = (key) => async ({ where }) => {
+    if (inTransaction) calls.push('footprint-inside-tx');
+    return footprint.includes(`${String(key)}.${Object.keys(where)[0]}`) ? 1 : 0;
+  };
   const staff = {
     id: 'employee', branchId: 'branch', employeeCode: 'NV01', firstName: 'An', lastName: 'Nguyen',
     user: { id: 'user', email: 'an.nguyen@gmail.com', role: { code: 'CASHIER' }, status: 'SUSPENDED', staffInvitationState: 'ACCEPTED', emailVerifiedAt: null, lastLoginAt: null, lastPasswordChangedAt: null, ...user },
@@ -104,20 +136,22 @@ function staffFixture({ user = {}, footprint = [] } = {}) {
       branch: { findFirst: async () => ({ id: 'branch', chainId: 'chain', name: 'Branch' }) },
       restaurantChain: { findFirst: async () => ({ id: 'chain' }) },
       businessSubscription: { findFirst: async () => ({ id: 's' }) },
-      ownerChainAssignment: { count: async () => 1, findFirst: async () => null },
+      // Branch-scope check counts by ownerId; the footprint check counts by assignedById.
+      ownerChainAssignment: { count: async ({ where }) => (where.assignedById ? 0 : 1) },
       employee: { count: async () => 1, findFirst: async ({ where }) => (where.id ? staff : null), update: async ({ data }) => calls.push({ employee: data }) },
       user: { delete: async ({ where }) => calls.push({ deleted: where.id }), update: async ({ data }) => calls.push({ user: data }) },
       passwordSetupToken: { updateMany: async () => calls.push('links'), findFirst: async () => null },
       authSession: { updateMany: async () => calls.push('sessions') },
-      passwordResetRequest: { updateMany: async () => calls.push('requests'), findFirst: async () => null },
-      branchAuditLog: { create: async ({ data }) => calls.push({ audit: data }), findFirst: async () => null },
+      passwordResetRequest: { updateMany: async () => calls.push('requests'), count: footprintCount('passwordResetRequest') },
+      branchAuditLog: { create: async ({ data }) => calls.push({ audit: data }), count: footprintCount('branchAuditLog') },
+      $transaction: async (fn) => {
+        inTransaction = true;
+        try { return await fn(tx); } finally { inTransaction = false; }
+      },
     },
-    {
-      get: (target, key) =>
-        target[key] ?? { findFirst: async ({ where }) => (footprint.includes(`${String(key)}.${Object.keys(where)[0]}`) ? { id: 'x' } : null) },
-    },
+    { get: (target, key) => target[key] ?? { count: footprintCount(key) } },
   );
-  const service = new StaffAccountsService({ $transaction: async (fn) => fn(tx) }, {}, {}, {});
+  const service = new StaffAccountsService(tx, {}, {}, {});
   return { service, calls };
 }
 
@@ -139,6 +173,7 @@ describe('Store Manager / Brand Manager remove staff accounts', () => {
     assert.equal(JSON.stringify(audit).includes('an.nguyen@gmail.com'), false);
     // Audit is written before the row is deleted, in the same transaction.
     assert.ok(calls.findIndex((c) => c.audit) < calls.findIndex((c) => c.deleted));
+    assert.equal(calls.includes('footprint-inside-tx'), false);
   });
 
   it('anonymizes a locked cashier who sold orders: history kept, personal data wiped, email released', async () => {
@@ -173,13 +208,14 @@ describe('Platform Admin removes Platform Staff', () => {
     const base = {
       $queryRaw: async () => [],
       user: { findFirst: async () => row, delete: async () => calls.push('deleted'), update: async ({ data }) => calls.push({ user: data }) },
-      platformSupportAction: { create: async ({ data }) => calls.push({ support: data }), findFirst: async ({ where }) => (footprint.includes('platformSupportAction.actorUserId') && where.actorUserId ? { id: 'x' } : null) },
+      platformSupportAction: { create: async ({ data }) => calls.push({ support: data }), count: async ({ where }) => (footprint.includes('platformSupportAction.actorUserId') && where.actorUserId ? 1 : 0) },
       passwordSetupToken: { updateMany: async () => calls.push('links') },
       authSession: { updateMany: async () => calls.push('sessions') },
-      passwordResetRequest: { updateMany: async () => undefined, findFirst: async () => null },
+      passwordResetRequest: { updateMany: async () => undefined, count: async () => 0 },
     };
-    const tx = new Proxy(base, { get: (t, k) => t[k] ?? { findFirst: async () => null } });
-    const service = new PlatformStaffAccountsService({ ...base, $transaction: async (fn) => fn(tx), user: base.user }, {}, {});
+    const tx = new Proxy(base, { get: (t, k) => t[k] ?? { count: async () => 0 } });
+    base.$transaction = async (fn) => fn(tx);
+    const service = new PlatformStaffAccountsService(tx, {}, {});
     return { service, calls };
   }
 

@@ -13,7 +13,7 @@ import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { PasswordService } from '../auth/password.service.js';
 import { EmailOutboxService } from '../email/email-outbox.service.js';
 import { PlanQuotaService } from '../subscription/plan-quota.service.js';
-import { applyRemoval, assertRemovable, maskEmail, removalMode, type RemovableAccount } from '../users/account-removal.js';
+import { accountFootprint, applyRemoval, assertRemovable, decideMode, maskEmail, type RemovableAccount } from '../users/account-removal.js';
 
 const roles: readonly string[] = [AppRole.MANAGER, AppRole.CASHIER, AppRole.BARISTA];
 const ttl = 24 * 60 * 60 * 1000;
@@ -356,7 +356,7 @@ export class StaffAccountsService {
 
   /** What removing this account would do, for the confirmation dialog. Never changes data. */
   async removalPreview(actor: AuthenticatedUser, employeeId: string) {
-    return this.transaction(async (tx) => {
+    const { account, blockedReason } = await this.transaction(async (tx) => {
       const { staff } = await this.target(tx, actor, employeeId);
       const account = this.removable(staff);
       let blockedReason: string | null = null;
@@ -365,21 +365,31 @@ export class StaffAccountsService {
       } catch (error) {
         blockedReason = error instanceof Error ? error.message : 'Not removable';
       }
-      const { mode } = await removalMode(tx, account);
-      return { employeeId, mode, allowed: blockedReason === null, blockedReason };
+      return { account, blockedReason };
     });
+    // Footprint runs outside the transaction (parallel, pooled): ~50 checks would exceed the 5 s tx timeout.
+    const mode = decideMode(account, await accountFootprint(this.prisma as unknown as Prisma.TransactionClient, account));
+    return { employeeId, mode, allowed: blockedReason === null, blockedReason };
   }
 
   /**
    * Superior removes a locked account or cancelled invitation (BR-05 scope): deleted when it never acted,
    * anonymized otherwise. Audit keeps who, when, IP, mode and a masked email — never the full email.
+   * The footprint is read before the write transaction; a locked/cancelled account cannot create new rows.
    */
   async remove(actor: AuthenticatedUser, employeeId: string, reason: string, ipAddress?: string) {
+    const scoped = await this.transaction(async (tx) => {
+      const { staff } = await this.target(tx, actor, employeeId);
+      const account = this.removable(staff);
+      assertRemovable(account, actor.id);
+      return account;
+    });
+    const footprint = await accountFootprint(this.prisma as unknown as Prisma.TransactionClient, scoped);
     return this.transaction(async (tx) => {
       const { staff } = await this.target(tx, actor, employeeId);
       const account = this.removable(staff);
       assertRemovable(account, actor.id);
-      const { mode, footprint } = await removalMode(tx, account);
+      const mode = decideMode(account, footprint);
       await this.audit(tx, actor, staff, mode === 'DELETE' ? 'STAFF_ACCOUNT_DELETED' : 'STAFF_ACCOUNT_ANONYMIZED', reason, {
         mode,
         role: staff.user.role.code,

@@ -78,7 +78,9 @@ export const EMPLOYEE_ACTOR_REFERENCES: readonly Ref[] = [
   { model: 'refundPrintLog', field: 'printedByEmployeeId' },
 ];
 
-type Delegate = { findFirst(args: { where: Record<string, string>; select: { id: true } }): Promise<unknown> };
+// `count` with `take: 1` stops at the first match and works on every table, including composite-key ones
+// (branchMenuItem, branchMenuOption have no `id` column, so `select: { id: true }` would be rejected).
+type Delegate = { count(args: { where: Record<string, string>; take: number }): Promise<number> };
 type Client = Prisma.TransactionClient;
 
 export interface RemovableAccount {
@@ -91,18 +93,24 @@ export interface RemovableAccount {
   lastPasswordChangedAt: Date | null;
 }
 
-/** Tables (model.field) where this account acted. Empty = no footprint. */
-export async function accountFootprint(tx: Client, account: Pick<RemovableAccount, 'userId' | 'employeeId'>): Promise<string[]> {
+/**
+ * Tables (model.field) where this account acted. Empty = no footprint.
+ * Runs the ~50 checks in parallel on the given client. Call it with the pooled client OUTSIDE an interactive
+ * transaction: run one by one inside a transaction they exceed Prisma's 5 s transaction timeout on a remote DB.
+ * Safe because only locked accounts / cancelled invitations are removed, so no new rows can appear meanwhile.
+ */
+export async function accountFootprint(client: Client, account: Pick<RemovableAccount, 'userId' | 'employeeId'>): Promise<string[]> {
   const checks = [
     ...USER_ACTOR_REFERENCES.map((ref) => ({ ref, id: account.userId })),
     ...(account.employeeId ? EMPLOYEE_ACTOR_REFERENCES.map((ref) => ({ ref, id: account.employeeId! })) : []),
   ];
-  const found: string[] = [];
-  for (const { ref, id } of checks) {
-    const delegate = (tx as unknown as Record<string, Delegate>)[ref.model];
-    if (await delegate.findFirst({ where: { [ref.field]: id }, select: { id: true } })) found.push(`${ref.model}.${ref.field}`);
-  }
-  return found;
+  const hits = await Promise.all(
+    checks.map(async ({ ref, id }) => {
+      const delegate = (client as unknown as Record<string, Delegate>)[ref.model];
+      return (await delegate.count({ where: { [ref.field]: id }, take: 1 })) > 0 ? `${ref.model}.${ref.field}` : null;
+    }),
+  );
+  return hits.filter((hit): hit is string => hit !== null);
 }
 
 /** Only accounts already out of use may be removed: locked, or an invitation that was cancelled. */
@@ -112,10 +120,15 @@ export function assertRemovable(account: RemovableAccount, actorUserId: string) 
     throw new ConflictException('Lock the account or cancel the invitation before removing it');
 }
 
-export async function removalMode(tx: Client, account: RemovableAccount): Promise<{ mode: RemovalMode; footprint: string[] }> {
+/** DELETE only when the account was never activated and has no footprint. */
+export function decideMode(account: RemovableAccount, footprint: string[]): RemovalMode {
   const activated = !!(account.emailVerifiedAt || account.lastLoginAt || account.lastPasswordChangedAt);
-  const footprint = await accountFootprint(tx, account);
-  return { mode: !activated && footprint.length === 0 ? 'DELETE' : 'ANONYMIZE', footprint };
+  return !activated && footprint.length === 0 ? 'DELETE' : 'ANONYMIZE';
+}
+
+export async function removalMode(client: Client, account: RemovableAccount): Promise<{ mode: RemovalMode; footprint: string[] }> {
+  const footprint = await accountFootprint(client, account);
+  return { mode: decideMode(account, footprint), footprint };
 }
 
 /** `an.nguyen@gmail.com` → `a***@gmail.com`: enough to recognise in the audit log, not to contact. */
