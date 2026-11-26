@@ -13,6 +13,7 @@ import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { PasswordService } from '../auth/password.service.js';
 import { EmailOutboxService } from '../email/email-outbox.service.js';
 import { PlanQuotaService } from '../subscription/plan-quota.service.js';
+import { applyRemoval, assertRemovable, maskEmail, removalMode, type RemovableAccount } from '../users/account-removal.js';
 
 const roles: readonly string[] = [AppRole.MANAGER, AppRole.CASHIER, AppRole.BARISTA];
 const ttl = 24 * 60 * 60 * 1000;
@@ -33,6 +34,7 @@ export const staffAccountSelect = {
       emailSentAt: true,
       lastPasswordChangedAt: true,
       lastPasswordChangeMethod: true,
+      lastLoginAt: true,
       role: { select: { code: true } },
     },
   },
@@ -350,6 +352,57 @@ export class StaffAccountsService {
       return { emailId: mail.id };
     });
     return { employeeId, email: normalized, expiresAt, emailStatus: await this.emails.deliver(result.emailId) };
+  }
+
+  /** What removing this account would do, for the confirmation dialog. Never changes data. */
+  async removalPreview(actor: AuthenticatedUser, employeeId: string) {
+    return this.transaction(async (tx) => {
+      const { staff } = await this.target(tx, actor, employeeId);
+      const account = this.removable(staff);
+      let blockedReason: string | null = null;
+      try {
+        assertRemovable(account, actor.id);
+      } catch (error) {
+        blockedReason = error instanceof Error ? error.message : 'Not removable';
+      }
+      const { mode } = await removalMode(tx, account);
+      return { employeeId, mode, allowed: blockedReason === null, blockedReason };
+    });
+  }
+
+  /**
+   * Superior removes a locked account or cancelled invitation (BR-05 scope): deleted when it never acted,
+   * anonymized otherwise. Audit keeps who, when, IP, mode and a masked email — never the full email.
+   */
+  async remove(actor: AuthenticatedUser, employeeId: string, reason: string, ipAddress?: string) {
+    return this.transaction(async (tx) => {
+      const { staff } = await this.target(tx, actor, employeeId);
+      const account = this.removable(staff);
+      assertRemovable(account, actor.id);
+      const { mode, footprint } = await removalMode(tx, account);
+      await this.audit(tx, actor, staff, mode === 'DELETE' ? 'STAFF_ACCOUNT_DELETED' : 'STAFF_ACCOUNT_ANONYMIZED', reason, {
+        mode,
+        role: staff.user.role.code,
+        employeeCode: staff.employeeCode,
+        email: maskEmail(staff.user.email),
+        footprint,
+        ipAddress: ipAddress?.slice(0, 64) ?? null,
+      });
+      await applyRemoval(tx, account, mode);
+      return { employeeId, mode };
+    });
+  }
+
+  private removable(staff: Staff): RemovableAccount {
+    return {
+      userId: staff.user.id,
+      employeeId: staff.id,
+      status: staff.user.status,
+      staffInvitationState: staff.user.staffInvitationState,
+      emailVerifiedAt: staff.user.emailVerifiedAt,
+      lastLoginAt: staff.user.lastLoginAt,
+      lastPasswordChangedAt: staff.user.lastPasswordChangedAt,
+    };
   }
 
   async cancel(actor: AuthenticatedUser, employeeId: string, reason: string) {

@@ -137,6 +137,31 @@ export class EmployeesController {
     return this.employeesService.resetManagerPassword(user, employeeId, dto.reason, request.ip);
   }
 
+  @Get(':employeeId/removal')
+  @ApiOperation({
+    summary: 'Preview removing a Store Manager account',
+    description: 'mode DELETE when the account never set a password nor acted on data, otherwise ANONYMIZE. allowed is false until the account is locked or its invitation cancelled.',
+  })
+  @ApiParam({ name: 'employeeId', format: 'uuid' })
+  removalPreview(@Param('employeeId', new ParseUUIDPipe()) employeeId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.employeesService.managerRemovalPreview(user, employeeId);
+  }
+
+  @Post(':employeeId/remove')
+  @ApiOperation({
+    summary: 'Remove a locked Store Manager account or cancelled invitation',
+    description: 'Deletes it when it has no footprint; otherwise wipes personal data, disables sign-in for good and keeps the row for history. The email can be used again. Reason required; audited with a masked email.',
+  })
+  @ApiParam({ name: 'employeeId', format: 'uuid' })
+  remove(
+    @Param('employeeId', new ParseUUIDPipe()) employeeId: string,
+    @Body() dto: StaffInvitationReasonDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: Request,
+  ) {
+    return this.employeesService.removeManager(user, employeeId, dto.reason, request.ip);
+  }
+
   // PATCH /employees/:employeeId/password was removed (BR-54, BR-56): a superior never sets a password.
   @Post(':employeeId/legacy-email')
   @ApiOperation({

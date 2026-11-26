@@ -60,6 +60,17 @@ export class EmployeesService {
     private readonly accounts: StaffAccountsService,
   ) {}
 
+  /** Removal preview for a Store Manager account (Brand Manager is the direct superior, BR-05). */
+  async managerRemovalPreview(user: AuthenticatedUser, employeeId: string) {
+    await this.getManagerOrFail(user, employeeId);
+    return this.accounts.removalPreview(user, employeeId);
+  }
+
+  async removeManager(user: AuthenticatedUser, employeeId: string, reason: string, ipAddress?: string) {
+    await this.getManagerOrFail(user, employeeId);
+    return this.accounts.remove(user, employeeId, reason, ipAddress);
+  }
+
   /** BR-54 transition: give a legacy username-only Store Manager a real inbox and email them a setup link. */
   async attachLegacyManagerEmail(user: AuthenticatedUser, employeeId: string, email: string, reason: string, ipAddress?: string) {
     await this.getManagerOrFail(user, employeeId);

@@ -1,10 +1,11 @@
 import { ConflictException, HttpException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
-import { UserStatus } from '../../generated/prisma/client.js';
+import { Prisma, UserStatus } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import { AppRole } from '../auth/app-role.enum.js';
 import { PasswordService } from '../auth/password.service.js';
 import { EmailOutboxService } from '../email/email-outbox.service.js';
+import { applyRemoval, assertRemovable, maskEmail, removalMode, type RemovableAccount } from '../users/account-removal.js';
 
 const SETUP_LINK_TTL_MS = 24 * 60 * 60_000;
 
@@ -125,6 +126,57 @@ export class PlatformStaffAccountsService {
       return message.id;
     });
     return { id, email: user.email, invitationExpiresAt: expiresAt, emailStatus: await this.emails.deliver(result) };
+  }
+
+  /** What removing this Platform Staff account would do (DELETE or ANONYMIZE), for the confirmation dialog. */
+  async removalPreview(id: string, actorUserId: string) {
+    const account = await this.removable(this.prisma, id);
+    let blockedReason: string | null = null;
+    try {
+      assertRemovable(account, actorUserId);
+    } catch (error) {
+      blockedReason = error instanceof Error ? error.message : 'Not removable';
+    }
+    const { mode } = await removalMode(this.prisma as unknown as Prisma.TransactionClient, account);
+    return { id, mode, allowed: blockedReason === null, blockedReason };
+  }
+
+  /** PA-07: Platform Admin removes a locked Platform Staff account; same two modes as staff accounts. */
+  async remove(id: string, note: string, actorUserId: string, ipAddress?: string) {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM users WHERE id = ${id}::uuid FOR UPDATE`;
+      const account = await this.removable(tx, id);
+      assertRemovable(account, actorUserId);
+      const { mode, footprint } = await removalMode(tx, account);
+      await tx.platformSupportAction.create({
+        data: {
+          actorUserId,
+          action: mode === 'DELETE' ? 'DELETE_PLATFORM_STAFF' : 'ANONYMIZE_PLATFORM_STAFF',
+          note: note.trim(),
+          details: { userId: id, email: maskEmail(account.email), mode, footprint, ipAddress: ipAddress?.slice(0, 64) ?? null },
+        },
+      });
+      await applyRemoval(tx, account, mode);
+      return { id, mode };
+    });
+  }
+
+  private async removable(client: Pick<Prisma.TransactionClient, 'user'>, id: string): Promise<RemovableAccount & { email: string }> {
+    const user = await client.user.findFirst({
+      where: { id, deletedAt: null, role: { code: AppRole.PLATFORM_STAFF } },
+      select: { id: true, email: true, status: true, staffInvitationState: true, emailVerifiedAt: true, lastLoginAt: true, lastPasswordChangedAt: true },
+    });
+    if (!user) throw new NotFoundException('Platform Staff account not found');
+    return {
+      userId: user.id,
+      employeeId: null,
+      email: user.email,
+      status: user.status,
+      staffInvitationState: user.staffInvitationState,
+      emailVerifiedAt: user.emailVerifiedAt,
+      lastLoginAt: user.lastLoginAt,
+      lastPasswordChangedAt: user.lastPasswordChangedAt,
+    };
   }
 
   private async requireStaff(id: string) {

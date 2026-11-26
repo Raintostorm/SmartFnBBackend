@@ -124,6 +124,24 @@ export class BranchManagerController {
     return this.staff.cancelInvitation(user, id, dto.reason);
   }
 
+  @Get('staff/:employeeId/removal')
+  @ApiOperation({ summary: 'Preview removing a Cashier/Barista account (DELETE or ANONYMIZE)' })
+  removalPreview(@CurrentUser() user: AuthenticatedUser, @Param('employeeId', new ParseUUIDPipe()) id: string) {
+    return this.staff.removalPreview(user, id);
+  }
+
+  @Post('staff/:employeeId/remove')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Remove a locked Cashier/Barista account or cancelled invitation; the email can be used again' })
+  remove(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('employeeId', new ParseUUIDPipe()) id: string,
+    @Body() dto: ManagerResetPasswordDto,
+    @Req() request: Request,
+  ) {
+    return this.staff.remove(user, id, dto.reason, request.ip);
+  }
+
   @Post('staff/:employeeId/invitation/resend')
   @HttpCode(200)
   @ApiOperation({

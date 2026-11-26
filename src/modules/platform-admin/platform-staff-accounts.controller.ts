@@ -28,6 +28,14 @@ export class PlatformStaffAccountsController {
   @Post(':id/unlock')
   unlock(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: PlatformStaffAccountNoteDto, @CurrentUser() actor: AuthenticatedUser) { return this.service.setLocked(id, false, dto.note, actor.id); }
 
+  /** Preview: DELETE when the account never acted, ANONYMIZE otherwise; `allowed` is false until it is locked. */
+  @Get(':id/removal')
+  removalPreview(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() actor: AuthenticatedUser) { return this.service.removalPreview(id, actor.id); }
+
+  /** Remove a locked Platform Staff account (note required): deleted, or anonymized to keep history, email released. */
+  @Post(':id/remove')
+  remove(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: PlatformStaffAccountNoteDto, @CurrentUser() actor: AuthenticatedUser, @Req() request: Request) { return this.service.remove(id, dto.note, actor.id, request.ip); }
+
   @Post(':id/reset-password')
   resetPassword(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: PlatformStaffAccountNoteDto, @CurrentUser() actor: AuthenticatedUser, @Req() request: Request) { return this.service.resetPassword(id, dto.note, actor.id, request.ip); }
 }

@@ -193,6 +193,14 @@ export class ManagerStaffService {
     return this.accounts.status(user, id, dto.status, dto.reason);
   }
 
+  async removalPreview(user: AuthenticatedUser, id: string) {
+    return this.accounts.removalPreview(user, id);
+  }
+
+  async remove(user: AuthenticatedUser, id: string, reason: string, ipAddress?: string) {
+    return this.accounts.remove(user, id, reason, ipAddress);
+  }
+
   async cancelInvitation(user: AuthenticatedUser, id: string, reason: string) {
     return this.accounts.cancel(user, id, reason);
   }
