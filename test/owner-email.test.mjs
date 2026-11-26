@@ -143,6 +143,11 @@ describe('Owner approval email', () => {
       assert.equal(sent.from, 'Smart FnB <no-reply@mail.smartfnb.tech>');
       assert.deepEqual(sent.to, ['owner@example.com']);
       assert.match(sent.html, /https:\/\/smartfnb\.tech\/setup-password\?token=setup-token/);
+      // Same typeface as the web app: @font-face from the web host, inline stack with system fallbacks.
+      assert.match(sent.html, /<style>@font-face\{font-family:'HarmonyOS Sans';src:url\('https:\/\/smartfnb\.tech\/fonts\/HarmonyOS_Sans_Regular\.ttf'\)/);
+      assert.match(sent.html, /HarmonyOS_Sans_Bold\.ttf'\) format\('truetype'\);font-weight:700/);
+      assert.match(sent.html, /font-family:'HarmonyOS Sans', 'Segoe UI', Roboto/);
+      assert.doesNotMatch(sent.html, /font-family:'Segoe UI'/);
       assert.equal(update.status, 'SENT');
     } finally {
       globalThis.fetch = originalFetch;

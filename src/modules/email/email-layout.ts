@@ -22,7 +22,35 @@ const COLOR = {
   errorBorder: '#FFA39E',
 } as const;
 
-const FONT = "'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif";
+/**
+ * Same typeface as the web app (HarmonyOS Sans, `src/index.css`). Clients that load web fonts (Apple Mail, iOS Mail,
+ * Outlook for Mac, Samsung Mail) use it via the @font-face from `withEmailFonts`; Gmail and Outlook for Windows ignore
+ * web fonts and fall back to the system fonts after it.
+ */
+export const EMAIL_FONT = "'HarmonyOS Sans', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif";
+const FONT = EMAIL_FONT;
+
+/** Font files the web app serves from `public/fonts` (Smart_FnB_Web_Version). */
+const EMAIL_FONT_FILES = [
+  { weight: 400, file: 'HarmonyOS_Sans_Regular.ttf' },
+  { weight: 500, file: 'HarmonyOS_Sans_Medium.ttf' },
+  { weight: 600, file: 'HarmonyOS_Sans_Medium.ttf' },
+  { weight: 700, file: 'HarmonyOS_Sans_Bold.ttf' },
+] as const;
+
+/**
+ * Adds the HarmonyOS Sans @font-face rules (files hosted by the web app at PUBLIC_WEB_URL) to a rendered email.
+ * Inline styles still carry the full fallback stack, so clients that strip <style> keep a system font.
+ */
+export function withEmailFonts(html: string, publicWebUrl: string): string {
+  const base = publicWebUrl.replace(/\/+$/, '');
+  if (!/^https?:\/\//.test(base)) return html;
+  const faces = EMAIL_FONT_FILES.map(
+    ({ weight, file }) =>
+      `@font-face{font-family:'HarmonyOS Sans';src:url('${escapeHtml(`${base}/fonts/${file}`)}') format('truetype');font-weight:${weight};font-style:normal;font-display:swap}`,
+  ).join('');
+  return html.replace('</head>', `<style>${faces}</style></head>`);
+}
 
 /** Inline (CID) logo: renders without a public asset host and is not blocked like data: URIs. */
 export const LOGO_CONTENT_ID = 'smartfnb-logo';

@@ -11,6 +11,8 @@ import {
   formatVnd,
   lineItemsTable,
   renderEmailLayout,
+  withEmailFonts,
+  EMAIL_FONT,
   type EmailDetail,
 } from './email-layout.js';
 
@@ -93,7 +95,7 @@ export class EmailOutboxService {
     const setupUrl = `${publicWebUrl}${setupPath}?token=${encodeURIComponent(this.readSetupToken(payload) ?? '')}`;
     const logo = emailLogoBase64();
     const hasLogo = logo !== null;
-    const html =
+    const body =
       message.template === 'REGISTRATION_ACTIVATION'
         ? this.activationHtml(payload, setupUrl, hasLogo)
         : message.template === 'PLATFORM_INVOICE'
@@ -105,6 +107,7 @@ export class EmailOutboxService {
         : message.template === 'SUBSCRIPTION_NOTICE'
         ? this.subscriptionNoticeHtml(payload, `${publicWebUrl}/brand-manager/plan`, hasLogo)
         : this.setupHtml(message.template, payload, setupUrl, hasLogo);
+    const html = withEmailFonts(body, publicWebUrl);
     try {
       const response = await fetch('https://api.resend.com/emails', {
         method: 'POST',
@@ -274,7 +277,7 @@ export class EmailOutboxService {
 
   private platformInvoiceHtml(payload: SetupPayload, hasLogo: boolean): string {
     const amount = formatVnd(payload.amount);
-    const amountHtml = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:4px 0 22px"><tr><td align="center" style="padding:22px 16px;border:1px solid #e4e4e7;border-radius:10px;background:#fafafa"><div style="font-family:'Segoe UI',Roboto,Arial,sans-serif;font-size:12px;font-weight:600;letter-spacing:.6px;text-transform:uppercase;color:#6B7280">Số tiền cần thanh toán</div><div style="font-family:'Segoe UI',Roboto,Arial,sans-serif;font-size:30px;font-weight:700;color:#1A1D21;margin-top:6px">${escapeHtml(amount)}</div></td></tr></table>`;
+    const amountHtml = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:4px 0 22px"><tr><td align="center" style="padding:22px 16px;border:1px solid #e4e4e7;border-radius:10px;background:#fafafa"><div style="font-family:${EMAIL_FONT};font-size:12px;font-weight:600;letter-spacing:.6px;text-transform:uppercase;color:#6B7280">Số tiền cần thanh toán</div><div style="font-family:${EMAIL_FONT};font-size:30px;font-weight:700;color:#1A1D21;margin-top:6px">${escapeHtml(amount)}</div></td></tr></table>`;
     return renderEmailLayout({
       hasLogo,
       preheader: `Hóa đơn thuê bao Smart F&B: ${amount}.`,
