@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '../../generated/prisma/client.js';
+import { OrderStatus, PaymentStatus, Prisma } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
@@ -86,6 +86,9 @@ const summarySelect = {
   refunds: { select: refundSelect, orderBy: { requestedAt: 'asc' } },
   tableSession: { select: { id: true, sessionCode: true, payments: { select: paymentSelect } } },
 } satisfies Prisma.OrderSelect;
+
+/** Money that arrived after the order was cancelled or paid in cash: the manager must refund it (BR-50). */
+export const LATE_PAYMENT_REASONS = ['PAYMENT_RECEIVED_AFTER_CANCELLATION', 'PAYMENT_RECEIVED_AFTER_SWITCH_TO_CASH'] as const;
 
 @Injectable()
 export class ManagerOperationsService {
@@ -173,6 +176,26 @@ export class ManagerOperationsService {
         : {}),
       ...(query.refundStatus ? { refunds: { some: { status: query.refundStatus } } } : {}),
       AND: [
+        // BM-05: a late payment leaves the order CANCELLED (or paid in cash) and only the payment in
+        // REQUIRES_ATTENTION; it still needs the manager until a refund is recorded for that payment.
+        ...(query.needsAttention
+          ? [
+              {
+                OR: [
+                  { status: OrderStatus.REQUIRES_ATTENTION },
+                  {
+                    payments: {
+                      some: {
+                        status: PaymentStatus.REQUIRES_ATTENTION,
+                        failureReason: { in: [...LATE_PAYMENT_REASONS] },
+                        refunds: { none: {} },
+                      },
+                    },
+                  },
+                ],
+              },
+            ]
+          : []),
         ...(search
           ? [
               {

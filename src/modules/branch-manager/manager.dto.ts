@@ -164,6 +164,17 @@ export class ManagerOrderQueryDto extends ManagerPageDto {
   @IsEnum(OrderStatus)
   status?: OrderStatus;
 
+  @ApiPropertyOptional({
+    type: Boolean,
+    description:
+      'BM-05 "Đơn cần xử lý": orders in REQUIRES_ATTENTION plus orders holding money that arrived late ' +
+      '(after cancellation or after switching to cash) and has not been refunded yet. Combines with other filters.',
+  })
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true')
+  @IsBoolean()
+  needsAttention?: boolean;
+
   @ApiPropertyOptional({ enum: OrderPaymentStatus })
   @IsOptional()
   @IsEnum(OrderPaymentStatus)

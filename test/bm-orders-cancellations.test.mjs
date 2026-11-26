@@ -29,6 +29,37 @@ describe('GAP-310: Brand Manager reads orders of an assigned chain', () => {
 
   const query = { page: 1, limit: 20 };
 
+  it('BM-05 needsAttention also returns cancelled orders whose late payment is not refunded yet', async () => {
+    const { service, calls } = build();
+    await service.chainOrders(owner, 'chain-1', { ...query, needsAttention: true, sortBy: 'attentionAt', sortOrder: 'asc' });
+    const where = calls.findMany[0].where;
+    // Order status is NOT forced to REQUIRES_ATTENTION: a late payment leaves the order CANCELLED.
+    assert.equal(where.status, undefined);
+    const attention = where.AND.find((part) => part.OR?.some((o) => o.status === 'REQUIRES_ATTENTION'));
+    assert.ok(attention, 'attention filter present');
+    assert.deepEqual(attention.OR[1], {
+      payments: {
+        some: {
+          status: 'REQUIRES_ATTENTION',
+          failureReason: { in: ['PAYMENT_RECEIVED_AFTER_CANCELLATION', 'PAYMENT_RECEIVED_AFTER_SWITCH_TO_CASH'] },
+          refunds: { none: {} },
+        },
+      },
+    });
+    // Without the flag the search is unchanged.
+    await service.chainOrders(owner, 'chain-1', { ...query });
+    assert.equal(calls.findMany[1].where.AND.some((part) => part.OR?.some((o) => o.status === 'REQUIRES_ATTENTION')), false);
+  });
+
+  it('needsAttention query string is parsed as a boolean', async () => {
+    const { ValidationPipe } = await import('@nestjs/common');
+    const { ManagerOrderQueryDto } = await import('../dist/modules/branch-manager/manager.dto.js');
+    const pipe = new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true });
+    const parsed = await pipe.transform({ needsAttention: 'true' }, { type: 'query', metatype: ManagerOrderQueryDto });
+    assert.equal(parsed.needsAttention, true);
+    assert.equal((await pipe.transform({ needsAttention: 'false' }, { type: 'query', metatype: ManagerOrderQueryDto })).needsAttention, false);
+  });
+
   it('searches the whole chain, with the branch of every order and the same pagination', async () => {
     const { service, calls } = build();
     const result = await service.chainOrders(owner, 'chain-1', { ...query, orderCode: 'CTR', status: 'COMPLETED' });
