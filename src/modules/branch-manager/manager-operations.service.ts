@@ -1,10 +1,18 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { OrderStatus, PaymentStatus, Prisma } from '../../generated/prisma/client.js';
+import {
+  OrderItemStatus,
+  OrderPaymentStatus,
+  OrderStatus,
+  OrderType,
+  PaymentStatus,
+  Prisma,
+} from '../../generated/prisma/client.js';
 import { PrismaService } from '../../database/prisma.service.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
@@ -13,6 +21,8 @@ import type {
   ChainOrderQueryDto,
   ManagerAuditQueryDto,
   ManagerOrderQueryDto,
+  ManagerResolveAttentionDto,
+  ManagerResumeItemsDto,
 } from './manager.dto.js';
 import { managerActor, writeBranchAudit } from './manager-scope.js';
 
@@ -89,6 +99,31 @@ const summarySelect = {
 
 /** Money that arrived after the order was cancelled or paid in cash: the manager must refund it (BR-50). */
 export const LATE_PAYMENT_REASONS = ['PAYMENT_RECEIVED_AFTER_CANCELLATION', 'PAYMENT_RECEIVED_AFTER_SWITCH_TO_CASH'] as const;
+/** Attention reasons that have their own action (confirm payment, refund, resume lines); "resolve" is for the rest. */
+const HANDLED_ATTENTION_REASONS: string[] = [
+  'PAYMENT_AMOUNT_MISMATCH',
+  'PAYMENT_RECEIVED_AFTER_EXPIRY',
+  'PAID_ITEM_OUT_OF_STOCK',
+  'PAID_OPTION_OUT_OF_STOCK',
+  ...LATE_PAYMENT_REASONS,
+];
+const OUT_OF_STOCK_REASONS = ['PAID_ITEM_OUT_OF_STOCK', 'PAID_OPTION_OUT_OF_STOCK'];
+
+/** Kitchen status of a paid order from its live lines (same rule as after a partial refund). */
+function preparationStatus(items: Array<{ status: OrderItemStatus }>): OrderStatus {
+  if (items.some((item) => item.status === OrderItemStatus.OUT_OF_STOCK)) return OrderStatus.REQUIRES_ATTENTION;
+  if (items.length && items.every((item) => item.status === OrderItemStatus.READY)) return OrderStatus.READY;
+  if (items.some((item) => item.status === OrderItemStatus.PREPARING || item.status === OrderItemStatus.READY))
+    return OrderStatus.PREPARING;
+  return OrderStatus.SUBMITTED;
+}
+
+function optionIdsOf(selectedOptions: Prisma.JsonValue): string[] {
+  if (!Array.isArray(selectedOptions)) return [];
+  return selectedOptions.flatMap((option) =>
+    option && typeof option === 'object' && !Array.isArray(option) && typeof option.id === 'string' ? [option.id] : [],
+  );
+}
 
 @Injectable()
 export class ManagerOperationsService {
@@ -286,6 +321,7 @@ export class ManagerOperationsService {
             selectedOptions: true,
             status: true,
             specialInstructions: true,
+            parentId: true,
             cancellationReason: true,
             cancelledAt: true,
             cancelledBy: { select: actorSelect },
@@ -455,6 +491,136 @@ export class ManagerOperationsService {
           effectiveAvailable: isAvailable && option.isActive && option.group.isActive,
           affectedOrderIds: [...new Set(items.map((i) => i.orderId))],
         };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  }
+
+  /**
+   * BM-05 "Đơn cần xử lý" — hết món: the item (or option) is available again, so the out-of-stock lines of the
+   * paid order go back to the preparation queue. The menu must be re-opened first, otherwise the barista would
+   * mark them sold out again. When no out-of-stock line remains the order leaves "Cần xử lý".
+   */
+  async resumeOutOfStockItems(user: AuthenticatedUser, orderId: string, dto: ManagerResumeItemsDto) {
+    const { branchId } = await this.scope(user, true);
+    return this.prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT id FROM orders WHERE id = ${orderId}::uuid FOR UPDATE`;
+        const order = await tx.order.findFirst({
+          where: { id: orderId, branchId, type: OrderType.COUNTER_PICKUP },
+          select: {
+            id: true,
+            status: true,
+            callNumber: true,
+            attentionReason: true,
+            items: { select: { id: true, status: true, parentId: true, menuItemId: true, selectedOptions: true } },
+          },
+        });
+        if (!order) throw new NotFoundException('Counter order was not found in your branch');
+        if (order.status !== OrderStatus.REQUIRES_ATTENTION || !OUT_OF_STOCK_REASONS.includes(order.attentionReason ?? ''))
+          throw new ConflictException('This order has no out-of-stock line to resume');
+        const outOfStock = order.items.filter((item) => item.status === OrderItemStatus.OUT_OF_STOCK);
+        const wanted = new Set(dto.orderItemIds ?? []);
+        // A combo is chosen by its root line; its out-of-stock components follow it.
+        const selected = wanted.size
+          ? outOfStock.filter((item) => wanted.has(item.id) || (!!item.parentId && wanted.has(item.parentId)))
+          : outOfStock;
+        const known = new Set(outOfStock.flatMap((item) => [item.id, item.parentId ?? item.id]));
+        if (!selected.length || [...wanted].some((id) => !known.has(id)))
+          throw new BadRequestException('Only out-of-stock lines of this order can be resumed');
+
+        const menuItemIds = [...new Set(selected.flatMap((item) => (item.menuItemId ? [item.menuItemId] : [])))];
+        const optionIds = [...new Set(selected.flatMap((item) => optionIdsOf(item.selectedOptions)))];
+        const [soldOutItems, soldOutOptions] = await Promise.all([
+          menuItemIds.length
+            ? tx.branchMenuItem.count({ where: { branchId, menuItemId: { in: menuItemIds }, isAvailable: false } })
+            : 0,
+          optionIds.length
+            ? tx.branchMenuOption.count({ where: { branchId, optionId: { in: optionIds }, isAvailable: false } })
+            : 0,
+        ]);
+        if (soldOutItems || soldOutOptions)
+          throw new ConflictException('Mark the item or option available again before resuming these lines');
+
+        const ids = selected.map((item) => item.id);
+        await tx.orderItemUnit.updateMany({
+          where: { orderItemId: { in: ids }, status: OrderItemStatus.OUT_OF_STOCK },
+          data: { status: OrderItemStatus.QUEUED, startedAt: null, startedById: null },
+        });
+        await tx.orderItem.updateMany({
+          where: { id: { in: ids } },
+          data: { status: OrderItemStatus.QUEUED, startedAt: null },
+        });
+        const live = order.items
+          .filter((item) => item.status !== OrderItemStatus.CANCELLED)
+          .map((item) => (ids.includes(item.id) ? { ...item, status: OrderItemStatus.QUEUED } : item));
+        const status = preparationStatus(live);
+        const resolved = status !== OrderStatus.REQUIRES_ATTENTION;
+        await tx.order.update({
+          where: { id: order.id },
+          data: { status, ...(resolved ? { attentionAt: null, attentionReason: null } : {}) },
+        });
+        await writeBranchAudit(tx, user, {
+          action: 'OUT_OF_STOCK_ITEMS_RESUMED',
+          entityType: 'ORDER',
+          entityId: order.id,
+          reason: dto.note?.trim() || undefined,
+          before: { status: order.status, attentionReason: order.attentionReason },
+          after: { status, resumedItemIds: ids },
+        });
+        return { orderId: order.id, callNumber: order.callNumber, status, resumedItemIds: ids, resolved };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  }
+
+  /**
+   * BM-05: close an attention case whose reason has no dedicated action (unknown or legacy reason), after the
+   * manager checked it. Cases with a dedicated action (confirm payment, refund, resume lines) are refused so the
+   * money or the kitchen state is never skipped.
+   */
+  async resolveAttention(user: AuthenticatedUser, orderId: string, dto: ManagerResolveAttentionDto) {
+    const { branchId } = await this.scope(user, true);
+    return this.prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT id FROM orders WHERE id = ${orderId}::uuid FOR UPDATE`;
+        const order = await tx.order.findFirst({
+          where: { id: orderId, branchId, type: OrderType.COUNTER_PICKUP },
+          select: {
+            id: true,
+            status: true,
+            paymentStatus: true,
+            attentionReason: true,
+            items: { select: { status: true } },
+            payments: { select: { status: true } },
+          },
+        });
+        if (!order) throw new NotFoundException('Counter order was not found in your branch');
+        if (order.status !== OrderStatus.REQUIRES_ATTENTION) throw new ConflictException('Order no longer needs attention');
+        if (
+          HANDLED_ATTENTION_REASONS.includes(order.attentionReason ?? '') ||
+          order.payments.some(
+            (p) => p.status === PaymentStatus.AMOUNT_MISMATCH || p.status === PaymentStatus.REQUIRES_ATTENTION,
+          ) ||
+          order.items.some((item) => item.status === OrderItemStatus.OUT_OF_STOCK)
+        )
+          throw new ConflictException('Use the dedicated action for this case: confirm the payment, refund, or resume the lines');
+        const live = order.items.filter((item) => item.status !== OrderItemStatus.CANCELLED);
+        const status =
+          order.paymentStatus === OrderPaymentStatus.PAID ? preparationStatus(live) : OrderStatus.CONFIRMED;
+        await tx.order.update({
+          where: { id: order.id },
+          data: { status, attentionAt: null, attentionReason: null },
+        });
+        await writeBranchAudit(tx, user, {
+          action: 'ORDER_ATTENTION_RESOLVED',
+          entityType: 'ORDER',
+          entityId: order.id,
+          reason: dto.note.trim(),
+          before: { status: order.status, attentionReason: order.attentionReason },
+          after: { status },
+        });
+        return { orderId: order.id, status };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );

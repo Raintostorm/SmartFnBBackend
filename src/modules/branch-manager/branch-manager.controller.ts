@@ -24,6 +24,9 @@ import { ManagerReportsService } from './manager-reports.service.js';
 import {
   ManagerAuditQueryDto,
   ManagerAvailabilityDto,
+  ManagerAttentionRefundDto,
+  ManagerResolveAttentionDto,
+  ManagerResumeItemsDto,
   CompleteRefundDto,
   ManagerCreateStaffDto,
   ManagerOrderQueryDto,
@@ -213,6 +216,56 @@ export class BranchManagerController {
   })
   order(@CurrentUser() user: AuthenticatedUser, @Param('orderId', new ParseUUIDPipe()) id: string) {
     return this.operations.order(user, id);
+  }
+
+  @Post('orders/:orderId/attention/refund')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'BM-05: Hand money back in cash for an order that needs attention',
+    description:
+      'Cash only, like a Cashier refund (ledger, refund slip). Without orderItemIds the whole amount received is refunded and the order is cancelled (late payment, QR expired, underpaid). With orderItemIds only those out-of-stock lines are refunded and the rest is prepared. 409 when the order does not need attention.',
+  })
+  attentionRefund(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('orderId', new ParseUUIDPipe()) id: string,
+    @Body() dto: ManagerAttentionRefundDto,
+  ) {
+    return this.refunds.managerAttentionRefund(user, id, dto);
+  }
+
+  @Post('orders/:orderId/attention/resume-items')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'BM-05: Put out-of-stock lines of a paid order back in the preparation queue',
+    description: 'The menu item or option must be available again. The order leaves "needs attention" when no out-of-stock line remains.',
+  })
+  async resumeItems(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('orderId', new ParseUUIDPipe()) id: string,
+    @Body() dto: ManagerResumeItemsDto,
+  ) {
+    const result = await this.operations.resumeOutOfStockItems(user, id, dto);
+    if (user.branchId) {
+      this.realtime.branch(user.branchId, 'preparation.order.queued', { orderId: id, callNumber: result.callNumber });
+      this.realtime.branch(user.branchId, 'manager.order.attention-resolved', { orderId: id, status: result.status });
+    }
+    return result;
+  }
+
+  @Post('orders/:orderId/attention/resolve')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'BM-05: Close an attention case that has no dedicated action (unknown reason)',
+    description: '409 for cases with their own action (confirm payment, refund, resume lines).',
+  })
+  async resolveAttention(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('orderId', new ParseUUIDPipe()) id: string,
+    @Body() dto: ManagerResolveAttentionDto,
+  ) {
+    const result = await this.operations.resolveAttention(user, id, dto);
+    if (user.branchId) this.realtime.branch(user.branchId, 'manager.order.attention-resolved', result);
+    return result;
   }
 
   @Get('refund-approval-requests')

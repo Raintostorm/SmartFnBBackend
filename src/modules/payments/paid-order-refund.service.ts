@@ -25,7 +25,8 @@ import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
 import { AppRole } from '../auth/app-role.enum.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { writeBranchAudit } from '../branch-manager/manager-scope.js';
-import type { CancelPaidOrderDto } from '../branch-manager/manager.dto.js';
+import type { CancelPaidOrderDto, ManagerAttentionRefundDto } from '../branch-manager/manager.dto.js';
+import { managerActor } from '../branch-manager/manager-scope.js';
 import type { RefundListQueryDto } from './dto/payment.dto.js';
 import type { CashierRefundDto } from './cashier-refunds.controller.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
@@ -40,6 +41,10 @@ const cancellableOrderStatuses = [
   OrderStatus.COMPLETED,
   OrderStatus.DELIVERED,
 ];
+
+/** Money that arrived after the order was cancelled or paid in cash (BR-50). */
+const LATE_PAYMENT_REASONS = ['PAYMENT_RECEIVED_AFTER_CANCELLATION', 'PAYMENT_RECEIVED_AFTER_SWITCH_TO_CASH'];
+export const OUT_OF_STOCK_REASONS = ['PAID_ITEM_OUT_OF_STOCK', 'PAID_OPTION_OUT_OF_STOCK'];
 
 const refundInclude = {
   items: {
@@ -245,6 +250,56 @@ export class PaidOrderRefundService {
       refundMethod: RefundMethod.CASH,
       reasonCode: dto.reasonCode,
       orderItemIds: dto.items?.map((item) => item.orderItemId),
+    });
+  }
+
+  /**
+   * BM-05 "Đơn cần xử lý": the Store Manager hands the money back in cash, the same refund a Cashier makes
+   * (cash only, ledger, refund slip). Limited to orders that need attention, so it does not reopen the
+   * retired "Store Manager cancels any paid order" flow (BR-82): other refunds still go through Cashier requests.
+   * Without lines it refunds everything received and cancels the order; with lines it refunds only
+   * out-of-stock lines and the rest of the order goes on.
+   */
+  async managerAttentionRefund(user: AuthenticatedUser, orderId: string, dto: ManagerAttentionRefundDto) {
+    const { branchId } = managerActor(user);
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, branchId, type: OrderType.COUNTER_PICKUP },
+      select: {
+        status: true,
+        attentionReason: true,
+        items: { select: { id: true, status: true, parentId: true } },
+        payments: { select: { status: true, failureReason: true, refunds: { select: { id: true } } } },
+      },
+    });
+    if (!order) throw new NotFoundException('Counter order was not found in your branch');
+    const lateUnrefunded = order.payments.some(
+      (p) =>
+        p.status === PaymentStatus.REQUIRES_ATTENTION &&
+        LATE_PAYMENT_REASONS.includes(p.failureReason ?? '') &&
+        p.refunds.length === 0,
+    );
+    if (order.status !== OrderStatus.REQUIRES_ATTENTION && !lateUnrefunded)
+      throw new ConflictException(
+        'Only orders that need attention can be refunded here; other refunds go through a Cashier request',
+      );
+    const itemIds = [...new Set(dto.orderItemIds ?? [])];
+    if (itemIds.length) {
+      if (!OUT_OF_STOCK_REASONS.includes(order.attentionReason ?? ''))
+        throw new ConflictException('Only out-of-stock lines can be refunded one by one');
+      const outOfStockRoots = new Set(
+        order.items
+          .filter((item) => item.status === OrderItemStatus.OUT_OF_STOCK)
+          .map((item) => item.parentId ?? item.id),
+      );
+      if (itemIds.some((id) => !outOfStockRoots.has(id)))
+        throw new BadRequestException('Only out-of-stock lines can be refunded one by one');
+    }
+    const note = dto.note?.trim() ?? '';
+    return this.cancelPaidOrder(user, orderId, {
+      reason: dto.reasonCode + (note ? ': ' + note : ''),
+      reasonCode: dto.reasonCode,
+      refundMethod: RefundMethod.CASH,
+      orderItemIds: itemIds,
     });
   }
 
@@ -715,6 +770,11 @@ export class PaidOrderRefundService {
           where: { id: order.id },
           data: {
             status: nextOrderStatus,
+            // Leaving "Cần xử lý" closes the case (BM-05); the audit row below keeps the previous status.
+            ...(order.status === OrderStatus.REQUIRES_ATTENTION &&
+            nextOrderStatus !== OrderStatus.REQUIRES_ATTENTION
+              ? { attentionAt: null, attentionReason: null }
+              : {}),
             ...(fullCancellation
               ? {
                   cancelledAt: now,

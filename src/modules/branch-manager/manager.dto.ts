@@ -1,6 +1,8 @@
 import { ApiProperty, ApiPropertyOptional, OmitType, PartialType } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsDateString,
   IsEnum,
@@ -250,6 +252,58 @@ export class CompleteRefundDto {
   @IsString()
   @MaxLength(500)
   note?: string;
+}
+
+/** BM-05 "Đơn cần xử lý": cash refund the Store Manager hands back for an order that needs attention. */
+export class ManagerAttentionRefundDto {
+  @ApiProperty({ enum: ['CHANGE_OF_MIND', 'WRONG_ITEM', 'OUT_OF_STOCK', 'LONG_WAIT', 'OTHER'] })
+  @IsIn(['CHANGE_OF_MIND', 'WRONG_ITEM', 'OUT_OF_STOCK', 'LONG_WAIT', 'OTHER'])
+  reasonCode!: string;
+
+  @ApiPropertyOptional({ maxLength: 450, description: 'Required (5+ characters) when reasonCode is OTHER' })
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @MaxLength(450)
+  note?: string;
+
+  @ApiPropertyOptional({
+    type: [String],
+    format: 'uuid',
+    description: 'Out-of-stock lines only (combo: the whole combo). Omit to refund the whole order.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @IsUUID('all', { each: true })
+  orderItemIds?: string[];
+}
+
+/** BM-05: put out-of-stock lines of a paid order back in the preparation queue once the item is available again. */
+export class ManagerResumeItemsDto {
+  @ApiPropertyOptional({ type: [String], format: 'uuid', description: 'Omit to resume every out-of-stock line' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @IsUUID('all', { each: true })
+  orderItemIds?: string[];
+
+  @ApiPropertyOptional({ maxLength: 500 })
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @MaxLength(500)
+  note?: string;
+}
+
+/** BM-05: close an attention case that has no dedicated action (unknown reason). */
+export class ManagerResolveAttentionDto {
+  @ApiProperty({ minLength: 5, maxLength: 500 })
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @MinLength(5)
+  @MaxLength(500)
+  note!: string;
 }
 
 export class ManagerReportQueryDto {

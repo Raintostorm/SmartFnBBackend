@@ -234,6 +234,9 @@ describe('Paid order cancellation and external refunds (#43)', () => {
     assert.equal(result.order.status, 'CANCELLED');
     assert.equal(result.refund.status, 'COMPLETED');
     assert.equal(result.refund.amount.toString(), '40000');
+    // Leaving "Cần xử lý" closes the case (BM-05).
+    assert.equal(result.order.attentionAt, null);
+    assert.equal(result.order.attentionReason, null);
     assert.deepEqual(
       calls.events.map((event) => event.type),
       ['refund.completed', 'order.cancelled', 'calling:order.cancelled'],
