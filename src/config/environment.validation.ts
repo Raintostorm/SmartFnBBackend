@@ -46,6 +46,10 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
   ).toLowerCase();
   const paymentExpiryJobIntervalMs = Number(config.PAYMENT_EXPIRY_JOB_INTERVAL_MS ?? 60_000);
   const paymentExpiryBatchSize = Number(config.PAYMENT_EXPIRY_BATCH_SIZE ?? 100);
+  const unpaidOrderCleanupEnabledValue = String(config.UNPAID_ORDER_CLEANUP_ENABLED ?? 'true').toLowerCase();
+  const unpaidOrderCleanupIntervalMs = Number(config.UNPAID_ORDER_CLEANUP_INTERVAL_MS ?? 5 * 60_000);
+  const unpaidOrderTtlMinutes = Number(config.UNPAID_ORDER_TTL_MINUTES ?? 30);
+  const unpaidOrderCleanupBatchSize = Number(config.UNPAID_ORDER_CLEANUP_BATCH_SIZE ?? 100);
   const payosReconciliationJobEnabledValue = String(
     config.PAYOS_RECONCILIATION_JOB_ENABLED ?? 'true',
   ).toLowerCase();
@@ -154,6 +158,18 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
   if (!Number.isInteger(paymentExpiryBatchSize) || paymentExpiryBatchSize < 1) {
     throw new Error('PAYMENT_EXPIRY_BATCH_SIZE must be a positive integer.');
   }
+  if (!['true', 'false'].includes(unpaidOrderCleanupEnabledValue)) {
+    throw new Error('UNPAID_ORDER_CLEANUP_ENABLED must be true or false.');
+  }
+  if (!Number.isInteger(unpaidOrderCleanupIntervalMs) || unpaidOrderCleanupIntervalMs < 10_000) {
+    throw new Error('UNPAID_ORDER_CLEANUP_INTERVAL_MS must be an integer of at least 10000.');
+  }
+  if (!Number.isInteger(unpaidOrderTtlMinutes) || unpaidOrderTtlMinutes < 5) {
+    throw new Error('UNPAID_ORDER_TTL_MINUTES must be an integer of at least 5.');
+  }
+  if (!Number.isInteger(unpaidOrderCleanupBatchSize) || unpaidOrderCleanupBatchSize < 1) {
+    throw new Error('UNPAID_ORDER_CLEANUP_BATCH_SIZE must be a positive integer.');
+  }
   if (!['true', 'false'].includes(payosReconciliationJobEnabledValue)) {
     throw new Error('PAYOS_RECONCILIATION_JOB_ENABLED must be true or false.');
   }
@@ -230,6 +246,10 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
     PAYMENT_EXPIRY_JOB_ENABLED: paymentExpiryJobEnabledValue === 'true',
     PAYMENT_EXPIRY_JOB_INTERVAL_MS: paymentExpiryJobIntervalMs,
     PAYMENT_EXPIRY_BATCH_SIZE: paymentExpiryBatchSize,
+    UNPAID_ORDER_CLEANUP_ENABLED: unpaidOrderCleanupEnabledValue === 'true',
+    UNPAID_ORDER_CLEANUP_INTERVAL_MS: unpaidOrderCleanupIntervalMs,
+    UNPAID_ORDER_TTL_MINUTES: unpaidOrderTtlMinutes,
+    UNPAID_ORDER_CLEANUP_BATCH_SIZE: unpaidOrderCleanupBatchSize,
     PAYOS_RECONCILIATION_JOB_ENABLED: payosReconciliationJobEnabledValue === 'true',
     PAYOS_RECONCILIATION_JOB_INTERVAL_MS: payosReconciliationJobIntervalMs,
     PAYOS_RECONCILIATION_LOOKBACK_MS: payosReconciliationLookbackMs,

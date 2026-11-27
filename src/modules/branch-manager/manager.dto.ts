@@ -177,6 +177,16 @@ export class ManagerOrderQueryDto extends ManagerPageDto {
   @IsBoolean()
   needsAttention?: boolean;
 
+  @ApiPropertyOptional({
+    type: Boolean,
+    description:
+      'Leave out orders still awaiting payment (draft or "Chờ thanh toán": unpaid PENDING/CONFIRMED). Orders needing attention stay. Ignored when status is given.',
+  })
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true')
+  @IsBoolean()
+  hideAwaitingPayment?: boolean;
+
   @ApiPropertyOptional({ enum: OrderPaymentStatus })
   @IsOptional()
   @IsEnum(OrderPaymentStatus)

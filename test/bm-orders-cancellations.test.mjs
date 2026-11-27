@@ -51,6 +51,21 @@ describe('GAP-310: Brand Manager reads orders of an assigned chain', () => {
     assert.equal(calls.findMany[1].where.AND.some((part) => part.OR?.some((o) => o.status === 'REQUIRES_ATTENTION')), false);
   });
 
+  it('hideAwaitingPayment leaves out drafts and "Chờ thanh toán" orders unless a status is chosen', async () => {
+    const { service, calls } = build();
+    await service.chainOrders(owner, 'chain-1', { ...query, hideAwaitingPayment: true });
+    const hidden = { NOT: { paymentStatus: 'UNPAID', status: { in: ['PENDING', 'CONFIRMED'] } } };
+    assert.ok(calls.findMany[0].where.AND.some((part) => JSON.stringify(part) === JSON.stringify(hidden)));
+    // Picking "Chờ thanh toán" in the status filter still finds them (e.g. to confirm a QR by hand).
+    await service.chainOrders(owner, 'chain-1', { ...query, hideAwaitingPayment: true, status: 'CONFIRMED' });
+    assert.equal(calls.findMany[1].where.status, 'CONFIRMED');
+    assert.ok(!calls.findMany[1].where.AND.some((part) => part.NOT));
+    const { ValidationPipe } = await import('@nestjs/common');
+    const { ManagerOrderQueryDto } = await import('../dist/modules/branch-manager/manager.dto.js');
+    const pipe = new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true });
+    assert.equal((await pipe.transform({ hideAwaitingPayment: 'true' }, { type: 'query', metatype: ManagerOrderQueryDto })).hideAwaitingPayment, true);
+  });
+
   it('needsAttention query string is parsed as a boolean', async () => {
     const { ValidationPipe } = await import('@nestjs/common');
     const { ManagerOrderQueryDto } = await import('../dist/modules/branch-manager/manager.dto.js');

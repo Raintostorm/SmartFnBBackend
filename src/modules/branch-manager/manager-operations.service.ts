@@ -213,6 +213,10 @@ export class ManagerOperationsService {
       AND: [
         // BM-05: a late payment leaves the order CANCELLED (or paid in cash) and only the payment in
         // REQUIRES_ATTENTION; it still needs the manager until a refund is recorded for that payment.
+        // Default list: no drafts or "Chờ thanh toán" orders (unpaid, still awaiting payment); attention cases stay.
+        ...(query.hideAwaitingPayment && !query.status
+          ? [{ NOT: { paymentStatus: OrderPaymentStatus.UNPAID, status: { in: [OrderStatus.PENDING, OrderStatus.CONFIRMED] } } }]
+          : []),
         ...(query.needsAttention
           ? [
               {

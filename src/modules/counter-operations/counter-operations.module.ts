@@ -12,6 +12,7 @@ import { PayosModule } from '../payos/payos.module.js';
 import { OrderTrackingModule } from '../order-tracking/order-tracking.module.js';
 import { ReceiptDocumentsModule } from '../receipt-documents/receipt-documents.module.js';
 import { CashLedgerModule } from '../payments/cash-ledger.module.js';
+import { UnpaidOrderCleanupWorker } from './unpaid-order-cleanup.worker.js';
 
 @Module({
   imports: [
@@ -24,7 +25,7 @@ import { CashLedgerModule } from '../payments/cash-ledger.module.js';
     CashLedgerModule,
   ],
   controllers: [PagersController, CashierController, BaristaController, StationsController],
-  providers: [PagersService, CounterOperationsService, StationsService],
+  providers: [PagersService, CounterOperationsService, StationsService, UnpaidOrderCleanupWorker],
   exports: [CounterOperationsService],
 })
 export class CounterOperationsModule {}
