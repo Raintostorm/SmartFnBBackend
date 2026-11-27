@@ -29,6 +29,7 @@ import type {
 } from './dto/restaurant-chain.dto.js';
 import { BranchAccessService } from './branch-access.service.js';
 import { PlanQuotaService } from '../subscription/plan-quota.service.js';
+import { assignWholeMenuToBranch } from '../menu/whole-menu.js';
 
 const chainSummarySelect = {
   id: true,
@@ -159,7 +160,7 @@ export class BranchesService {
   async createBranch(chainId: string, dto: CreateBranchDto, user: AuthenticatedUser) {
     await this.branchAccess.assertCanManageChain(user, chainId);
     await this.ensureChainExists(chainId);
-    const { openTime, closeTime, ...branchData } = dto;
+    const { openTime, closeTime, assignWholeMenu, ...branchData } = dto;
     const weeklyHours = this.buildWeeklyHours(openTime, closeTime);
     const duplicate = await this.prisma.branch.count({
       where: { code: dto.code, deletedAt: null },
@@ -185,6 +186,8 @@ export class BranchesService {
           },
         });
         await reserve(branch.id);
+        // A new branch sells nothing until items are assigned; let the owner take the whole menu in one go.
+        if (assignWholeMenu) await assignWholeMenuToBranch(tx, user, chainId, branch.id);
         return branch;
       }),
     );

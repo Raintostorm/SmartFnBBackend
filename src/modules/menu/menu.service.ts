@@ -30,6 +30,7 @@ import type {
 } from './dto/menu.dto.js';
 import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
 import { MENU_IMAGE_MAX_BYTES, MENU_IMAGE_PUBLIC_PREFIX } from './menu-image.js';
+import { assignWholeMenuToBranch } from './whole-menu.js';
 
 const categorySelect = {
   id: true,
@@ -581,6 +582,19 @@ export class MenuService {
         updatedAt: branchMenuItems[0]?.updatedAt ?? null,
       })),
     };
+  }
+
+  /**
+   * Sells every menu item and combo of the chain at one branch in a single step (typically a branch just opened),
+   * instead of assigning the branch item by item. Branch prices already set are kept.
+   */
+  async assignWholeMenu(chainId: string, branchId: string, user: AuthenticatedUser) {
+    await this.branchAccess.assertCanManageChain(user, chainId);
+    const [branchId_] = await this.assertBranchesInChain(chainId, [branchId]);
+    const result = await this.prisma.$transaction((tx) => assignWholeMenuToBranch(tx, user, chainId, branchId_));
+    // POS and barista screens of that branch reload their menu.
+    this.realtime.branch(branchId_, 'menu.prices-updated', { wholeMenu: true });
+    return result;
   }
 
   /** Replaces the set of branches that carry an item; branches left out are switched off. */

@@ -1,6 +1,7 @@
 import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional, OmitType, PartialType } from '@nestjs/swagger';
 import {
+  IsBoolean,
   IsEmail,
   IsEnum,
   IsOptional,
@@ -100,11 +101,19 @@ export class CreateBranchDto {
   @IsOptional()
   @Matches(TIME_PATTERN, { message: 'closeTime must use HH:mm format' })
   closeTime?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Sell every menu item and combo of the chain at the new branch right away (same as POST /restaurant-chains/{chainId}/menu/branches/{branchId}/assign-all). Default false.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  assignWholeMenu?: boolean;
 }
 
-// Opening hours are seeded at creation; per-day edits go through the operating-hours routes.
+// Opening hours and the initial menu are seeded at creation; later edits go through their own routes.
 export class UpdateBranchDto extends PartialType(
-  OmitType(CreateBranchDto, ['openTime', 'closeTime'] as const),
+  OmitType(CreateBranchDto, ['openTime', 'closeTime', 'assignWholeMenu'] as const),
 ) {}
 
 export class UpdateBranchStatusDto {

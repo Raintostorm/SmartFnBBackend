@@ -369,6 +369,24 @@ export class ChainMenuController {
     return this.menuService.listItemBranches(chainId, itemId, user);
   }
 
+  @Post('branches/:branchId/assign-all')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Sell every menu item and combo of the chain at one branch',
+    description:
+      'For a branch that just opened: switches on all items and combos at once instead of assigning the branch item by item. Branch prices already set are kept; daily availability stays with the Store Manager.',
+  })
+  @ApiParam({ name: 'branchId', format: 'uuid' })
+  @ApiOkResponse({ description: 'Counts of items/combos now sold at the branch and how many were added' })
+  @ApiBadRequestResponse({ description: 'The branch does not belong to this chain' })
+  assignWholeMenu(
+    @Param('chainId', new ParseUUIDPipe()) chainId: string,
+    @Param('branchId', new ParseUUIDPipe()) branchId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.menuService.assignWholeMenu(chainId, branchId, user);
+  }
+
   @Put('items/:itemId/branches')
   @ApiOperation({
     summary: 'Choose which branches sell an item',
