@@ -37,7 +37,13 @@ export class ItemExtraLinkDto {
   @ApiProperty({ minimum: 1, maximum: 5 }) @IsInt() @Min(1) @Max(5) maxQuantity!: number;
 }
 export class SetItemExtrasDto {
-  @ApiProperty({ default: 5 }) @IsInt() @Min(0) @Max(100) maxExtras!: number;
+  /** Deprecated: the per-item total cap was removed; accepted from older clients and ignored. */
+  @ApiPropertyOptional({ deprecated: true, description: 'Ignored. Each extra is limited by its own maxQuantity.' })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(100)
+  maxExtras?: number;
   @ApiProperty({ type: [ItemExtraLinkDto] })
   @IsArray()
   @ArrayMaxSize(100)

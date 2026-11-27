@@ -58,11 +58,13 @@ test('reject disabled chain extra, sold-out branch extra and foreign chain link'
 test('empty selection has zero price and needs no extra query', async () => {
   assert.equal((await priceExtras({}, 'branch', 'tea', [])).total.toString(), '0');
 });
-test('total limit is checked independently of per-extra maximum', async () => {
+test('no per-item total cap: only the maximum of each extra applies', async () => {
   const tx = fixture();
   const lookup = tx.menuItem.findFirst;
+  // A legacy maxExtras value on the item is ignored.
   tx.menuItem.findFirst = async () => ({ ...(await lookup()), maxExtras: 1 });
-  await assert.rejects(priceExtras(tx, 'branch', 'tea', [{ extraId: 'pearl', quantity: 2 }]));
+  const priced = await priceExtras(tx, 'branch', 'tea', [{ extraId: 'pearl', quantity: 2 }]);
+  assert.equal(priced.snapshots[0].quantity, 2);
 });
 import { MenuExtrasService } from '../dist/modules/menu/menu-extras.service.js';
 const barista = { role: 'BARISTA', branchId: 'branch', id: 'user', employeeId: 'employee' };
@@ -99,4 +101,12 @@ test('extra assignment rejects another chain before replacing item links', async
     ),
   );
   assert.equal(writes, 0);
+});
+test('assigning extras no longer needs a total cap (older clients may still send it)', async () => {
+  const { ValidationPipe } = await import('@nestjs/common');
+  const { SetItemExtrasDto } = await import('../dist/modules/menu/menu-extras.dto.js');
+  const pipe = new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true });
+  const link = { extraId: '11111111-1111-4111-8111-111111111111', maxQuantity: 3 };
+  await pipe.transform({ extras: [link] }, { type: 'body', metatype: SetItemExtrasDto });
+  await pipe.transform({ maxExtras: 5, extras: [link] }, { type: 'body', metatype: SetItemExtrasDto });
 });

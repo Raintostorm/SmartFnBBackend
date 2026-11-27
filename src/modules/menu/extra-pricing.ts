@@ -23,7 +23,6 @@ export async function priceExtras(
       category: { chain: { branches: { some: { id: branchId, deletedAt: null } } } },
     },
     select: {
-      maxExtras: true,
       category: { select: { chainId: true } },
       extras: {
         where: { extraId: { in: selected.map((x) => x.extraId) } },
@@ -31,9 +30,8 @@ export async function priceExtras(
       },
     },
   });
-  if (!item || selected.reduce((n, x) => n + x.quantity, 0) > item.maxExtras) {
-    throw new BadRequestException('The total extra quantity exceeds this item limit');
-  }
+  // No per-item total cap any more (owner request): each extra is limited by its own maxQuantity (1-5) below.
+  if (!item) throw new BadRequestException('Extra does not belong to this item');
   const snapshots = selected.map((selection) => {
     const link = item.extras.find((x) => x.extraId === selection.extraId);
     if (!link || link.extra.chainId !== item.category.chainId)

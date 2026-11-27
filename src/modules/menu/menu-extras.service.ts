@@ -140,7 +140,6 @@ export class MenuExtrasService {
       )
         throw new BadRequestException('Extras must be unique and in the same chain');
       const previous = await tx.menuItemExtra.findMany({ where: { menuItemId }, select: { extraId: true, price: true }, orderBy: { extraId: 'asc' } });
-      await tx.menuItem.update({ where: { id: menuItemId }, data: { maxExtras: dto.maxExtras } });
       await tx.menuItemExtra.deleteMany({ where: { menuItemId } });
       if (ids.length)
         await tx.menuItemExtra.createMany({
@@ -161,7 +160,7 @@ export class MenuExtrasService {
         });
       const saved = await tx.menuItemExtra.findMany({ where: { menuItemId }, include: { extra: true } });
       const shape = (rows: { extraId: string; price: unknown }[]) => rows.map((r) => ({ extraId: r.extraId, price: String(r.price) })).sort((a, b) => a.extraId.localeCompare(b.extraId));
-      await writeChainAudit(tx, user, chainId, { action: 'MENU_ITEM_EXTRAS_CHANGED', entityType: 'MenuItem', entityId: menuItemId, before: { extras: shape(previous) }, after: { maxExtras: dto.maxExtras, extras: shape(saved) } });
+      await writeChainAudit(tx, user, chainId, { action: 'MENU_ITEM_EXTRAS_CHANGED', entityType: 'MenuItem', entityId: menuItemId, before: { extras: shape(previous) }, after: { extras: shape(saved) } });
       return saved;
     });
     const branches = await this.prisma.branchMenuItem.findMany({
