@@ -15,7 +15,7 @@ import {
 import { PrismaService } from '../../database/prisma.service.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
-import { OrderTrackingService } from '../order-tracking/order-tracking.service.js';
+import { receiptFooter } from '../branch-manager/receipt-settings.js';
 import { ReceiptPdfService, type ReceiptPdfSnapshot } from './receipt-pdf.service.js';
 import { ReceiptRasterService } from './receipt-raster.service.js';
 import { ReceiptStorageService } from './receipt-storage.service.js';
@@ -25,7 +25,6 @@ export class ReceiptDocumentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly access: BranchAccessService,
-    private readonly tracking: OrderTrackingService,
     private readonly pdf: ReceiptPdfService,
     private readonly raster: ReceiptRasterService,
     private readonly storage: ReceiptStorageService,
@@ -179,7 +178,7 @@ export class ReceiptDocumentsService {
           orderBy: { paidAt: 'desc' },
           take: 1,
         },
-        branch: { include: { chain: { include: { branding: true } } } },
+        branch: { include: { chain: { include: { branding: true } }, receiptSetting: true } },
         createdByCashier: { select: { firstName: true, lastName: true } },
       },
     });
@@ -192,10 +191,9 @@ export class ReceiptDocumentsService {
       throw new ConflictException('Receipt PDF requires a paid counter order');
     }
     const branding = order.branch.chain.branding;
-    const tracking = await this.tracking.presentationForOrder(order.id);
     const receipt: ReceiptPdfSnapshot = {
       orderCode: order.orderCode,
-      callNumber: order.callNumber,
+      tableNumber: order.pagerNumber,
       paidAt: order.paidAt,
       currency: order.branch.chain.currency,
       seller: {
@@ -218,7 +216,7 @@ export class ReceiptDocumentsService {
       items: order.items,
       totalAmount: order.totalAmount,
       payment: order.payments[0] ?? null,
-      trackingUrl: tracking?.url ?? null,
+      footer: receiptFooter(order.branch.receiptSetting),
     };
     return { branchId: order.branchId, chainId: order.branch.chainId, receipt };
   }

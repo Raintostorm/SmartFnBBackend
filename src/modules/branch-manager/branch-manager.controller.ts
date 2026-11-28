@@ -6,6 +6,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
   HttpCode,
   Req,
@@ -30,6 +31,7 @@ import {
   CompleteRefundDto,
   ManagerCreateStaffDto,
   ManagerOrderQueryDto,
+  ManagerReceiptSettingsDto,
   ManagerReportQueryDto,
   ManagerResetPasswordDto,
   ManagerStaffQueryDto,
@@ -38,6 +40,7 @@ import {
 } from './manager.dto.js';
 import { ApiAuthenticatedOperation } from '../../common/swagger/swagger.decorators.js';
 import { PaidOrderRefundService } from '../payments/paid-order-refund.service.js';
+import { ReceiptSettingsService } from './receipt-settings.service.js';
 
 @Roles(AppRole.MANAGER)
 @ApiBearerAuth(SWAGGER_ACCESS_TOKEN)
@@ -51,7 +54,29 @@ export class BranchManagerController {
     private readonly reports: ManagerReportsService,
     private readonly realtime: RealtimePublisher,
     private readonly refunds: PaidOrderRefundService,
+    private readonly receiptSettings: ReceiptSettingsService,
   ) {}
+
+  @Get('receipt-settings')
+  @ApiOperation({
+    summary: 'BM-08: Get the wifi, review QR link, and footer note printed on receipts',
+  })
+  getReceiptSettings(@CurrentUser() user: AuthenticatedUser) {
+    return this.receiptSettings.get(user);
+  }
+
+  @Put('receipt-settings')
+  @ApiOperation({
+    summary: 'BM-08: Customize receipts of your branch (wifi, Google Maps review QR, footer note)',
+    description:
+      'Omitted fields stay unchanged; null or an empty string removes the line. reviewUrl must be an https Google link.',
+  })
+  updateReceiptSettings(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: ManagerReceiptSettingsDto,
+  ) {
+    return this.receiptSettings.update(user, dto);
+  }
 
   @Get('staff')
   @ApiOperation({ summary: 'BM-01: List Cashier/Barista accounts in your assigned branch' })

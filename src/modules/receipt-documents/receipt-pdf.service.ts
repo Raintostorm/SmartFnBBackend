@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import PDFDocument from 'pdfkit';
 import QRCode from 'qrcode';
 import { fileURLToPath } from 'node:url';
+import type { ReceiptFooter } from '../branch-manager/receipt-settings.js';
 
 // Use the same complete font files as the web app. The old Vietnamese-only
 // WOFF subset omitted basic Latin glyphs, which PDF viewers showed as boxes.
@@ -14,7 +15,8 @@ const boldFont = fileURLToPath(
 
 export interface ReceiptPdfSnapshot {
   orderCode: string;
-  callNumber: number | null;
+  /** Số bàn thu ngân gán trước khi in; in to ở đầu phiếu (thay cho số gọi trước đây). */
+  tableNumber: number | null;
   paidAt: Date;
   currency: string;
   seller: { name: string; branchName: string; address: string; phone: string | null };
@@ -35,15 +37,15 @@ export interface ReceiptPdfSnapshot {
     tenderedAmount: { toString(): string } | null;
     changeAmount: { toString(): string } | null;
   } | null;
-  trackingUrl: string | null;
+  /** Phần Store Manager tuỳ biến ở cuối phiếu (BM-08). */
+  footer: ReceiptFooter;
 }
 
 @Injectable()
 export class ReceiptPdfService {
   async render(receipt: ReceiptPdfSnapshot): Promise<Buffer> {
-    const qr = receipt.trackingUrl
-      ? await QRCode.toBuffer(receipt.trackingUrl, { margin: 1 })
-      : null;
+    const { footer } = receipt;
+    const qr = footer.reviewUrl ? await QRCode.toBuffer(footer.reviewUrl, { margin: 1 }) : null;
     return new Promise<Buffer>((resolve, reject) => {
       const doc = new PDFDocument({ size: [164, 800], margin: 10, autoFirstPage: true });
       const chunks: Buffer[] = [];
@@ -57,6 +59,11 @@ export class ReceiptPdfService {
       if (receipt.seller.phone) doc.text(`ĐT: ${receipt.seller.phone}`, { align: 'center' });
       this.rule(doc);
       doc.font('NotoBold').fontSize(11).text('PHIẾU THANH TOÁN', { align: 'center' });
+      if (receipt.tableNumber !== null) {
+        doc.font('Noto').fontSize(9).text('SỐ BÀN', { align: 'center' });
+        doc.font('NotoBold').fontSize(24).text(String(receipt.tableNumber), { align: 'center' });
+        doc.moveDown(0.2);
+      }
       doc.font('Noto').fontSize(8).text(`Mã đơn: ${receipt.orderCode}`);
       doc.text(
         `Thời gian: ${receipt.paidAt.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}`,
@@ -98,26 +105,26 @@ export class ReceiptPdfService {
         if (receipt.payment.changeAmount)
           doc.text(`Tiền thừa: ${this.money(receipt.payment.changeAmount.toString())}`);
       }
-      if (receipt.callNumber !== null) {
+      if (footer.wifiName || footer.wifiPassword) {
         this.rule(doc);
-        doc.font('Noto').fontSize(9).text('SỐ GỌI', { align: 'center' });
-        doc.font('NotoBold').fontSize(24).text(String(receipt.callNumber).padStart(3, '0'), {
-          align: 'center',
-        });
+        doc.font('NotoBold').fontSize(8).text('WIFI', { align: 'center' });
+        doc.font('Noto');
+        if (footer.wifiName) doc.text(`Tên: ${footer.wifiName}`, { align: 'center' });
+        if (footer.wifiPassword) doc.text(`Mật khẩu: ${footer.wifiPassword}`, { align: 'center' });
       }
       if (qr) {
-        // `image` không đẩy con trỏ xuống; đặt `y` ngay dưới ảnh thay vì `moveDown`, vốn tính theo cỡ chữ 24 của số gọi
-        // và chừa một khoảng trắng rất lớn trên giấy nhiệt.
-        const qrTop = doc.y + 4;
+        this.rule(doc);
+        // `image` không đẩy con trỏ xuống; đặt `y` ngay dưới ảnh thay vì `moveDown` để không chừa khoảng trắng lớn.
+        const qrTop = doc.y + 2;
         doc.image(qr, (164 - 70) / 2, qrTop, { width: 70 });
         doc.y = qrTop + 70 + 2;
-        doc.font('Noto').fontSize(7).text('Quét mã để theo dõi đơn', { align: 'center' });
+        doc.font('Noto').fontSize(7).text('Quét mã để đánh giá quán', { align: 'center' });
       }
       this.rule(doc);
       doc.font('Noto').fontSize(7).text('Phiếu thanh toán nội bộ – không phải hóa đơn điện tử.', {
         align: 'center',
       });
-      doc.text('Cảm ơn quý khách!', { align: 'center' });
+      doc.text(footer.note ?? 'Cảm ơn quý khách!', { align: 'center' });
       doc.end();
     });
   }

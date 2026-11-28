@@ -15,7 +15,6 @@ import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { writeBranchAudit } from '../branch-manager/manager-scope.js';
 import { OrderTrackingService } from '../order-tracking/order-tracking.service.js';
-import { ReceiptDocumentsService } from '../receipt-documents/receipt-documents.service.js';
 import { CashLedgerService } from './cash-ledger.service.js';
 
 export type CounterSettlementSource = 'PAYOS_WEBHOOK' | 'PAYOS_RECHECK' | 'MANAGER_MANUAL';
@@ -36,7 +35,6 @@ export class CounterPaymentSettlementService {
     private readonly prisma: PrismaService,
     private readonly tracking: OrderTrackingService,
     private readonly realtime: RealtimePublisher,
-    private readonly receiptDocuments: ReceiptDocumentsService,
     @Optional() private readonly ledger?: CashLedgerService,
   ) {}
 
@@ -335,14 +333,17 @@ export class CounterPaymentSettlementService {
           },
         });
         const tracking = await this.tracking.ensureForOrder(tx, order.id);
+        // Một phiếu duy nhất (bill đã gộp phiếu số gọi) nên chỉ tạo một job RECEIPT.
         await tx.printJob.createMany({
-          data: [PrintDocumentType.RECEIPT, PrintDocumentType.QUEUE_TICKET].map((type) => ({
-            orderId: order.id,
-            branchId: order.branchId,
-            stationId: payment.stationId,
-            type,
-            printedById: actorEmployeeId,
-          })),
+          data: [
+            {
+              orderId: order.id,
+              branchId: order.branchId,
+              stationId: payment.stationId,
+              type: PrintDocumentType.RECEIPT,
+              printedById: actorEmployeeId,
+            },
+          ],
         });
         if (input.actor) {
           await writeBranchAudit(tx, input.actor, {
@@ -394,9 +395,8 @@ export class CounterPaymentSettlementService {
       status: result.order.status,
       submittedAt: result.order.submittedAt,
     });
-    // Optional chaining keeps direct unit construction backward compatible;
-    // Nest always injects the service in the running application.
-    await this.receiptDocuments?.ensureReady(result.order.id).catch(() => undefined);
+    // PDF hoá đơn không tạo lúc thanh toán: thu ngân nhập số bàn rồi mới in, nên PDF được tạo ở lần in/tải đầu
+    // tiên (`printImage`/`get` của receipt-documents tự gọi `ensureReady`) để bản lưu có số bàn.
     return result;
   }
 

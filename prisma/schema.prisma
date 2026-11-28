@@ -524,11 +524,27 @@ model Branch {
   posStations       PosStation[]
   displayDevices    DisplayDevice[]
   cashLedgerEntries CashLedgerEntry[]
+  receiptSetting    BranchReceiptSetting?
 
   @@index([chainId, status])
   @@index([status])
   @@index([city])
   @@map("branches")
+}
+
+/// Thông tin Store Manager tuỳ biến in thêm ở cuối hoá đơn của chi nhánh (wifi, QR đánh giá, lời nhắn).
+model BranchReceiptSetting {
+  branchId     String   @id @map("branch_id") @db.Uuid
+  wifiName     String?  @map("wifi_name") @db.VarChar(32)
+  wifiPassword String?  @map("wifi_password") @db.VarChar(63)
+  reviewUrl    String?  @map("review_url") @db.VarChar(500)
+  footerNote   String?  @map("footer_note") @db.VarChar(120)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@map("branch_receipt_settings")
 }
 
 model BranchOperatingHour {

@@ -109,7 +109,7 @@ describe('Counter payment settlement (#53 and #54)', () => {
     assert.equal(calls.units, 2);
     assert.deepEqual(
       calls.printJobs.map((job) => job.type),
-      ['RECEIPT', 'QUEUE_TICKET'],
+      ['RECEIPT'],
     );
     assert.equal(calls.audits[0].after.changeDue, '10000');
     assert.deepEqual(

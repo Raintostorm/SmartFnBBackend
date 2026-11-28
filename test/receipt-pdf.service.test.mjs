@@ -25,11 +25,21 @@ describe('Cashier archived receipt PDF', () => {
     }
   });
 
-  it('renders a non-empty PDF with Vietnamese receipt data and tracking QR', async () => {
+  it('renders a non-empty PDF with Vietnamese receipt data, wifi and review QR', async () => {
     const result = await new ReceiptPdfService().render(sampleReceipt());
 
     assert.equal(result.subarray(0, 4).toString(), '%PDF');
     assert.ok(result.length > 5_000);
+  });
+
+  it('renders a receipt without table number or any custom footer', async () => {
+    const result = await new ReceiptPdfService().render({
+      ...sampleReceipt(),
+      tableNumber: null,
+      footer: { wifiName: null, wifiPassword: null, reviewUrl: null, note: null },
+    });
+
+    assert.equal(result.subarray(0, 4).toString(), '%PDF');
   });
 
   it('rasterizes the stored PDF into a 768px PNG with the blank page tail trimmed', async () => {
@@ -49,7 +59,7 @@ describe('Cashier archived receipt PDF', () => {
 function sampleReceipt() {
   return {
     orderCode: 'CTR-001',
-    callNumber: 23,
+    tableNumber: 12,
     paidAt: new Date('2026-10-16T01:00:00.000Z'),
     currency: 'VND',
     seller: {
@@ -70,6 +80,11 @@ function sampleReceipt() {
     ],
     totalAmount: money(60000),
     payment: { method: 'CASH', tenderedAmount: money(100000), changeAmount: money(40000) },
-    trackingUrl: 'https://smartfnb.example/t/a-secure-token',
+    footer: {
+      wifiName: 'Cà phê Thử Nghiệm',
+      wifiPassword: 'matkhau123',
+      reviewUrl: 'https://g.page/r/CTestReviewLink/review',
+      note: 'Hẹn gặp lại quý khách!',
+    },
   };
 }
