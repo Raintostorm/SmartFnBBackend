@@ -26,6 +26,7 @@ import { PrismaService } from '../../database/prisma.service.js';
 import type { AuthenticatedUser } from '../auth/auth.interfaces.js';
 import { BranchAccessService } from '../branches/branch-access.service.js';
 import { OrderTrackingService } from '../order-tracking/order-tracking.service.js';
+import { receiptFooter } from '../branch-manager/receipt-settings.js';
 import type {
   AddCounterOrderItemDto,
   AvailabilityDto,
@@ -587,19 +588,18 @@ export class CounterOperationsService {
           },
           include: counterOrderInclude,
         });
-        const printJobs = await Promise.all(
-          [PrintDocumentType.RECEIPT, PrintDocumentType.QUEUE_TICKET].map((type) =>
-            tx.printJob.create({
-              data: {
-                orderId,
-                branchId: actor.branchId,
-                stationId: station.id,
-                type,
-                printedById: actor.employeeId,
-              },
-            }),
-          ),
-        );
+        // Bill và phiếu số gọi đã gộp thành một phiếu duy nhất nên mỗi lượt in chỉ còn một job RECEIPT.
+        const printJobs = [
+          await tx.printJob.create({
+            data: {
+              orderId,
+              branchId: actor.branchId,
+              stationId: station.id,
+              type: PrintDocumentType.RECEIPT,
+              printedById: actor.employeeId,
+            },
+          }),
+        ];
         const tracking = await this.tracking.ensureForOrder(tx, orderId);
         return { order: updatedOrder, payment, printJobs, tracking };
       },
@@ -706,18 +706,19 @@ export class CounterOperationsService {
           take: 1,
         },
         branch: {
-          include: { chain: { include: { branding: true } } },
+          include: { chain: { include: { branding: true } }, receiptSetting: true },
         },
         createdByCashier: { select: { firstName: true, lastName: true, employeeCode: true } },
       },
     });
     if (!order) throw new NotFoundException('Paid counter order was not found in your branch');
     const branding = order.branch.chain.branding;
-    const tracking = await this.tracking.presentationForOrder(order.id);
     return {
       orderId: order.id,
       orderCode: order.orderCode,
       callNumber: order.callNumber,
+      /** Số bàn thu ngân gán trước khi in; phiếu in số này thay cho số gọi. */
+      tableNumber: order.pagerNumber,
       paidAt: order.paidAt,
       currency: order.branch.chain.currency,
       seller: {
@@ -742,7 +743,7 @@ export class CounterOperationsService {
       subtotal: order.subtotal,
       totalAmount: order.totalAmount,
       payment: order.payments[0] ?? null,
-      tracking,
+      footer: receiptFooter(order.branch.receiptSetting),
     };
   }
 
@@ -750,20 +751,18 @@ export class CounterOperationsService {
     const actor = this.employee(user);
     if (reason.trim().length < 3) throw new BadRequestException('A reprint reason is required');
     const receipt = await this.receipt(user, orderId);
-    const printJobs = await Promise.all(
-      [PrintDocumentType.RECEIPT, PrintDocumentType.QUEUE_TICKET].map((type) =>
-        this.prisma.printJob.create({
-          data: {
-            orderId,
-            branchId: actor.branchId,
-            type,
-            printedById: actor.employeeId,
-            isReprint: true,
-            reason: reason.trim(),
-          },
-        }),
-      ),
-    );
+    const printJobs = [
+      await this.prisma.printJob.create({
+        data: {
+          orderId,
+          branchId: actor.branchId,
+          type: PrintDocumentType.RECEIPT,
+          printedById: actor.employeeId,
+          isReprint: true,
+          reason: reason.trim(),
+        },
+      }),
+    ];
     return { ...receipt, printJobs };
   }
 

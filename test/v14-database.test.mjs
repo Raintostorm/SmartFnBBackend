@@ -433,7 +433,6 @@ test(
         prisma,
         { ensureForOrder: async () => null, markTerminal: async () => {} },
         realtime,
-        { ensureReady: async () => null },
       );
       await settle.settle({
         paymentId: qrPayment.id,

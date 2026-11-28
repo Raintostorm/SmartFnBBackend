@@ -353,3 +353,35 @@ export class ManagerAuditQueryDto extends ManagerPageDto {
   @IsUUID()
   entityId?: string;
 }
+
+/** Tuỳ biến hoá đơn của chi nhánh; gửi `null` hoặc chuỗi rỗng để xoá một dòng, bỏ trống trường để giữ nguyên. */
+export class ManagerReceiptSettingsDto {
+  @ApiPropertyOptional({ nullable: true, maxLength: 32, example: 'SmartFnB_Guest' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  wifiName?: string | null;
+
+  @ApiPropertyOptional({ nullable: true, maxLength: 63, description: 'ASCII only' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  wifiPassword?: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    maxLength: 500,
+    description: 'https Google Maps review link, printed as the receipt QR code',
+    example: 'https://g.page/r/CXXXXXXXXXXXXXXX/review',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  reviewUrl?: string | null;
+
+  @ApiPropertyOptional({ nullable: true, maxLength: 120, example: 'Hẹn gặp lại quý khách!' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(240)
+  footerNote?: string | null;
+}

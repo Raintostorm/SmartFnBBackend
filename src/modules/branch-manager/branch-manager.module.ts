@@ -7,6 +7,7 @@ import { ChainOrdersController } from './chain-orders.controller.js';
 import { ManagerStaffService } from './manager-staff.service.js';
 import { ManagerOperationsService } from './manager-operations.service.js';
 import { ManagerReportsService } from './manager-reports.service.js';
+import { ReceiptSettingsService } from './receipt-settings.service.js';
 import { EmailModule } from '../email/email.module.js';
 import { PaymentsModule } from '../payments/payments.module.js';
 import { StaffAccountsModule } from '../employees/staff-accounts.module.js';
@@ -21,6 +22,11 @@ import { StaffAccountsModule } from '../employees/staff-accounts.module.js';
     StaffAccountsModule,
   ],
   controllers: [BranchManagerController, ChainOrdersController],
-  providers: [ManagerStaffService, ManagerOperationsService, ManagerReportsService],
+  providers: [
+    ManagerStaffService,
+    ManagerOperationsService,
+    ManagerReportsService,
+    ReceiptSettingsService,
+  ],
 })
 export class BranchManagerModule {}

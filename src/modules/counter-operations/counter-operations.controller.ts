@@ -14,7 +14,6 @@ import { RealtimePublisher } from '../../realtime/realtime.publisher.js';
 import { CounterOperationsService } from './counter-operations.service.js';
 import { CancelPayosPaymentDto, CreatePayosPaymentDto } from '../payos/dto/payos-payment.dto.js';
 import { PayosPaymentService } from '../payos/payos-payment.service.js';
-import { ReceiptDocumentsService } from '../receipt-documents/receipt-documents.service.js';
 import {
   AddCounterOrderItemDto,
   AvailabilityDto,
@@ -37,7 +36,6 @@ export class CashierController {
     private readonly service: CounterOperationsService,
     private readonly realtime: RealtimePublisher,
     private readonly payosPayments: PayosPaymentService,
-    private readonly receiptDocuments: ReceiptDocumentsService,
   ) {}
 
   @Get('context')
@@ -182,8 +180,8 @@ export class CashierController {
       id,
       'Khách đổi sang tiền mặt',
     );
+    // PDF hoá đơn tạo ở lần in đầu (sau khi thu ngân nhập số bàn), không tạo ngay lúc thu tiền.
     const result = await this.service.collectCash(user, id, dto);
-    await this.receiptDocuments.ensureReady(id).catch(() => undefined);
     if (cancelledQr) {
       this.publish(user, 'payment.cancelled', {
         orderId: id,
